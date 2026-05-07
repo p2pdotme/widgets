@@ -1,0 +1,10 @@
+src
+examples
+node_modules
+tsconfig.json
+tsup.config.ts
+.gitignore
+.npmignore
+*.tgz
+*.log
+.env*
