@@ -31,4 +31,7 @@ export type {
   PlaceOrderContext,
   CurrencyOption,
   PaymentAddressValidator,
+  ScreeningConfig,
+  ScreeningOrderDetails,
+  ScreeningUserDetails,
 } from "./types";

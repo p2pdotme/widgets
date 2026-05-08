@@ -5,6 +5,48 @@ export interface CheckoutSigner {
     data: `0x${string}`;
     gasLimit?: number;
   }) => Promise<{ hash: `0x${string}` }>;
+  // EIP-191 personal_sign. Required when `screening` is configured on
+  // the widget so we can authenticate to the fraud engine. For plain
+  // EOAs this is the same wallet that produces sendTransaction.
+  signMessage?: (message: string) => Promise<string>;
+  // Smart-wallet admin EOA — the address that actually produces the
+  // EIP-191 signature when `address` is an ERC-4337 smart account.
+  // Omit for plain EOAs; defaults to `address`.
+  signerAddress?: `0x${string}`;
+}
+
+export interface ScreeningOrderDetails {
+  cryptoAmount?: number;
+  fiatAmount?: number;
+  currency?: string;
+  recipientAddress?: string;
+  fee?: number;
+  amountAfterFee?: number;
+  paymentMethod?: string;
+  estimatedProcessingTime?: string;
+}
+
+export interface ScreeningUserDetails {
+  currency?: string;
+  country?: string;
+  language?: string;
+  loginMethod?: "email" | "google" | "phone" | "passkey" | "unknown";
+  loginEmail?: string;
+  loginPhone?: string;
+}
+
+export interface ScreeningConfig {
+  // Fraud-engine base URL including the /v1 prefix, e.g.
+  // "https://fraud-engine.p2p.me/v1".
+  apiUrl: string;
+  // 64-char hex AES-256-GCM key (must match the backend's
+  // SEON_ENCRYPTION_KEY for the same environment).
+  encryptionKey: string;
+  // Free-form analytics tag stored on the activity log.
+  orderSource?: string;
+  // Optional context attached to the screening payload.
+  orderDetails?: ScreeningOrderDetails;
+  userDetails?: ScreeningUserDetails;
 }
 
 export interface PlaceOrderResult {
@@ -21,11 +63,21 @@ export type PaymentAddressValidator = (input: string) => string | null;
 // User-selected currency for a checkout session. Present in PlaceOrderContext
 // only when the caller passed the `currencies` prop and the widget rendered
 // the currency picker.
+//
+// `circleId` is optional. When omitted, the widget runs SDK circle routing
+// (epsilon-greedy + on-chain eligibility validation, same path user-app-client
+// uses) and injects the resolved circleId into `ctx.currency.circleId` before
+// invoking the host's `placeOrder` callback. When provided, the widget passes
+// it through unchanged — explicit values are honored as an override / escape
+// hatch. Routing requires `subgraphUrl`, `usdcAddress`, `usdcAmount`, and
+// `fiatAmount` on `P2PCheckoutProps`.
 export interface CurrencyOption {
   symbol: string;
   flag: string;
   paymentMethod: string;
-  circleId: bigint;
+  circleId?: bigint;
+  /** Optional preferred payment-channel config id forwarded to the router. */
+  paymentChannelConfigId?: bigint;
   /** Optional override for offramp payment-address validation. */
   validatePaymentAddress?: PaymentAddressValidator;
   /** Optional placeholder for the offramp address input. */
@@ -67,10 +119,28 @@ export interface P2PCheckoutProps {
   rpcUrl?: string;
   currency?: string;
 
+  // Required when any selected `CurrencyOption` omits `circleId` — the widget
+  // calls `@p2pdotme/sdk/orders` `placeOrder.prepare()` purely for circle
+  // selection, then forwards the resolved circleId to the host's `placeOrder`
+  // callback. Ignored when every currency in `currencies` already has an
+  // explicit `circleId`.
+  subgraphUrl?: string;
+  usdcAddress?: `0x${string}`;
+  /** USDC amount (6-dec bigint) the user will be charged. */
+  usdcAmount?: bigint;
+  /** Expected fiat amount (6-dec bigint) — used to scope merchant eligibility. */
+  fiatAmount?: bigint;
+
   // UI
   mode?: "inline" | "modal";
   open?: boolean;
   demo?: boolean;
+
+  // Optional B2B fraud screening. When provided, the widget logs the
+  // buy attempt to the fraud engine before invoking `placeOrder`, then
+  // links the on-chain orderId back so the merchant app sees the order
+  // as screened+approved. Requires `signer.signMessage`.
+  screening?: ScreeningConfig;
 
   // Events
   onOrderPlaced?: (orderId: string, txHash: string) => void;
