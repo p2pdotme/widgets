@@ -539,7 +539,7 @@ or `REACT_APP_…` for CRA.
 
 | Variable | Required | What it is |
 |---|---|---|
-| `VITE_FRAUD_ENGINE_API_URL` | ✅ | Fraud-engine base URL **including the `/v1` prefix** (e.g. `https://fraud-engine.p2p.me/v1`). |
+| `VITE_FRAUD_ENGINE_API_URL` | ✅ | Fraud-engine base URL **including the `/api/v1` prefix** (e.g. `https://fe.p2p.lol/api/v1`). |
 | `VITE_FRAUD_ENGINE_ENCRYPTION_KEY` | ✅ | 64-char hex AES-256-GCM key. Must match the backend's `SEON_ENCRYPTION_KEY` for that environment. |
 | `VITE_FRAUD_ENGINE_ORDER_SOURCE` | — | Free-form analytics tag stored on each activity log. |
 
