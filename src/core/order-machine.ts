@@ -5,6 +5,7 @@ import {
   decryptPaymentAddress,
   createLocalStorageRelayStore,
   createRelayIdentity,
+  createOrders,
   type RelayIdentity,
 } from "@p2pdotme/sdk/orders";
 
@@ -19,10 +20,11 @@ async function resolveIdentity(): Promise<RelayIdentity> {
   cachedIdentity = id;
   return id;
 }
-import type { CheckoutSigner, CheckoutPhase, PlaceOrderResult, PlaceOrderContext, CurrencyOption } from "../types";
+import type { CheckoutSigner, CheckoutPhase, PlaceOrderResult, PlaceOrderContext, CurrencyOption, ScreeningConfig } from "../types";
 import { OrderStatus } from "../types";
 import { DIAMOND_ABI } from "./contracts";
 import { DEMO_FIAT_RATE } from "./config";
+import { processB2BBuyOrder } from "./b2b-fraud-engine";
 
 interface OrderState {
   phase: CheckoutPhase;
@@ -75,6 +77,12 @@ export interface UseOrderMachineOpts {
   demo?: boolean;
   demoCurrency?: string;
   selectedCurrency?: CurrencyOption;
+  // Routing inputs — only required when `selectedCurrency.circleId` is undefined.
+  subgraphUrl?: string;
+  usdcAddress?: `0x${string}`;
+  usdcAmount?: bigint;
+  fiatAmount?: bigint;
+  screening?: ScreeningConfig;
   onOrderPlaced?: (orderId: string, txHash: string) => void;
   onComplete?: (orderId: string) => void;
   onError?: (error: Error) => void;
@@ -149,7 +157,47 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
     }
 
     try {
-      const result = await opts.placeOrder({ currency: opts.selectedCurrency });
+      let resolvedCurrency = opts.selectedCurrency;
+      if (resolvedCurrency && resolvedCurrency.circleId === undefined) {
+        if (!opts.subgraphUrl || !opts.usdcAddress || opts.usdcAmount === undefined || opts.fiatAmount === undefined) {
+          throw new Error(
+            "Routing requires subgraphUrl, usdcAddress, usdcAmount, and fiatAmount when circleId is omitted on CurrencyOption.",
+          );
+        }
+        const orders = createOrders({
+          publicClient: publicClient as any,
+          diamondAddress: opts.diamondAddress,
+          usdcAddress: opts.usdcAddress,
+          subgraphUrl: opts.subgraphUrl,
+          relayIdentityStore: createLocalStorageRelayStore(),
+        });
+        const prepared = await orders.placeOrder.prepare({
+          orderType: 0, // BUY
+          // Widget's CurrencyOption.symbol is `string`; SDK validates against
+          // its CurrencyCode enum at runtime via Zod. Cast to satisfy TS.
+          currency: resolvedCurrency.symbol as any,
+          user: opts.signer.address,
+          amount: opts.usdcAmount,
+          fiatAmount: opts.fiatAmount,
+          recipientAddr: opts.signer.address,
+          preferredPaymentChannelConfigId: resolvedCurrency.paymentChannelConfigId ?? 0n,
+        });
+        if (prepared.isErr()) throw prepared.error;
+        const routedCircleId = prepared.value.meta?.circleId;
+        if (routedCircleId === undefined) {
+          throw new Error("SDK routing returned no circleId");
+        }
+        resolvedCurrency = { ...resolvedCurrency, circleId: routedCircleId };
+      }
+
+      const runPlace = () => opts.placeOrder!({ currency: resolvedCurrency });
+      const result = opts.screening
+        ? await processB2BBuyOrder({
+            signer: opts.signer,
+            screening: opts.screening,
+            placeOrder: runPlace,
+          })
+        : await runPlace();
       dispatch({ type: "PLACED", orderId: result.orderId, txHash: result.txHash });
       opts.onOrderPlaced?.(result.orderId, result.txHash);
     } catch (err: any) {

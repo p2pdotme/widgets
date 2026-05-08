@@ -93,9 +93,24 @@ function useCheckoutSigner(): CheckoutSigner | null {
         );
         return { hash: result.hash as `0x${string}` };
       },
+      // Required when `screening` is configured on <P2PCheckout>.
+      signMessage: async (message) => {
+        const provider = await wallet.getEthereumProvider();
+        return provider.request({
+          method: "personal_sign",
+          params: [message, wallet.address],
+        }) as Promise<string>;
+      },
     };
   }, [wallet, sendTransaction]);
 }
+
+// Optional: enable B2B fraud-engine screening. Source these from your env.
+const SCREENING = {
+  apiUrl: import.meta.env.VITE_FRAUD_ENGINE_API_URL as string | undefined,
+  encryptionKey: import.meta.env.VITE_FRAUD_ENGINE_ENCRYPTION_KEY as string | undefined,
+  orderSource: import.meta.env.VITE_FRAUD_ENGINE_ORDER_SOURCE as string | undefined,
+};
 
 // ─── App ──────────────────────────────────────────────────────────────
 
@@ -165,6 +180,16 @@ export default function App() {
           chainId={CHAIN.id}
           diamondAddress={DIAMOND_ADDRESS}
           rpcUrl={RPC_URL}
+          screening={
+            SCREENING.apiUrl && SCREENING.encryptionKey
+              ? {
+                  apiUrl: SCREENING.apiUrl,
+                  encryptionKey: SCREENING.encryptionKey,
+                  orderSource: SCREENING.orderSource,
+                  orderDetails: { cryptoAmount: 5, currency: "INR" },
+                }
+              : undefined
+          }
           onClose={() => setShowBuy(false)}
           onComplete={() => setShowBuy(false)}
         />
