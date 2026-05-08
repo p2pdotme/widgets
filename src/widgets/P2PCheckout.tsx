@@ -1,15 +1,15 @@
 import React, { useState, useEffect } from "react";
 import { formatUnits } from "viem";
-import type { P2PCheckoutProps } from "./types";
-import { useOrderMachine } from "./core/order-machine";
-import { CURRENCIES } from "./core/config";
-import { DEFAULT_DIAMOND_ADDRESS, USDC_DECIMALS } from "./core/contracts";
-import { color, radius, font, weight, shadow, S } from "./ui/theme";
-import { Modal } from "./ui/Modal";
+import type { P2PCheckoutProps } from "../types";
+import { useOrderMachine } from "../core/order-machine";
+import { CURRENCIES } from "../core/config";
+import { DEFAULT_DIAMOND_ADDRESS, USDC_DECIMALS } from "../core/contracts";
+import { color, radius, font, weight, shadow, S } from "../ui/theme";
+import { Modal } from "../ui/Modal";
 import {
   Spinner, PulseDot, CenterStatus, SuccessIcon, XIcon,
   CopyRow, Stepper, LockFooter, injectKeyframes,
-} from "./ui/components";
+} from "../ui/components";
 
 export function P2PCheckout(props: P2PCheckoutProps) {
   const {

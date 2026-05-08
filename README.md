@@ -346,6 +346,62 @@ unless you provide a `validatePaymentAddress`.
 
 ---
 
+## Reading integrator limits
+
+Every integrator exposes a `userTxLimit()` view returning the per-tx USDC cap
+(6-decimals). Two helpers ship with the package so you can render this value
+in your product UI without rolling your own viem client.
+
+### `useUserTxLimit` (React hook)
+
+```tsx
+import { useUserTxLimit } from "@p2pdotme/checkout-widget";
+
+function TxLimitBadge({ integrator }: { integrator: `0x${string}` }) {
+  const { data, error, isLoading, refetch } = useUserTxLimit(integrator, {
+    chainId: 84532, // optional, default Base Sepolia
+  });
+
+  if (isLoading) return <span>Loading limit…</span>;
+  if (error)     return <button onClick={refetch}>Retry</button>;
+  return <span>Max ${data?.formatted} per transaction</span>;
+}
+```
+
+| Option | Type | Notes |
+|---|---|---|
+| `chainId` | `number` | Default `84532` (Base Sepolia). Pass `8453` for mainnet. |
+| `rpcUrl` | `string` | Custom RPC. Defaults to viem's chain default. |
+| `decimals` | `number` | Default `6` (USDC). Override if your integrator denominates the limit in a token with different decimals. |
+| `enabled` | `boolean` | Default `true`. Set to `false` to skip the fetch (e.g. while the integrator address is still resolving). |
+
+Returns `{ data, error, isLoading, refetch }` where `data` is
+`{ raw: bigint; formatted: string }` — the raw on-chain value plus a
+ready-to-render decimal string. The hook re-fetches automatically when
+`integratorAddress`, `chainId`, `rpcUrl`, or `decimals` change, and drops
+stale responses if the inputs change mid-flight. Pass `null`/`undefined` for
+the address to short-circuit until it's ready.
+
+### `fetchUserTxLimit` (one-shot)
+
+For non-React contexts (server components, scripts, Node tooling):
+
+```ts
+import { fetchUserTxLimit } from "@p2pdotme/checkout-widget";
+
+const { raw, formatted } = await fetchUserTxLimit(INTEGRATOR_ADDRESS, {
+  chainId: 84532,
+  rpcUrl: "https://...",
+});
+// raw:       1000000000n  (USDC, 6-decimals)
+// formatted: "1000"
+```
+
+The `INTEGRATOR_LIMITS_ABI` ABI fragment is also exported if you'd rather
+wire the read into your own wagmi/viem setup (`useReadContract`, etc.).
+
+---
+
 ## Order lifecycle (what the widget shows)
 
 | `phase` (buy) | When it's set | What's on screen |
@@ -413,6 +469,10 @@ import {
   // event-decoding helpers
   parseOrderIdFromReceipt,
   parseOfframpOrderIdFromReceipt,
+  // integrator reads (see "Reading integrator limits")
+  useUserTxLimit,
+  fetchUserTxLimit,
+  INTEGRATOR_LIMITS_ABI,
   // currency defaults
   DEFAULT_VALIDATORS,
   DEFAULT_PLACEHOLDERS,

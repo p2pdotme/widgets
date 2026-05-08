@@ -1,10 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createPublicClient, http, formatUnits } from "viem";
 import { baseSepolia, base } from "viem/chains";
-import type { P2POfframpProps, CurrencyOption } from "./types";
-import { useOfframpMachine } from "./core/offramp-machine";
-import { color, radius, font, weight, shadow, S } from "./ui/theme";
-import { Modal } from "./ui/Modal";
+import type { P2POfframpProps, CurrencyOption } from "../types";
+import { useOfframpMachine } from "../core/offramp-machine";
+import { color, radius, font, weight, shadow, S } from "../ui/theme";
+import { Modal } from "../ui/Modal";
 import {
   Spinner,
   PulseDot,
@@ -14,9 +14,9 @@ import {
   Stepper,
   LockFooter,
   injectKeyframes,
-} from "./ui/components";
-import { PaymentAddressInput } from "./ui/PaymentAddressInput";
-import { MARKETPLACE_CLIENT_ABI } from "./core/contracts";
+} from "../ui/components";
+import { PaymentAddressInput } from "../ui/PaymentAddressInput";
+import { MARKETPLACE_CLIENT_ABI } from "../core/contracts";
 
 const USDC_DECIMALS = 6;
 

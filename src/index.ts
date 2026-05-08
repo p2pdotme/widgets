@@ -1,9 +1,16 @@
-export { P2PCheckout } from "./P2PCheckout";
-export { P2POfframp } from "./P2POfframp";
+export { P2PCheckout } from "./widgets/P2PCheckout";
+export { P2POfframp } from "./widgets/P2POfframp";
 export {
   parseOrderIdFromReceipt,
   parseOfframpOrderIdFromReceipt,
+  fetchUserTxLimit,
+  INTEGRATOR_LIMITS_ABI,
 } from "./core/contracts";
+export { useUserTxLimit } from "./hooks/useUserTxLimit";
+export type {
+  UseUserTxLimitOptions,
+  UseUserTxLimitResult,
+} from "./hooks/useUserTxLimit";
 export { OrderStatus } from "./types";
 export {
   DEFAULT_VALIDATORS,

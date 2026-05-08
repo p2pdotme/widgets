@@ -1,4 +1,5 @@
-import { decodeEventLog } from "viem";
+import { createPublicClient, decodeEventLog, formatUnits, http } from "viem";
+import { base, baseSepolia } from "viem/chains";
 
 const ORDER_TUPLE = {
   name: "",
@@ -241,6 +242,41 @@ export const USER_PROXY_ABI = [
     outputs: [{ name: "", type: "address" }],
   },
 ] as const;
+
+// ─── Integrator read helpers ─────────────────────────────────────────
+
+export const INTEGRATOR_LIMITS_ABI = [
+  {
+    name: "userTxLimit",
+    type: "function",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+] as const;
+
+/**
+ * Read `userTxLimit()` from an integrator. Returns the per-tx USDC cap as
+ * both the raw bigint (6-decimals) and a decimal string suitable for display.
+ *
+ * Defaults: chainId = 84532 (Base Sepolia), viem's default RPC. Pass `rpcUrl`
+ * for a custom RPC; pass `decimals` if your integrator denominates the limit
+ * in something other than USDC.
+ */
+export async function fetchUserTxLimit(
+  integratorAddress: `0x${string}`,
+  opts: { chainId?: number; rpcUrl?: string; decimals?: number } = {},
+): Promise<{ raw: bigint; formatted: string }> {
+  const { chainId = 84532, rpcUrl, decimals = USDC_DECIMALS } = opts;
+  const chain = chainId === 8453 ? base : baseSepolia;
+  const client = createPublicClient({ chain, transport: http(rpcUrl) });
+  const raw = (await client.readContract({
+    address: integratorAddress,
+    abi: INTEGRATOR_LIMITS_ABI,
+    functionName: "userTxLimit",
+  })) as bigint;
+  return { raw, formatted: formatUnits(raw, decimals) };
+}
 
 /** Parse orderId from an OfframpInitiated event in a receipt. */
 export function parseOfframpOrderIdFromReceipt(receipt: { logs: readonly { data: `0x${string}`; topics: readonly `0x${string}`[] }[] }): string | null {
