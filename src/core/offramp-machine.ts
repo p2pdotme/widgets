@@ -173,7 +173,14 @@ export function useOfframpMachine(opts: UseOfframpMachineOpts) {
             opts.tokenId,
             stringTo32(currency.symbol),
             opts.fiatAmountLimit ?? 0n,
-            currency.circleId,
+            // Offramp does not yet auto-route. Callers must pass an explicit
+            // circleId on each CurrencyOption used with P2POfframp.
+            (() => {
+              if (currency.circleId === undefined) {
+                throw new Error("P2POfframp requires CurrencyOption.circleId to be set");
+              }
+              return currency.circleId;
+            })(),
             0n,
             userPubKey,
           ],
