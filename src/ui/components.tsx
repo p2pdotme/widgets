@@ -131,12 +131,21 @@ export function Stepper({ stepIndex }: { stepIndex: number }) {
 }
 
 /**
- * Countdown pill — shown after a merchant accepts a buy order. Drives off a
- * wall-clock `deadline` (ms epoch). Fires `onExpire` exactly once when the
- * remaining time first crosses zero; the parent decides what to do with that
- * signal (typically: disable the "I've paid" CTA).
+ * Circular countdown — shown next to the "Pay exactly" hero after a merchant
+ * accepts a buy order. SVG progress ring + `mm:ss` in the center. Color
+ * shifts accent → warning (half-gone) → danger (last minute / expired).
+ * Fires `onExpire` exactly once when the remaining time first crosses zero
+ * — parent decides what to do (typically: disable the "I've paid" CTA).
  */
-export function CountdownPill({ deadline, onExpire }: { deadline: number; onExpire?: () => void }) {
+export function CountdownRing({ deadline, totalMs, onExpire, size = 76, stroke = 5 }: {
+  /** ms epoch when the order auto-cancels. */
+  deadline: number;
+  /** Total window length in ms (e.g. 5 * 60 * 1000) — used for the progress %. */
+  totalMs: number;
+  onExpire?: () => void;
+  size?: number;
+  stroke?: number;
+}) {
   const compute = () => Math.max(0, deadline - Date.now());
   const [remaining, setRemaining] = React.useState(compute);
   const calledExpire = React.useRef(false);
@@ -160,23 +169,45 @@ export function CountdownPill({ deadline, onExpire }: { deadline: number; onExpi
   const mins = Math.floor(remaining / 60_000);
   const secs = Math.floor((remaining % 60_000) / 1000);
   const text = `${mins}:${secs.toString().padStart(2, "0")}`;
+  const progress = totalMs > 0 ? Math.max(0, Math.min(1, remaining / totalMs)) : 0;
+
   const urgent = !expired && remaining < 60_000;
-  const bg = expired ? color.dangerSoft : urgent ? color.warningSoft : color.surfaceAlt;
-  const fg = expired ? color.danger : urgent ? color.warning : color.text;
+  const halfGone = !expired && !urgent && remaining < totalMs / 2;
+  const ringColor = expired || urgent ? color.danger : halfGone ? color.warning : color.accent;
+
+  const r = (size - stroke) / 2;
+  const circumference = 2 * Math.PI * r;
+  const dashOffset = circumference * (1 - progress);
 
   return (
-    <div style={{
-      display: "inline-flex", alignItems: "center", gap: 8,
-      padding: "8px 14px", borderRadius: radius.pill,
-      background: bg, color: fg,
-      fontSize: font.sm, fontWeight: weight.semibold,
-      fontVariantNumeric: "tabular-nums",
-    }}>
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <circle cx="12" cy="12" r="10" />
-        <polyline points="12 6 12 12 16 14" />
+    <div style={{ position: "relative", width: size, height: size, flexShrink: 0 }}>
+      <svg width={size} height={size} style={{ transform: "rotate(-90deg)" }}>
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={color.border} strokeWidth={stroke} />
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={r}
+          fill="none"
+          stroke={ringColor}
+          strokeWidth={stroke}
+          strokeDasharray={circumference}
+          strokeDashoffset={dashOffset}
+          strokeLinecap="round"
+          style={{ transition: "stroke-dashoffset 1s linear, stroke 0.3s ease" }}
+        />
       </svg>
-      <span>{expired ? "Payment window expired" : `Auto-cancels in ${text}`}</span>
+      <div style={{
+        position: "absolute", inset: 0,
+        display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+        color: ringColor, fontVariantNumeric: "tabular-nums",
+      }}>
+        <div style={{ fontSize: font.lg, fontWeight: weight.bold, lineHeight: 1 }}>
+          {expired ? "0:00" : text}
+        </div>
+        <div style={{ fontSize: 9, fontWeight: weight.semibold, textTransform: "uppercase", letterSpacing: "0.06em", marginTop: 3, opacity: 0.75 }}>
+          {expired ? "expired" : "left"}
+        </div>
+      </div>
     </div>
   );
 }

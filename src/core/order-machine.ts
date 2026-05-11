@@ -217,7 +217,14 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
   // Fetch on-chain price config for the selected currency so we can derive a
   // pre-order fiat quote + fee estimate. One read per currency change; no
   // polling — buy-price is effectively static for the duration of checkout.
-  const currencySymbol = opts.selectedCurrency?.symbol;
+  //
+  // Source-of-truth precedence:
+  //   • post-ACCEPTED → `state.currency` (chain-confirmed; survives resume
+  //     when the host didn't pass a `currencies` prop)
+  //   • pre-ACCEPTED  → `opts.selectedCurrency?.symbol` (what the user picked)
+  const currencySymbol = state.acceptedTimestamp !== null
+    ? state.currency
+    : opts.selectedCurrency?.symbol;
   useEffect(() => {
     if (opts.demo || !currencySymbol) return;
     let cancelled = false;
