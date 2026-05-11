@@ -1,5 +1,6 @@
 export { P2PCheckout } from "./widgets/P2PCheckout";
 export { P2POfframp } from "./widgets/P2POfframp";
+export { P2POrderHistory, type P2POrderHistoryProps } from "./widgets/P2POrderHistory";
 export {
   parseOrderIdFromReceipt,
   parseOfframpOrderIdFromReceipt,

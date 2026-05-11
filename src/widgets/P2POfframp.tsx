@@ -12,7 +12,6 @@ import {
   SuccessIcon,
   XIcon,
   Stepper,
-  LockFooter,
   injectKeyframes,
 } from "../ui/components";
 import { PaymentAddressInput } from "../ui/PaymentAddressInput";
@@ -371,8 +370,6 @@ export function P2POfframp(props: P2POfframpProps) {
           </div>
         )}
       </div>
-
-      <LockFooter />
     </div>
   );
 

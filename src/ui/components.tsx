@@ -130,16 +130,53 @@ export function Stepper({ stepIndex }: { stepIndex: number }) {
   );
 }
 
-export function LockFooter() {
+/**
+ * Countdown pill — shown after a merchant accepts a buy order. Drives off a
+ * wall-clock `deadline` (ms epoch). Fires `onExpire` exactly once when the
+ * remaining time first crosses zero; the parent decides what to do with that
+ * signal (typically: disable the "I've paid" CTA).
+ */
+export function CountdownPill({ deadline, onExpire }: { deadline: number; onExpire?: () => void }) {
+  const compute = () => Math.max(0, deadline - Date.now());
+  const [remaining, setRemaining] = React.useState(compute);
+  const calledExpire = React.useRef(false);
+
+  React.useEffect(() => {
+    setRemaining(compute());
+    if (remaining === 0) return;
+    const id = setInterval(() => setRemaining(compute()), 1000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deadline]);
+
+  const expired = remaining === 0;
+  React.useEffect(() => {
+    if (expired && !calledExpire.current) {
+      calledExpire.current = true;
+      onExpire?.();
+    }
+  }, [expired, onExpire]);
+
+  const mins = Math.floor(remaining / 60_000);
+  const secs = Math.floor((remaining % 60_000) / 1000);
+  const text = `${mins}:${secs.toString().padStart(2, "0")}`;
+  const urgent = !expired && remaining < 60_000;
+  const bg = expired ? color.dangerSoft : urgent ? color.warningSoft : color.surfaceAlt;
+  const fg = expired ? color.danger : urgent ? color.warning : color.text;
+
   return (
-    <div style={{ padding: "16px 0", display: "flex", justifyContent: "center" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 6, color: color.textMuted, fontSize: font.sm }}>
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" />
-        </svg>
-        <span>Powered by</span>
-        <span style={{ fontWeight: weight.semibold, color: color.text }}>P2P.me</span>
-      </div>
+    <div style={{
+      display: "inline-flex", alignItems: "center", gap: 8,
+      padding: "8px 14px", borderRadius: radius.pill,
+      background: bg, color: fg,
+      fontSize: font.sm, fontWeight: weight.semibold,
+      fontVariantNumeric: "tabular-nums",
+    }}>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="12" cy="12" r="10" />
+        <polyline points="12 6 12 12 16 14" />
+      </svg>
+      <span>{expired ? "Payment window expired" : `Auto-cancels in ${text}`}</span>
     </div>
   );
 }

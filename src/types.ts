@@ -86,7 +86,12 @@ export interface P2PCheckoutProps {
   usdcAddress?: `0x${string}`;
   /** USDC amount (6-dec bigint) the user will be charged. */
   usdcAmount?: bigint;
-  /** Expected fiat amount (6-dec bigint) — used to scope merchant eligibility. */
+  /**
+   * Expected fiat amount (6-dec bigint) for SDK routing eligibility. Optional
+   * — when omitted, the widget derives it from the diamond's on-chain
+   * `getPriceConfig(currency).buyPrice × usdcAmount`. Pass this only when you
+   * want to override the on-chain quote (e.g., a fixed-price merchant promo).
+   */
   fiatAmount?: bigint;
 
   // UI
