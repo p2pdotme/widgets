@@ -48,6 +48,38 @@ export const DIAMOND_ABI = [
     outputs: [],
   },
   {
+    name: "getPriceConfig",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "_currency", type: "bytes32" }],
+    outputs: [
+      {
+        name: "",
+        type: "tuple",
+        components: [
+          { name: "buyPrice", type: "uint256" },
+          { name: "sellPrice", type: "uint256" },
+          { name: "buyPriceOffset", type: "int256" },
+          { name: "baseSpread", type: "uint256" },
+        ],
+      },
+    ],
+  },
+  {
+    name: "getSmallOrderThreshold",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "_currency", type: "bytes32" }],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    name: "getSmallOrderFixedFee",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "_currency", type: "bytes32" }],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
     name: "getOrdersById",
     type: "function",
     stateMutability: "view",

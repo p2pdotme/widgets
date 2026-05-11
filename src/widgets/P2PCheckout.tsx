@@ -8,8 +8,12 @@ import { color, radius, font, weight, shadow, S } from "../ui/theme";
 import { Modal } from "../ui/Modal";
 import {
   Spinner, PulseDot, CenterStatus, SuccessIcon, XIcon,
-  CopyRow, Stepper, LockFooter, injectKeyframes,
+  CopyRow, Stepper, CountdownPill, injectKeyframes,
 } from "../ui/components";
+
+// Window the user has to pay after a merchant accepts before auto-cancellation.
+// Mirrors user-app's 5-minute window.
+const AUTO_CANCEL_WINDOW_MS = 5 * 60 * 1000;
 
 export function P2PCheckout(props: P2PCheckoutProps) {
   const {
@@ -28,6 +32,8 @@ export function P2PCheckout(props: P2PCheckoutProps) {
   const [copied, setCopied] = useState<string | null>(null);
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const [isMarkingPaid, setIsMarkingPaid] = useState(false);
+  const [isCancelling, setIsCancelling] = useState(false);
+  const [timerExpired, setTimerExpired] = useState(false);
   const [selectedCurrency, setSelectedCurrency] = useState(currencies?.[0]);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = React.useRef<HTMLDivElement>(null);
@@ -64,9 +70,69 @@ export function P2PCheckout(props: P2PCheckoutProps) {
     setIsMarkingPaid(false);
   };
 
+  const handleCancelConfirm = async () => {
+    setIsCancelling(true);
+    await cancelOrder();
+    setIsCancelling(false);
+    // Close the confirm panel on success; on failure the inline error stays
+    // visible underneath so the user can decide whether to retry.
+  };
+
+  const acceptedDeadline =
+    state.acceptedTimestamp !== null
+      ? Number(state.acceptedTimestamp) * 1000 + AUTO_CANCEL_WINDOW_MS
+      : null;
+
   const usdcDisplay = state.usdcAmount ? formatUnits(state.usdcAmount, USDC_DECIMALS) : null;
   const fiatDisplay = state.fiatAmount ? (Number(state.fiatAmount) / 1e6).toFixed(2) : null;
   const currencyConfig = CURRENCIES.find((c) => c.symbol === state.currency);
+
+  // Threshold display ("10 USDC", "12.5 USDC", etc.) — used in the fee-waiver
+  // hint. Sourced from on-chain config so it tracks any protocol changes.
+  const thresholdLabel = state.smallOrderThreshold !== null
+    ? `${Number(state.smallOrderThreshold) / 1e6} USDC`
+    : "10 USDC";
+
+  // Pre-order fiat breakdown. Fee is charged on top of the fiat the user pays
+  // (the user always receives the full `usdcAmount`). Per protocol config:
+  // small orders (usdcAmount ≤ smallOrderThreshold) pay `smallOrderFixedFee`
+  // USDC, converted to fiat at the same buyPrice. Larger orders pay zero.
+  const preview = (() => {
+    if (!usdcAmount || !state.buyPrice || !selectedCurrency) return null;
+    const subtotalFiat = (usdcAmount * state.buyPrice) / 1_000_000n;
+    const feeUsdc =
+      state.smallOrderThreshold !== null &&
+      state.smallOrderFixedFee !== null &&
+      usdcAmount <= state.smallOrderThreshold
+        ? state.smallOrderFixedFee
+        : 0n;
+    const feeFiat = (feeUsdc * state.buyPrice) / 1_000_000n;
+    const totalFiat = subtotalFiat + feeFiat;
+    return {
+      subtotal: (Number(subtotalFiat) / 1e6).toFixed(2),
+      fee: feeFiat > 0n ? (Number(feeFiat) / 1e6).toFixed(2) : null,
+      total: (Number(totalFiat) / 1e6).toFixed(2),
+      symbol: selectedCurrency.symbol,
+    };
+  })();
+
+  // Post-order breakdown — derived from on-chain `actualFiatAmount` (already
+  // includes fee) and `fixedFeePaid` (in USDC, converted to fiat at current
+  // buyPrice for display consistency with the pre-order screen).
+  const orderBreakdown = (() => {
+    if (state.phase !== "accepted" || !state.fiatAmount || !state.usdcAmount) return null;
+    const feeFiat =
+      state.fee && state.fee > 0n && state.buyPrice
+        ? (state.fee * state.buyPrice) / 1_000_000n
+        : 0n;
+    const subtotalFiat = state.fiatAmount > feeFiat ? state.fiatAmount - feeFiat : state.fiatAmount;
+    return {
+      subtotal: (Number(subtotalFiat) / 1e6).toFixed(2),
+      fee: feeFiat > 0n ? (Number(feeFiat) / 1e6).toFixed(2) : null,
+      total: (Number(state.fiatAmount) / 1e6).toFixed(2),
+      symbol: state.currency,
+    };
+  })();
   const isCompound = currencyConfig && currencyConfig.compoundFields;
   const compoundParts = state.decryptedUpi && isCompound ? state.decryptedUpi.split("|") : [];
 
@@ -182,6 +248,31 @@ export function P2PCheckout(props: P2PCheckoutProps) {
                 </div>
               </div>
             )}
+            {preview && (
+              <div style={{ marginBottom: 16, padding: "14px 16px", background: color.surfaceAlt, borderRadius: radius.md, border: `1px solid ${color.border}` }}>
+                <div style={S.rowBetween}>
+                  <span style={S.label}>Subtotal</span>
+                  <span style={{ ...S.body, ...S.num }}>{preview.symbol} {preview.subtotal}</span>
+                </div>
+                {preview.fee && (
+                  <>
+                    <div style={{ ...S.rowBetween, marginTop: 8 }}>
+                      <span style={S.label}>Additional fee</span>
+                      <span style={{ ...S.body, ...S.num, color: color.textMuted }}>{preview.symbol} {preview.fee}</span>
+                    </div>
+                    <p style={{ ...S.faint, margin: "4px 0 0", lineHeight: 1.4 }}>
+                      Waived on orders above {thresholdLabel}.
+                    </p>
+                  </>
+                )}
+                <div style={{ ...S.rowBetween, marginTop: 10, paddingTop: 10, borderTop: `1px solid ${color.border}` }}>
+                  <span style={{ ...S.label, color: color.text, fontWeight: weight.semibold }}>Total</span>
+                  <span style={{ ...S.body, fontWeight: weight.bold, ...S.num }}>
+                    {preview.symbol} {preview.total}
+                  </span>
+                </div>
+              </div>
+            )}
             {paymentNotice && (
               <div style={{ marginBottom: 12, padding: "12px 14px", background: color.warningSoft, border: `1px solid ${color.warning}33`, borderRadius: radius.md, fontSize: font.md, color: color.text, lineHeight: 1.5 }}>
                 {paymentNotice}
@@ -192,7 +283,9 @@ export function P2PCheckout(props: P2PCheckoutProps) {
                 <span style={{ color: color.danger, fontSize: font.md }}>{state.error}</span>
               </div>
             )}
-            <button style={S.primaryBtn} onClick={handlePlaceOrder}>Pay now</button>
+            <button style={S.primaryBtn} onClick={handlePlaceOrder}>
+              {preview ? `Pay ${preview.symbol} ${preview.total}` : "Pay now"}
+            </button>
             <p style={{ ...S.faint, textAlign: "center", marginTop: 12 }}>You'll pay fiat to a verified P2P merchant.</p>
           </div>
         )}
@@ -210,16 +303,52 @@ export function P2PCheckout(props: P2PCheckoutProps) {
 
               {state.phase === "placed" && (
                 <CenterStatus icon={<PulseDot />} title="Finding a merchant"
-                  subtitle={`Order #${state.orderId}. A merchant will accept shortly.`} />
+                  subtitle={`Order #${state.orderId}: A P2P merchant will be assigned to accept your cash deposit and send USDC on your behalf to fulfill this checkout. Please note that this is a manual swap process and may take 2–3 minutes to complete. We appreciate your patience.`} />
               )}
 
               {state.phase === "accepted" && (
                 <div>
+                  {acceptedDeadline !== null && (
+                    <div style={{ display: "flex", justifyContent: "center", marginBottom: 16 }}>
+                      <CountdownPill
+                        deadline={acceptedDeadline}
+                        onExpire={() => setTimerExpired(true)}
+                      />
+                    </div>
+                  )}
                   <div style={{ textAlign: "center", marginBottom: 24 }}>
                     <p style={S.label}>Pay exactly</p>
                     <h1 style={{ ...S.h1, fontSize: font.hero, marginTop: 6, ...S.num }}>{state.currency} {fiatDisplay}</h1>
-                    {usdcDisplay && <p style={{ ...S.muted, marginTop: 4 }}>to receive {usdcDisplay} USDC</p>}
+                    <p style={{ ...S.muted, marginTop: 4 }}>
+                      for {productName ?? (usdcDisplay ? `${usdcDisplay} USDC` : "your order")}
+                    </p>
                   </div>
+
+                  {orderBreakdown && (
+                    <div style={{ ...S.cardFlat, padding: "14px 16px", marginBottom: 16, background: color.surfaceAlt }}>
+                      <div style={S.rowBetween}>
+                        <span style={S.label}>Subtotal</span>
+                        <span style={{ ...S.body, ...S.num }}>{orderBreakdown.symbol} {orderBreakdown.subtotal}</span>
+                      </div>
+                      {orderBreakdown.fee && (
+                        <>
+                          <div style={{ ...S.rowBetween, marginTop: 8 }}>
+                            <span style={S.label}>Additional fee</span>
+                            <span style={{ ...S.body, ...S.num, color: color.textMuted }}>{orderBreakdown.symbol} {orderBreakdown.fee}</span>
+                          </div>
+                          <p style={{ ...S.faint, margin: "4px 0 0", lineHeight: 1.4 }}>
+                            Waived on orders above {thresholdLabel}.
+                          </p>
+                        </>
+                      )}
+                      <div style={{ ...S.rowBetween, marginTop: 10, paddingTop: 10, borderTop: `1px solid ${color.border}` }}>
+                        <span style={{ ...S.label, color: color.text, fontWeight: weight.semibold }}>Total</span>
+                        <span style={{ ...S.body, fontWeight: weight.bold, ...S.num }}>
+                          {orderBreakdown.symbol} {orderBreakdown.total}
+                        </span>
+                      </div>
+                    </div>
+                  )}
 
                   <div style={{ ...S.cardFlat, padding: "20px", background: color.surfaceAlt }}>
                     <div style={S.rowBetween}>
@@ -257,18 +386,35 @@ export function P2PCheckout(props: P2PCheckoutProps) {
                     <div style={{ marginTop: 12, padding: "10px 12px", background: color.dangerSoft, borderRadius: radius.md, color: color.danger, fontSize: font.md }}>{state.error}</div>
                   )}
 
-                  <button style={{ ...S.primaryBtn, marginTop: 20, opacity: isMarkingPaid ? 0.5 : 1 }} onClick={handleMarkPaid} disabled={isMarkingPaid}>
-                    {isMarkingPaid ? "Confirming…" : "I've paid"}
+                  <button
+                    style={{ ...S.primaryBtn, marginTop: 20, opacity: isMarkingPaid || timerExpired ? 0.5 : 1, cursor: timerExpired ? "not-allowed" : "pointer" }}
+                    onClick={handleMarkPaid}
+                    disabled={isMarkingPaid || timerExpired || isCancelling}
+                  >
+                    {timerExpired ? "Payment window expired" : isMarkingPaid ? "Confirming…" : "I've paid"}
                   </button>
 
                   {!showCancelConfirm ? (
-                    <button style={{ ...S.ghostBtn, width: "100%", marginTop: 8, height: 40 }} onClick={() => setShowCancelConfirm(true)}>Cancel order</button>
+                    <button style={{ ...S.ghostBtn, width: "100%", marginTop: 8, height: 40 }} onClick={() => setShowCancelConfirm(true)} disabled={isCancelling}>Cancel order</button>
                   ) : (
                     <div style={{ marginTop: 12, padding: 14, borderRadius: radius.md, background: color.dangerSoft, border: `1px solid ${color.danger}22` }}>
                       <p style={{ fontSize: font.md, color: color.danger, marginTop: 0 }}>Cancel this order?</p>
                       <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                        <button style={{ ...S.secondaryBtn, flex: 1, height: 38, borderColor: color.danger, color: color.danger }} onClick={cancelOrder}>Yes, cancel</button>
-                        <button style={{ ...S.secondaryBtn, flex: 1, height: 38 }} onClick={() => setShowCancelConfirm(false)}>Keep order</button>
+                        <button
+                          style={{ ...S.secondaryBtn, flex: 1, height: 38, borderColor: color.danger, color: color.danger, opacity: isCancelling ? 0.6 : 1, cursor: isCancelling ? "wait" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}
+                          onClick={handleCancelConfirm}
+                          disabled={isCancelling}
+                        >
+                          {isCancelling && <Spinner size={14} />}
+                          {isCancelling ? "Cancelling…" : "Yes, cancel"}
+                        </button>
+                        <button
+                          style={{ ...S.secondaryBtn, flex: 1, height: 38 }}
+                          onClick={() => setShowCancelConfirm(false)}
+                          disabled={isCancelling}
+                        >
+                          Keep order
+                        </button>
                       </div>
                     </div>
                   )}
@@ -289,7 +435,10 @@ export function P2PCheckout(props: P2PCheckoutProps) {
               )}
 
               {state.phase === "cancelled" && (
-                <CenterStatus icon={<XIcon />} title="Order cancelled" subtitle="You were not charged." variant="danger" />
+                <div style={{ textAlign: "center" }}>
+                  <CenterStatus icon={<XIcon />} title="Order cancelled" subtitle="You were not charged." variant="danger" />
+                  {onClose && <button style={{ ...S.primaryBtn, marginTop: 8 }} onClick={onClose}>Done</button>}
+                </div>
               )}
             </div>
           </div>
@@ -307,7 +456,6 @@ export function P2PCheckout(props: P2PCheckoutProps) {
           </div>
         )}
       </div>
-      <LockFooter />
     </div>
   );
 
