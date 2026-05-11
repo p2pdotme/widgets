@@ -2,18 +2,24 @@
 
 Drop-in React widgets for the [P2P.me](https://p2p.me) checkout flow.
 Users pay you in **local fiat** (UPI, PIX, SPEI, QRIS, …) — your contract
-receives **USDC on Base**. Two widgets in one package:
+receives **USDC on Base**. Three widgets in one package:
 
 - **`<P2PCheckout>`** — the buy flow. User picks currency → pays merchant
   off-chain → your contract is paid USDC.
 - **`<P2POfframp>`** — the sell-back flow. User sells back an NFT they
   bought through `<P2PCheckout>` and receives local fiat in return.
+- **`<P2POrderHistory>`** — a subgraph-backed list of the connected user's
+  orders. Auto-hides when there's nothing pending. Click "Resume" on a
+  pending row to re-open `<P2PCheckout>` in tracking-only mode.
 
-The widgets handle: order placement, status polling, encrypted payment-detail
-delivery, "I've paid" confirmation, cancellation, slippage limits, and the
-full visual state machine. You provide the **signer**, the **integrator
-contract address**, and (for buys) a `placeOrder` callback that emits a
-transaction.
+The widgets handle: order placement, **SDK circle routing** (optional —
+no per-currency `circleId` plumbing required), status polling, encrypted
+payment-detail delivery, an on-screen **fiat breakdown** (subtotal +
+protocol fee + total, derived from on-chain price config), a **5-minute
+auto-cancel countdown** on the accepted screen, "I've paid" confirmation,
+cancellation, slippage limits, B2B fraud screening (opt-in), and the full
+visual state machine. You provide the **signer**, the **integrator contract
+address**, and (for buys) a `placeOrder` callback that emits a transaction.
 
 ```
 +----------+      placeOrder()       +------------+    USDC on Base    +-----------+
@@ -61,7 +67,8 @@ the user-side UX of an existing integrator.
 |---|---|
 | **Integrator contract** | Your business logic on Base. Templates: `CheckoutIntegratorV2` (consumer purchases of an `ICheckoutClient`), `MarketplaceCheckoutIntegrator` (third-party clients identified by `msg.sender`, with optional sell-back), `LotPotCheckoutIntegrator`, etc. |
 | **Diamond registration** | A super-admin call: `B2BGatewayFacet.registerIntegrator(integrator, usdcThroughIntegrator, proxyImpl)`. Talk to P2P to get this done. |
-| **Currency / circle mapping** | Each currency you accept is backed by a merchant *circle* on the Diamond. Ask P2P for the `circleId` per currency for your deployment. |
+| **Currency / circle mapping** | Each currency is backed by a merchant *circle* on the Diamond. With SDK routing (pass `subgraphUrl` + `usdcAddress` + `usdcAmount`) you can leave `circleId` off — the widget picks one for you at place-order time. Hardcode `circleId` per currency only when you want to pin a specific merchant. |
+| **Subgraph URL** (optional) | Read endpoint for SDK routing + `<P2POrderHistory>`. Skip if you're using explicit `circleId` everywhere and don't need a history widget. |
 | **Wallet signer** | Anything that can produce `{ to, data, gasLimit }` → signed tx hash. Privy embedded wallets and viem-native accounts are both supported via the `CheckoutSigner` adapter (see [Signer adapter](#signer-adapter)). |
 
 > **Where to read more:** the contracts repo (under
@@ -74,6 +81,8 @@ the user-side UX of an existing integrator.
 
 The widget is **integrator-agnostic for buys**: you give it a `placeOrder`
 callback that produces an `orderId`, and the widget takes over from there.
+Pass `subgraphUrl` + `usdcAddress` + `usdcAmount` and you can omit
+`circleId` from your currency list — the widget routes via the SDK.
 
 ```tsx
 import {
@@ -92,13 +101,16 @@ import {
 } from "@p2pdotme/sdk/orders";
 
 const INTEGRATOR_ADDRESS = "0x4eEe0701b53A031B510468fe4b9C6523Aa21613a"; // your integrator
-const CLIENT_ADDRESS    = "0xF99216e437f04270D815563c548A0E4599207973"; // your client (V2-style)
-const PRODUCT_ID        = 1n;
-const QUANTITY          = 1n;
+const CLIENT_ADDRESS     = "0xF99216e437f04270D815563c548A0E4599207973"; // your client (V2-style)
+const USDC_ADDRESS       = "0x4095fE4f1E636f11A95820BA2bB87F335Bd1040d"; // Base Sepolia USDC
+const SUBGRAPH_URL       = "https://api.studio.thegraph.com/query/.../version/latest";
+const PRODUCT_ID         = 1n;
+const QUANTITY           = 1n;
+const USDC_PRICE         = 5n; // $5 USDC per unit
 
 const publicClient = createPublicClient({ chain: baseSepolia, transport: http() });
 
-// The userPlaceOrder ABI of your integrator. Identical across all V2-shaped
+// userPlaceOrder ABI of your integrator. Identical across all V2-shaped
 // templates in the contracts repo.
 const INTEGRATOR_ABI = [
   {
@@ -119,14 +131,20 @@ const INTEGRATOR_ABI = [
   },
 ] as const;
 
+// circleId omitted — the widget will route via the SDK using the routing
+// inputs below. To pin a specific merchant circle for a currency, add
+// `circleId: 1n` to its entry (mix-and-match is fine).
 const CURRENCIES: CurrencyOption[] = [
-  { symbol: "INR", flag: "🇮🇳", paymentMethod: "UPI", circleId: 1n },
-  { symbol: "BRL", flag: "🇧🇷", paymentMethod: "PIX", circleId: 2n },
+  { symbol: "INR", flag: "🇮🇳", paymentMethod: "UPI" },
+  { symbol: "BRL", flag: "🇧🇷", paymentMethod: "PIX" },
 ];
 
 export function CheckoutDemo({ signer }: { signer: CheckoutSigner }) {
   const placeOrder = async (ctx: PlaceOrderContext): Promise<PlaceOrderResult> => {
     if (!ctx.currency) throw new Error("Currency not selected");
+    // The widget guarantees `circleId` is resolved before invoking placeOrder
+    // — either the explicit value you passed, or the SDK-routed one.
+    if (ctx.currency.circleId === undefined) throw new Error("No circle resolved");
 
     // Persist a relay identity per browser. The merchant uses this pubkey to
     // encrypt their UPI/PIX details to the user.
@@ -166,24 +184,40 @@ export function CheckoutDemo({ signer }: { signer: CheckoutSigner }) {
       productName="Common NFT"
       signer={signer}
       chainId={84532}
+      // Routing inputs — required when any currency in `currencies` omits
+      // `circleId`. The widget calls `placeOrder.prepare()` from the SDK
+      // and forwards the resolved circleId into your `placeOrder` callback.
+      subgraphUrl={SUBGRAPH_URL}
+      usdcAddress={USDC_ADDRESS}
+      usdcAmount={USDC_PRICE * 1_000_000n}
       onComplete={(orderId) => console.log("paid", orderId)}
+      onCancel={(orderId) => console.warn("cancelled", orderId)}
       onError={(err) => console.error(err)}
     />
   );
 }
 ```
 
-That's the whole buy flow. Once the user clicks **Pay now**, the widget:
+Once the user clicks **Pay now**, the widget:
 
-1. Calls your `placeOrder` callback → captures the `orderId` from the receipt.
-2. Polls `Diamond.getOrdersById(orderId)` for status changes.
-3. On `ACCEPTED`: pulls the merchant's encrypted UPI/PIX, decrypts with the
-   user's relay private key, shows the payment QR / address.
-4. User clicks **I've paid** → widget calls `Diamond.paidBuyOrder(orderId)`.
-5. On `COMPLETED`: fires `onComplete` and shows a success state.
+1. If `circleId` is missing on the picked currency, calls
+   `@p2pdotme/sdk/orders` `placeOrder.prepare()` to route. Eligibility is
+   scoped by the **gross fiat amount** the widget derives from
+   `usdcAmount × buyPrice` (from on-chain `getPriceConfig`) plus the
+   protocol's small-order fee where applicable.
+2. Invokes your `placeOrder` callback with `ctx.currency.circleId`
+   populated. You submit the integrator tx and return the `orderId`.
+3. Polls `Diamond.getOrdersById(orderId)` for status changes.
+4. On `ACCEPTED`: decrypts the merchant's UPI/PIX with the user's relay
+   key, renders the payment QR + address, and starts a **5-minute
+   auto-cancel countdown**.
+5. User clicks **I've paid** → widget calls `Diamond.paidBuyOrder(orderId)`.
+6. On `COMPLETED`: fires `onComplete` and shows a success state.
 
-Cancellation, error, and "merchant didn't accept in time" states are all
-handled automatically.
+The pre-order screen renders a **fiat breakdown** (subtotal + additional
+fee + total) sourced from on-chain config — see
+[Built-in pricing & countdown](#built-in-pricing--countdown). Cancellation,
+error, and "merchant didn't accept in time" states are handled automatically.
 
 ---
 
@@ -216,6 +250,114 @@ import { P2POfframp, type CurrencyOption } from "@p2pdotme/checkout-widget";
 `integratorAddress` must have `offrampEnabled = true`, a configured
 `offrampRelayer`, a non-zero `maxUsdcPerOfframp`, and a USDC pool to fund the
 sell-back. See the contracts repo's deployment scripts for setup.
+
+> **Offramp does not auto-route.** Every currency you pass to `<P2POfframp>`
+> must carry an explicit `circleId` — the sell flow uses it directly in the
+> integrator tx. (Only the buy widget calls the SDK's routing path.)
+
+---
+
+## Order history & resume (`<P2POrderHistory>`)
+
+A read-only widget that lists the connected user's orders from the
+subgraph. Two common patterns:
+
+- **Pending banner** on a home page (`filter="pending"`) — auto-hides when
+  nothing's outstanding.
+- **Full history page or drawer** (`filter="all"`) — shows everything,
+  grouped into Pending / Past.
+
+Click "Resume" on a pending row → host opens `<P2PCheckout>` in
+**tracking-only mode** with that orderId. The checkout widget polls the
+chain and snaps directly to whichever screen the order is currently on
+(no "Finding merchant" flash for already-accepted orders).
+
+```tsx
+import { useCallback, useState } from "react";
+import { P2PCheckout, P2POrderHistory, type CheckoutSigner } from "@p2pdotme/checkout-widget";
+
+export function HomePage({ signer }: { signer: CheckoutSigner }) {
+  const [resumeOrderId, setResumeOrderId] = useState<string | null>(null);
+  const [refreshKey, setRefreshKey]       = useState(0);
+  const [overrides, setOverrides]         = useState<Record<string, "completed" | "cancelled">>({});
+
+  const onComplete = useCallback((id: string) => {
+    setOverrides((p) => ({ ...p, [id]: "completed" }));
+    setRefreshKey((k) => k + 1);
+    setResumeOrderId(null);
+  }, []);
+  const onCancel = useCallback((id: string) => {
+    setOverrides((p) => ({ ...p, [id]: "cancelled" }));
+    setRefreshKey((k) => k + 1);
+    setResumeOrderId(null);
+  }, []);
+
+  return (
+    <>
+      <P2POrderHistory
+        signer={signer}
+        subgraphUrl={SUBGRAPH_URL}
+        usdcAddress={USDC_ADDRESS}
+        chainId={84532}
+        filter="pending"               // banner: auto-hides when empty
+        onResume={setResumeOrderId}
+        refreshKey={refreshKey}        // bump to force refetch
+        optimisticUpdates={overrides}  // bridge subgraph indexing latency
+      />
+
+      {resumeOrderId && (
+        <P2PCheckout
+          orderId={resumeOrderId}      // tracking-only — no placeOrder needed
+          signer={signer}
+          chainId={84532}
+          onClose={() => setResumeOrderId(null)}
+          onComplete={onComplete}
+          onCancel={onCancel}
+        />
+      )}
+    </>
+  );
+}
+```
+
+### Smart auto-poll
+
+The widget polls the subgraph every 15s **only while at least one order
+is non-terminal**. A merchant accepting your order updates the status
+badge automatically; when everything's terminal, polling stops. Tune or
+disable with `pollIntervalMs` (set `0` to disable).
+
+### Optimistic terminal updates
+
+The subgraph has ~10–20s indexing latency. When `onComplete` /
+`onCancel` fires from `<P2PCheckout>`, pass that orderId into
+`optimisticUpdates` — the history widget overlays the terminal status
+immediately. The overlay is harmlessly redundant once the subgraph
+catches up.
+
+`refreshKey` is the matching imperative escape hatch: bumping it forces
+an immediate refetch (useful from the same `onComplete` / `onCancel`
+handlers).
+
+### `<P2POrderHistory>` props
+
+| Prop | Type | Required | Notes |
+|---|---|---|---|
+| `signer` | `CheckoutSigner` | ✅ | Used for `signer.address`. |
+| `subgraphUrl` | `string` | ✅ | Read endpoint. |
+| `usdcAddress` | `0x…` | ✅ | Forwarded to the SDK client. |
+| `chainId` | `number` | — | Default `84532`. |
+| `diamondAddress` | `0x…` | — | Defaults to Sepolia testnet Diamond. |
+| `rpcUrl` | `string` | — | Custom RPC. |
+| `limit` | `number` | — | Page size. Default `20`, max `100`. |
+| `filter` | `"pending" \| "all"` | — | Default `"all"`. |
+| `hideWhenEmpty` | `boolean` | — | Render `null` (no card) when nothing to show. Default `true` for `filter="pending"`, `false` otherwise. |
+| `title` | `string` | — | Defaults to `"Pending orders"` for `filter="pending"`, `"Order history"` otherwise. |
+| `style` | `CSSProperties` | — | Merged into the root card. Use for outer spacing that disappears with the card on auto-hide. |
+| `onResume` | `(orderId) => void` | — | Click handler for the "Resume" button on pending rows. |
+| `refreshKey` | `number \| string` | — | Bump to force an immediate refetch. |
+| `optimisticUpdates` | `Record<string, "completed" \| "cancelled">` | — | Local terminal-status overlay. Pass a stable reference. |
+| `pollIntervalMs` | `number` | — | Auto-poll cadence while pending exists. Default `15000`. `0` disables. |
 
 ---
 
@@ -312,17 +454,21 @@ const signer: CheckoutSigner | null = address
 ## Currency configuration
 
 You decide which currencies your integrator accepts by passing a
-`CurrencyOption[]`. The `circleId` is the **Diamond merchant circle** that
-backs that currency in your deployment — ask P2P for the right value, or
-read it from your integrator's setup.
+`CurrencyOption[]`. `circleId` is **optional** — leave it off and the
+widget routes via the SDK (requires `subgraphUrl` + `usdcAddress` +
+`usdcAmount` on `<P2PCheckout>`); set it to pin a specific merchant
+circle for that currency. Mix-and-match is fine:
 
 ```ts
 const CURRENCIES: CurrencyOption[] = [
-  { symbol: "INR", flag: "🇮🇳", paymentMethod: "UPI",  circleId: 1n },
-  { symbol: "BRL", flag: "🇧🇷", paymentMethod: "PIX",  circleId: 2n },
-  { symbol: "MEX", flag: "🇲🇽", paymentMethod: "SPEI", circleId: 1n },
+  { symbol: "INR", flag: "🇮🇳", paymentMethod: "UPI" },                 // SDK-routed
+  { symbol: "BRL", flag: "🇧🇷", paymentMethod: "PIX" },                 // SDK-routed
+  { symbol: "MEX", flag: "🇲🇽", paymentMethod: "SPEI", circleId: 7n },  // pinned
 ];
 ```
+
+> **`<P2POfframp>` requires explicit `circleId` on every currency** — only
+> `<P2PCheckout>` calls the SDK's routing path.
 
 The widget ships built-in defaults for these symbols (label, validator,
 placeholder for the offramp address input). You can override per currency:
@@ -332,10 +478,10 @@ placeholder for the offramp address input). You can override per currency:
   symbol: "INR",
   flag: "🇮🇳",
   paymentMethod: "UPI",
-  circleId: 1n,
   validatePaymentAddress: (input) =>
     /^[\w.-]+@[\w.-]+$/.test(input) ? null : "Enter a valid UPI handle",
   paymentAddressPlaceholder: "name@bank",
+  paymentChannelConfigId: 0n, // optional — preferred PPC id forwarded to the SDK router
 }
 ```
 
@@ -343,6 +489,48 @@ Currencies the widget knows about out of the box: `INR`, `IDR`, `BRL`, `ARS`,
 `MEX`, `VEN`, `NGN`. Others work too — pass any symbol/flag/paymentMethod
 combo, the widget treats unknown symbols as a generic compound-field input
 unless you provide a `validatePaymentAddress`.
+
+---
+
+## Built-in pricing & countdown
+
+The widget reads two pieces of on-chain config when the user picks a
+currency and surfaces them in the UI automatically — no host wiring
+needed.
+
+**`getPriceConfig(currency).buyPrice`** — 6-decimal fiat-per-USDC rate.
+Used to derive what the user pays. The pre-order screen renders:
+
+```
+Subtotal              INR 855.00
+Transaction Fee       INR 10.69
+Waived on orders above 10 USDC.
+─────────────────────────────
+Total                 INR 865.69
+```
+
+`Total` is what the **Pay now** button displays (e.g. *"Pay INR 865.69"*)
+and what the widget passes to the SDK routing call as the eligibility
+filter. The user always receives the full `usdcAmount` — the fee is
+charged on top, in fiat.
+
+**`getSmallOrderThreshold(currency)` / `getSmallOrderFixedFee(currency)`** —
+the "Transaction Fee" row. Orders ≤ threshold incur the fixed fee in USDC,
+converted to fiat at the same `buyPrice` (currently **10 USDC threshold,
+0.125 USDC fee** in prod for INR / IDR / BRL — read dynamically per
+currency so this tracks any protocol updates). Orders above the threshold
+pay zero (row hidden).
+
+**`getAdditionalOrderDetails(orderId).acceptedTimestamp`** — drives a
+**5-minute auto-cancel countdown** on the accepted screen. When time
+runs out, the "I've paid" button is disabled with a *"Payment window
+expired"* label. The widget keeps polling and surfaces the on-chain
+cancellation when it lands.
+
+To opt out of routing (and the breakdown derivation), pass explicit
+`circleId` on every currency and skip `subgraphUrl` / `usdcAddress`.
+The accepted-screen breakdown still renders, sourced from on-chain
+`actualFiatAmount` and `fixedFeePaid`.
 
 ---
 
@@ -406,14 +594,14 @@ wire the read into your own wagmi/viem setup (`useReadContract`, etc.).
 
 | `phase` (buy) | When it's set | What's on screen |
 |---|---|---|
-| `checkout` | Initial render with a `placeOrder` callback | Pre-order screen: amount, product, currency picker, "Pay now" button |
-| `placing` | `placeOrder` running | "Placing order…" with spinner |
-| `placed` | tx confirmed; order = `PLACED` on Diamond | "Waiting for a merchant to accept…" |
-| `accepted` | order = `ACCEPTED` (a merchant has matched) | Decrypted UPI / payment details, copy buttons, **I've paid** button, cancel option |
-| `paid` | user clicked I've paid → `paidBuyOrder` succeeded | "Waiting for merchant to release funds…" |
+| `checkout` | Initial render with a `placeOrder` callback | Pre-order screen: amount, product, currency picker, **fiat breakdown**, "Pay {total}" button |
+| `placing` | `placeOrder` running (incl. SDK routing) | "Placing order…" with spinner |
+| `placed` | tx confirmed; order = `PLACED` on Diamond | "Finding a merchant" — polls every 3 s for an accept |
+| `accepted` | order = `ACCEPTED` (a merchant has matched) | **5-min countdown pill**, "Pay exactly X" hero with breakdown, decrypted UPI / payment details, copy buttons, **I've paid** button, cancel option. Polls every 15 s for on-chain cancellation. |
+| `paid` | user clicked I've paid → `paidBuyOrder` succeeded | "Verifying your payment" — polls every 10 s for completion |
 | `completed` | order = `COMPLETED` | Success screen → fires `onComplete` |
-| `cancelled` | order = `CANCELLED` | "Order cancelled / refunded" → fires `onCancel` |
-| `error` | Any thrown error | Error message + retry/close → fires `onError` |
+| `cancelled` | order = `CANCELLED` | "Order cancelled / refunded" with **Done** button → fires `onCancel` |
+| `error` | Pre-order placement failure | Error message + retry/close → fires `onError`. Failures during `accepted`/`paid` actions (cancel, mark-paid) stay on-screen with an inline error — they don't reset the phase. |
 
 Sell-back (offramp) phases: `form` → `sweeping?` → `placing` → `placed` →
 `accepted` → `encrypting` → `paid` → `completed` (or `cancelled`).
@@ -428,11 +616,15 @@ Sell-back (offramp) phases: `form` → `sweeping?` → `placing` → `placed` �
 |---|---|---|---|
 | `signer` | `CheckoutSigner` | ✅ | Wallet abstraction. |
 | `placeOrder` | `(ctx) => Promise<{ orderId, txHash }>` | one of these | Async callback that places the order and returns the orderId. |
-| `orderId` | `string` | one of these | Tracking-only mode: widget skips placement and goes straight to status polling. |
+| `orderId` | `string` | one of these | Tracking-only mode: widget skips placement and polls chain status. Walks forward from any phase, so resuming an already-`PAID` or `COMPLETED` order works. |
 | `currencies` | `CurrencyOption[]` | — | Renders the in-widget currency picker. |
 | `amount` | `string` | — | Display string e.g. `"5 USDC"`. |
-| `productName` | `string` | — | Display string. |
+| `productName` | `string` | — | Display string. Also used as the "for {productName}" subtitle on the accepted screen. |
 | `paymentNotice` | `ReactNode` | — | Caller-controlled banner above "Pay now" (e.g. "gas sponsored"). |
+| `subgraphUrl` | `string` | conditional | Required when any `CurrencyOption` omits `circleId` — used for SDK circle routing. |
+| `usdcAddress` | `0x…` | conditional | Same — required for SDK routing. |
+| `usdcAmount` | `bigint` | conditional | USDC amount the user is charged (6-dec). Required for SDK routing; also drives the fiat breakdown when `subgraphUrl` is set. |
+| `fiatAmount` | `bigint` | — | **Override.** When omitted, the widget derives it from on-chain `getPriceConfig(currency).buyPrice × usdcAmount` plus the small-order fee (gross). Pass this only to pin a custom fiat amount (e.g. a fixed-price promo). |
 | `chainId` | `number` | — | Defaults to **84532 (Base Sepolia)**. Override for mainnet. |
 | `diamondAddress` | `0x…` | — | Defaults to a Sepolia testnet Diamond. **Override for production.** |
 | `rpcUrl` | `string` | — | Custom RPC for status polling. Defaults to viem's chain default. |
@@ -454,7 +646,7 @@ Sell-back (offramp) phases: `form` → `sweeping?` → `placing` → `placed` �
 | `marketplaceAddress` | `0x…` | ✅ | Client implementing `IMarketplaceClient` (`ownerOf`, `tokenProduct`, `tokenPrice`). |
 | `tokenId` | `bigint` | ✅ | Token to sell back; user (or their proxy) must own it. |
 | `signer` | `CheckoutSigner` | ✅ | Same signer you use for buys. |
-| `currencies` | `CurrencyOption[]` | ✅ | Currency picker. |
+| `currencies` | `CurrencyOption[]` | ✅ | Currency picker. **Every entry must carry an explicit `circleId`** — offramp does not auto-route. |
 | `diamondAddress` | `0x…` | ✅ | Status polling. |
 | `usdcAddress` | `0x…` | ✅ | For decimal formatting + balance reads. |
 | `chainId` | `number` | — | Default `84532`. |
@@ -463,10 +655,17 @@ Sell-back (offramp) phases: `form` → `sweeping?` → `placing` → `placed` �
 | `fiatAmountLimit` | `bigint` | — | Slippage floor (6 decimals). `0` = no check. |
 | `mode` / `open` / events | — | — | Same shape as `<P2PCheckout>`. |
 
+> Looking for `<P2POrderHistory>` props? See its dedicated section
+> [above](#order-history--resume-p2porderhistory).
+
 ### Helper exports
 
 ```ts
 import {
+  // widgets
+  P2PCheckout,
+  P2POfframp,
+  P2POrderHistory,
   // event-decoding helpers
   parseOrderIdFromReceipt,
   parseOfframpOrderIdFromReceipt,
@@ -486,6 +685,12 @@ import {
   OrderStatus,
 } from "@p2pdotme/checkout-widget";
 ```
+
+Type-only exports include `P2PCheckoutProps`, `P2POfframpProps`,
+`P2POrderHistoryProps`, `CheckoutSigner`, `CheckoutPhase`, `OfframpPhase`,
+`PlaceOrderResult`, `PlaceOrderContext`, `CurrencyOption`,
+`PaymentAddressValidator`, `ScreeningConfig`, `ScreeningOrderDetails`,
+and `ScreeningUserDetails`.
 
 ---
 
@@ -593,6 +798,19 @@ forwards, the difference comes back automatically — that's the event.
 The `signer` prop is read on each render, so a parent re-render with the new
 signer flushes the state. If you cache the signer in a memo, make sure the
 deps include the wallet address.
+
+**`<P2POrderHistory>` still shows a just-completed order as "Awaiting payment"**
+The subgraph has ~10–20s indexing latency. Forward the orderId from
+`<P2PCheckout>`'s `onComplete` / `onCancel` into the history widget's
+`optimisticUpdates` prop and bump `refreshKey` — the row flips status
+immediately and reconciles with the subgraph on the next fetch. See
+[Optimistic terminal updates](#optimistic-terminal-updates).
+
+**SDK routing throws "Routing requires subgraphUrl, usdcAddress, and usdcAmount"**
+You left `circleId` off some `CurrencyOption` but didn't pass the routing
+inputs to `<P2PCheckout>`. Either add `circleId` to that currency or pass
+all three routing props. `fiatAmount` is optional — when missing the widget
+derives it from on-chain `getPriceConfig`.
 
 ---
 
