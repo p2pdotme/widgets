@@ -119,6 +119,14 @@ export function P2PCheckout(props: P2PCheckoutProps) {
     };
   })();
 
+  // True while we expect a breakdown but the on-chain price config hasn't
+  // arrived. Gates the "Pay now" button so the user can't fire the order
+  // before they've seen what they're paying. Releases when the breakdown
+  // materializes OR the fetch fails (so a bad RPC doesn't strand the user).
+  const isQuotePending = Boolean(
+    !demo && usdcAmount && selectedCurrency && !preview && !state.priceConfigFailed
+  );
+
   // Post-order breakdown — derived from on-chain `actualFiatAmount` (already
   // includes fee) and `fixedFeePaid` (in USDC, converted to fiat at current
   // buyPrice for display consistency with the pre-order screen).
@@ -286,8 +294,21 @@ export function P2PCheckout(props: P2PCheckoutProps) {
                 <span style={{ color: color.danger, fontSize: font.md }}>{state.error}</span>
               </div>
             )}
-            <button style={S.primaryBtn} onClick={handlePlaceOrder}>
-              {preview ? `Pay ${preview.symbol} ${preview.total}` : "Pay now"}
+            <button
+              style={{ ...S.primaryBtn, opacity: isQuotePending ? 0.6 : 1, cursor: isQuotePending ? "wait" : "pointer" }}
+              onClick={handlePlaceOrder}
+              disabled={isQuotePending}
+            >
+              {isQuotePending ? (
+                <>
+                  <Spinner size={14} />
+                  Loading quote…
+                </>
+              ) : preview ? (
+                `Pay ${preview.symbol} ${preview.total}`
+              ) : (
+                "Pay now"
+              )}
             </button>
             <p style={{ ...S.faint, textAlign: "center", marginTop: 12 }}>You'll pay fiat to a verified P2P merchant.</p>
           </div>

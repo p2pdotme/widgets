@@ -49,6 +49,11 @@ interface OrderState {
   // Unix seconds, from `getAdditionalOrderDetails.acceptedTimestamp`. Used to
   // drive the auto-cancellation countdown on the accepted screen.
   acceptedTimestamp: bigint | null;
+  // True if the on-chain price-config fetch failed for the current currency.
+  // Lets the widget release the "Pay now" gate without a stuck spinner —
+  // the user can still proceed (SDK routing falls back to a 0n fiatAmount,
+  // i.e., no eligibility filter), they just won't see a fee breakdown.
+  priceConfigFailed: boolean;
 }
 
 type OrderAction =
@@ -61,7 +66,8 @@ type OrderAction =
   | { type: "CANCELLED" }
   | { type: "ERROR"; message: string }
   | { type: "INLINE_ERROR"; message: string | null }
-  | { type: "PRICE_CONFIG"; currency: string; buyPrice: bigint; smallOrderThreshold: bigint; smallOrderFixedFee: bigint };
+  | { type: "PRICE_CONFIG"; currency: string; buyPrice: bigint; smallOrderThreshold: bigint; smallOrderFixedFee: bigint }
+  | { type: "PRICE_CONFIG_FAILED" };
 
 const INITIAL: OrderState = {
   phase: "checkout", orderId: null, txHash: null,
@@ -70,6 +76,7 @@ const INITIAL: OrderState = {
   buyPrice: null, smallOrderThreshold: null, smallOrderFixedFee: null,
   fee: null, actualUsdcAmount: null,
   acceptedTimestamp: null,
+  priceConfigFailed: false,
 };
 
 function reducer(state: OrderState, action: OrderAction): OrderState {
@@ -91,7 +98,9 @@ function reducer(state: OrderState, action: OrderAction): OrderState {
     case "PRICE_CONFIG": return {
       ...state, currency: action.currency, buyPrice: action.buyPrice,
       smallOrderThreshold: action.smallOrderThreshold, smallOrderFixedFee: action.smallOrderFixedFee,
+      priceConfigFailed: false,
     };
+    case "PRICE_CONFIG_FAILED": return { ...state, priceConfigFailed: true };
     default: return state;
   }
 }
@@ -255,7 +264,10 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
         });
       } catch {
         // Quote fetch is best-effort; routing falls back to the explicit
-        // `fiatAmount` prop (or 0n) and the UI omits the breakdown.
+        // `fiatAmount` prop (or 0n) and the UI omits the breakdown. Mark
+        // the failure so the widget can release the "Pay now" gate instead
+        // of waiting on a fetch that won't recover.
+        if (!cancelled) dispatch({ type: "PRICE_CONFIG_FAILED" });
       }
     })();
     return () => { cancelled = true; };
