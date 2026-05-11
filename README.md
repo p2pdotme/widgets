@@ -358,6 +358,7 @@ handlers).
 | `refreshKey` | `number \| string` | — | Bump to force an immediate refetch. |
 | `optimisticUpdates` | `Record<string, "completed" \| "cancelled">` | — | Local terminal-status overlay. Pass a stable reference. |
 | `pollIntervalMs` | `number` | — | Auto-poll cadence while pending exists. Default `15000`. `0` disables. |
+| `theme` | `P2PTheme` | — | Optional visual overrides. See [Theming](#theming). |
 
 ---
 
@@ -448,6 +449,87 @@ const signer: CheckoutSigner | null = address
     }
   : null;
 ```
+
+---
+
+## Theming
+
+Visual tokens (colors, radii, font) flow through `--p2p-*` CSS variables
+with widget defaults baked in via `var(…, fallback)`. Integrators have two
+ways to override:
+
+### 1. CSS variables (preferred)
+
+Set them on `:root`, on the modal trigger, or on any ancestor — normal
+cascade rules apply. The widget picks them up automatically.
+
+```css
+:root {
+  --p2p-color-bg:        #ffffff;  /* modal / card background */
+  --p2p-color-fg:        #0d1230;  /* primary text */
+  --p2p-color-muted:     #6b7280;  /* secondary text */
+  --p2p-color-border:    rgba(0, 0, 0, 0.10);
+  --p2p-color-accent:    #2d5bff;  /* primary CTA + highlights */
+  --p2p-color-accent-fg: #ffffff;  /* primary CTA text */
+  --p2p-color-success:   #00c896;
+  --p2p-color-danger:    #e5484d;
+
+  --p2p-radius-modal:    16px;     /* modal + larger card surfaces */
+  --p2p-radius-button:   12px;     /* buttons, inputs, small surfaces */
+
+  --p2p-font: "Inter", system-ui, sans-serif;
+}
+```
+
+All eleven are optional. Any you don't set keep the widget's defaults.
+The accent/success/danger "soft" tints (used for status badges, error
+backgrounds, etc.) derive automatically from their base color via
+`color-mix(in srgb, … 12%, white)` — so a custom accent gets a matching
+halo without extra work.
+
+### 2. `theme` prop (for hosts without `:root` access)
+
+Same variables, delivered as inline `style` on the widget root. Useful for
+CSS-in-JS apps, sandboxed iframes, or hosts where editing global CSS isn't
+practical. All three widgets accept the same prop shape:
+
+```tsx
+import { P2PCheckout, type P2PTheme } from "@p2pdotme/checkout-widget";
+
+const theme: P2PTheme = {
+  colors: {
+    accent:   "#2d5bff",
+    accentFg: "#ffffff",
+    success:  "#00c896",
+    danger:   "#e5484d",
+  },
+  radii: { modal: 16, button: 12 },
+  font:  "Lato, system-ui, sans-serif",
+};
+
+<P2PCheckout theme={theme} {/* ...other props... */} />
+<P2POrderHistory theme={theme} {/* ... */} />
+<P2POfframp theme={theme} {/* ... */} />
+```
+
+Internally the prop is written to inline `style="--p2p-color-accent: …"`
+on the widget root, so CSS-variable overrides set on an ancestor still
+win if you mix both approaches.
+
+### Font behavior
+
+Default is `font-family: inherit` on the widget root — your app's
+typography flows through automatically. To pin a specific font, set
+`--p2p-font` (or pass `theme.font`). The widget never ships a webfont.
+The monospace font used for addresses and order IDs stays fixed by
+design.
+
+### What's *not* themable
+
+Per-component CSS overrides, density/spacing, icon swaps, copy/i18n,
+and motion controls are intentionally out of scope. The variable
+contract is forward-compatible — additional `--p2p-*` vars can be added
+later without breaking callers.
 
 ---
 
@@ -631,6 +713,7 @@ Sell-back (offramp) phases: `form` → `sweeping?` → `placing` → `placed` �
 | `mode` | `"modal" \| "inline"` | — | Default `modal`. |
 | `open` | `boolean` | — | Modal-only. |
 | `demo` | `boolean` | — | See [Demo mode](#demo-mode). |
+| `theme` | `P2PTheme` | — | Optional visual overrides — colors, radii, font. See [Theming](#theming). |
 | `screening` | `ScreeningConfig` | — | Enables fraud-engine logging + post-tx link-order so the merchant app sees the order as screened. See [Fraud screening (B2B)](#fraud-screening-b2b). Requires `signer.signMessage`. |
 | `onOrderPlaced` | `(orderId, txHash) => void` | — | Order fully placed on-chain. |
 | `onComplete` | `(orderId) => void` | — | Order reached `COMPLETED`. |
@@ -653,6 +736,7 @@ Sell-back (offramp) phases: `form` → `sweeping?` → `placing` → `placed` �
 | `rpcUrl` | `string` | — | Status polling RPC. |
 | `subgraphUrl` | `string` | — | Reserved for SDK reads. |
 | `fiatAmountLimit` | `bigint` | — | Slippage floor (6 decimals). `0` = no check. |
+| `theme` | `P2PTheme` | — | Optional visual overrides. See [Theming](#theming). |
 | `mode` / `open` / events | — | — | Same shape as `<P2PCheckout>`. |
 
 > Looking for `<P2POrderHistory>` props? See its dedicated section
@@ -687,7 +771,7 @@ import {
 ```
 
 Type-only exports include `P2PCheckoutProps`, `P2POfframpProps`,
-`P2POrderHistoryProps`, `CheckoutSigner`, `CheckoutPhase`, `OfframpPhase`,
+`P2POrderHistoryProps`, `P2PTheme`, `CheckoutSigner`, `CheckoutPhase`, `OfframpPhase`,
 `PlaceOrderResult`, `PlaceOrderContext`, `CurrencyOption`,
 `PaymentAddressValidator`, `ScreeningConfig`, `ScreeningOrderDetails`,
 and `ScreeningUserDetails`.

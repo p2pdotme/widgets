@@ -35,4 +35,5 @@ export type {
   ScreeningConfig,
   ScreeningOrderDetails,
   ScreeningUserDetails,
+  P2PTheme,
 } from "./types";

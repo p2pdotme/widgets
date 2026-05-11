@@ -3,7 +3,7 @@ import { createPublicClient, http, formatUnits } from "viem";
 import { baseSepolia, base } from "viem/chains";
 import type { P2POfframpProps, CurrencyOption } from "../types";
 import { useOfframpMachine } from "../core/offramp-machine";
-import { color, radius, font, weight, shadow, S } from "../ui/theme";
+import { color, radius, font, weight, shadow, S, themeToCssVars } from "../ui/theme";
 import { Modal } from "../ui/Modal";
 import {
   Spinner,
@@ -24,8 +24,10 @@ export function P2POfframp(props: P2POfframpProps) {
     integratorAddress, marketplaceAddress, tokenId, signer, currencies,
     diamondAddress, usdcAddress, chainId = 84532, rpcUrl,
     fiatAmountLimit, mode = "modal", open = true,
+    theme,
     onClose, onOrderPlaced, onComplete, onCancelled, onError,
   } = props;
+  const themeStyle = themeToCssVars(theme);
 
   useEffect(injectKeyframes, []);
 
@@ -84,7 +86,7 @@ export function P2POfframp(props: P2POfframpProps) {
     (state.phase === "error" && state.orderId !== null);
 
   const content = (
-    <div style={{ fontFamily: "Inter, system-ui, sans-serif", color: color.text }}>
+    <div style={{ ...themeStyle, fontFamily: "var(--p2p-font, inherit)", color: color.text }}>
       {/* Header — mirrors P2PCheckout */}
       <div style={{
         padding: "16px 24px", borderBottom: `1px solid ${color.border}`,
