@@ -5,6 +5,48 @@ export interface CheckoutSigner {
     data: `0x${string}`;
     gasLimit?: number;
   }) => Promise<{ hash: `0x${string}` }>;
+  // EIP-191 personal_sign. Required when `screening` is configured on
+  // the widget so we can authenticate to the fraud engine. For plain
+  // EOAs this is the same wallet that produces sendTransaction.
+  signMessage?: (message: string) => Promise<string>;
+  // Smart-wallet admin EOA — the address that actually produces the
+  // EIP-191 signature when `address` is an ERC-4337 smart account.
+  // Omit for plain EOAs; defaults to `address`.
+  signerAddress?: `0x${string}`;
+}
+
+export interface ScreeningOrderDetails {
+  cryptoAmount?: number;
+  fiatAmount?: number;
+  currency?: string;
+  recipientAddress?: string;
+  fee?: number;
+  amountAfterFee?: number;
+  paymentMethod?: string;
+  estimatedProcessingTime?: string;
+}
+
+export interface ScreeningUserDetails {
+  currency?: string;
+  country?: string;
+  language?: string;
+  loginMethod?: "email" | "google" | "phone" | "passkey" | "unknown";
+  loginEmail?: string;
+  loginPhone?: string;
+}
+
+export interface ScreeningConfig {
+  // Fraud-engine base URL including the /v1 prefix, e.g.
+  // "https://fraud-engine.p2p.me/v1".
+  apiUrl: string;
+  // 64-char hex AES-256-GCM key (must match the backend's
+  // SEON_ENCRYPTION_KEY for the same environment).
+  encryptionKey: string;
+  // Free-form analytics tag stored on the activity log.
+  orderSource?: string;
+  // Optional context attached to the screening payload.
+  orderDetails?: ScreeningOrderDetails;
+  userDetails?: ScreeningUserDetails;
 }
 
 export interface PlaceOrderResult {
@@ -98,6 +140,12 @@ export interface P2PCheckoutProps {
   mode?: "inline" | "modal";
   open?: boolean;
   demo?: boolean;
+
+  // Optional B2B fraud screening. When provided, the widget logs the
+  // buy attempt to the fraud engine before invoking `placeOrder`, then
+  // links the on-chain orderId back so the merchant app sees the order
+  // as screened+approved. Requires `signer.signMessage`.
+  screening?: ScreeningConfig;
 
   // Events
   onOrderPlaced?: (orderId: string, txHash: string) => void;

@@ -439,6 +439,7 @@ Sell-back (offramp) phases: `form` → `sweeping?` → `placing` → `placed` �
 | `mode` | `"modal" \| "inline"` | — | Default `modal`. |
 | `open` | `boolean` | — | Modal-only. |
 | `demo` | `boolean` | — | See [Demo mode](#demo-mode). |
+| `screening` | `ScreeningConfig` | — | Enables fraud-engine logging + post-tx link-order so the merchant app sees the order as screened. See [Fraud screening (B2B)](#fraud-screening-b2b). Requires `signer.signMessage`. |
 | `onOrderPlaced` | `(orderId, txHash) => void` | — | Order fully placed on-chain. |
 | `onComplete` | `(orderId) => void` | — | Order reached `COMPLETED`. |
 | `onCancel` | `(orderId) => void` | — | Order reached `CANCELLED`. |
@@ -485,6 +486,66 @@ import {
   OrderStatus,
 } from "@p2pdotme/checkout-widget";
 ```
+
+---
+
+## Fraud screening (B2B)
+
+The widget can log every buy attempt to the p2p.me fraud engine and link the
+on-chain `orderId` back once it's known. The merchant app then sees the order
+as screened+approved and accepts it. Without this, merchants serving B2B
+orders won't see screening metadata and will reject the order.
+
+The B2B log endpoint is a **passthrough**: it persists the encrypted payload
+and always returns approved — no SEON, watchlist, or risk scoring runs. It
+exists so merchant-app's existing `/order-statuses` lookup uniformly answers
+`screened: true, status: approved` for orders that came through the widget.
+
+### Wiring
+
+1. **Extend the signer adapter** with `signMessage` (and `signerAddress` if you
+   use ERC-4337 smart wallets — point it at the admin EOA).
+
+   ```ts
+   const signer: CheckoutSigner = {
+     address: wallet.address as `0x${string}`,
+     sendTransaction: async (tx) => { /* ... */ },
+     signMessage: (message) => wallet.signMessage({ message }),
+     // signerAddress: wallet.adminEOA, // smart wallets only
+   };
+   ```
+
+2. **Pass `screening`** to `<P2PCheckout>`. Source the values from your env.
+
+   ```tsx
+   <P2PCheckout
+     signer={signer}
+     placeOrder={placeOrder}
+     screening={{
+       apiUrl: import.meta.env.VITE_FRAUD_ENGINE_API_URL,
+       encryptionKey: import.meta.env.VITE_FRAUD_ENGINE_ENCRYPTION_KEY,
+       orderSource: "acme-checkout",
+       orderDetails: { cryptoAmount: 5, fiatAmount: 415, currency: "INR" },
+       userDetails: { country: "IN", loginMethod: "google" },
+     }}
+   />
+   ```
+
+### Env variables (consumer app)
+
+The widget reads no env vars itself; you pipe these into the `screening` prop
+from your app's env. Names below assume Vite — use `NEXT_PUBLIC_…` for Next.js
+or `REACT_APP_…` for CRA.
+
+| Variable | Required | What it is |
+|---|---|---|
+| `VITE_FRAUD_ENGINE_API_URL` | ✅ | Fraud-engine base URL **including the `/api/v1` prefix** (e.g. `https://fe.p2p.lol/api/v1`). |
+| `VITE_FRAUD_ENGINE_ENCRYPTION_KEY` | ✅ | 64-char hex AES-256-GCM key. Must match the backend's `SEON_ENCRYPTION_KEY` for that environment. |
+| `VITE_FRAUD_ENGINE_ORDER_SOURCE` | — | Free-form analytics tag stored on each activity log. |
+
+If `screening` is omitted or `signer.signMessage` is missing, the widget runs
+the existing `placeOrder` path with no screening (orders will not be visible
+to the merchant-app screening lookup).
 
 ---
 

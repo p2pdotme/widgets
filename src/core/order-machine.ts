@@ -20,10 +20,11 @@ async function resolveIdentity(): Promise<RelayIdentity> {
   cachedIdentity = id;
   return id;
 }
-import type { CheckoutSigner, CheckoutPhase, PlaceOrderResult, PlaceOrderContext, CurrencyOption } from "../types";
+import type { CheckoutSigner, CheckoutPhase, PlaceOrderResult, PlaceOrderContext, CurrencyOption, ScreeningConfig } from "../types";
 import { OrderStatus } from "../types";
 import { DIAMOND_ABI } from "./contracts";
 import { DEMO_FIAT_RATE } from "./config";
+import { processB2BBuyOrder } from "./b2b-fraud-engine";
 
 interface OrderState {
   phase: CheckoutPhase;
@@ -110,6 +111,7 @@ export interface UseOrderMachineOpts {
   usdcAddress?: `0x${string}`;
   usdcAmount?: bigint;
   fiatAmount?: bigint;
+  screening?: ScreeningConfig;
   onOrderPlaced?: (orderId: string, txHash: string) => void;
   onComplete?: (orderId: string) => void;
   onError?: (error: Error) => void;
@@ -330,7 +332,14 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
         resolvedCurrency = { ...resolvedCurrency, circleId: routedCircleId };
       }
 
-      const result = await opts.placeOrder({ currency: resolvedCurrency });
+      const runPlace = () => opts.placeOrder!({ currency: resolvedCurrency });
+      const result = opts.screening
+        ? await processB2BBuyOrder({
+            signer: opts.signer,
+            screening: opts.screening,
+            placeOrder: runPlace,
+          })
+        : await runPlace();
       dispatch({ type: "PLACED", orderId: result.orderId, txHash: result.txHash });
       opts.onOrderPlaced?.(result.orderId, result.txHash);
     } catch (err: any) {
