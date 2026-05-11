@@ -23,6 +23,7 @@ export function P2PCheckout(props: P2PCheckoutProps) {
     currency: demoCurrency,
     currencies,
     subgraphUrl, usdcAddress, usdcAmount, fiatAmount,
+    screening,
     mode = "modal", open = true, demo = false,
     onClose, onOrderPlaced, onComplete, onError, onCancel,
   } = props;
@@ -55,6 +56,7 @@ export function P2PCheckout(props: P2PCheckoutProps) {
     signer, chainId, diamondAddress, rpcUrl, demo,
     demoCurrency, selectedCurrency,
     subgraphUrl, usdcAddress, usdcAmount, fiatAmount,
+    screening,
     onOrderPlaced, onComplete, onError, onCancel,
   });
 
