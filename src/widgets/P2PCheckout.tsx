@@ -259,7 +259,7 @@ export function P2PCheckout(props: P2PCheckoutProps) {
                 {preview.fee && (
                   <>
                     <div style={{ ...S.rowBetween, marginTop: 8 }}>
-                      <span style={S.label}>Additional fee</span>
+                      <span style={S.label}>Transaction Fee</span>
                       <span style={{ ...S.body, ...S.num, color: color.textMuted }}>{preview.symbol} {preview.fee}</span>
                     </div>
                     <p style={{ ...S.faint, margin: "4px 0 0", lineHeight: 1.4 }}>
@@ -335,7 +335,7 @@ export function P2PCheckout(props: P2PCheckoutProps) {
                       {orderBreakdown.fee && (
                         <>
                           <div style={{ ...S.rowBetween, marginTop: 8 }}>
-                            <span style={S.label}>Additional fee</span>
+                            <span style={S.label}>Transaction Fee</span>
                             <span style={{ ...S.body, ...S.num, color: color.textMuted }}>{orderBreakdown.symbol} {orderBreakdown.fee}</span>
                           </div>
                           <p style={{ ...S.faint, margin: "4px 0 0", lineHeight: 1.4 }}>
