@@ -465,27 +465,38 @@ cascade rules apply. The widget picks them up automatically.
 
 ```css
 :root {
-  --p2p-color-bg:        #ffffff;  /* modal / card background */
-  --p2p-color-fg:        #0d1230;  /* primary text */
-  --p2p-color-muted:     #6b7280;  /* secondary text */
-  --p2p-color-border:    rgba(0, 0, 0, 0.10);
-  --p2p-color-accent:    #2d5bff;  /* primary CTA + highlights */
-  --p2p-color-accent-fg: #ffffff;  /* primary CTA text */
-  --p2p-color-success:   #00c896;
-  --p2p-color-danger:    #e5484d;
+  --p2p-color-bg:           #ffffff;  /* modal / card background */
+  --p2p-color-surface-alt:  #f5f5f5;  /* inner panels (breakdown card, payment-details, picker active item, order-history rows) */
+  --p2p-color-fg:           #0d1230;  /* primary text */
+  --p2p-color-muted:        #6b7280;  /* secondary text */
+  --p2p-color-border:       rgba(0, 0, 0, 0.10);
+  --p2p-color-accent:       #2d5bff;  /* primary CTA + highlights */
+  --p2p-color-accent-fg:    #ffffff;  /* primary CTA text */
+  --p2p-color-success:      #00c896;
+  --p2p-color-danger:       #e5484d;
 
-  --p2p-radius-modal:    16px;     /* modal + larger card surfaces */
-  --p2p-radius-button:   12px;     /* buttons, inputs, small surfaces */
+  --p2p-radius-modal:       16px;     /* modal + larger card surfaces */
+  --p2p-radius-button:      12px;     /* buttons, inputs, small surfaces */
 
   --p2p-font: "Inter", system-ui, sans-serif;
 }
 ```
 
-All eleven are optional. Any you don't set keep the widget's defaults.
+All twelve are optional. Any you don't set keep the widget's defaults.
 The accent/success/danger "soft" tints (used for status badges, error
 backgrounds, etc.) derive automatically from their base color via
 `color-mix(in srgb, … 12%, white)` — so a custom accent gets a matching
 halo without extra work.
+
+> **Dark themes**: the default `--p2p-color-surface-alt` (`#f5f5f5`) is
+> a near-white panel that works only when `--p2p-color-bg` is also
+> light. For dark themes, override it to a faint tint of `bg` so inner
+> panels stay readable:
+> ```css
+> --p2p-color-bg:          #0a0b0d;
+> --p2p-color-surface-alt: rgba(255, 255, 255, 0.04);
+> --p2p-color-fg:          #ffffff;
+> ```
 
 ### 2. `theme` prop (for hosts without `:root` access)
 
@@ -498,10 +509,14 @@ import { P2PCheckout, type P2PTheme } from "@p2pdotme/checkout-widget";
 
 const theme: P2PTheme = {
   colors: {
-    accent:   "#2d5bff",
-    accentFg: "#ffffff",
-    success:  "#00c896",
-    danger:   "#e5484d",
+    accent:     "#2d5bff",
+    accentFg:   "#ffffff",
+    success:    "#00c896",
+    danger:     "#e5484d",
+    // Dark theme? Set bg + fg + surfaceAlt together so inner panels read.
+    // bg:         "#0a0b0d",
+    // fg:         "#ffffff",
+    // surfaceAlt: "rgba(255, 255, 255, 0.04)",
   },
   radii: { modal: 16, button: 12 },
   font:  "Lato, system-ui, sans-serif",
