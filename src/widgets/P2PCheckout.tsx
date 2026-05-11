@@ -4,7 +4,7 @@ import type { P2PCheckoutProps } from "../types";
 import { useOrderMachine } from "../core/order-machine";
 import { CURRENCIES } from "../core/config";
 import { DEFAULT_DIAMOND_ADDRESS, USDC_DECIMALS } from "../core/contracts";
-import { color, radius, font, weight, shadow, S } from "../ui/theme";
+import { color, radius, font, weight, shadow, S, themeToCssVars } from "../ui/theme";
 import { Modal } from "../ui/Modal";
 import {
   Spinner, PulseDot, CenterStatus, SuccessIcon, XIcon,
@@ -25,8 +25,10 @@ export function P2PCheckout(props: P2PCheckoutProps) {
     subgraphUrl, usdcAddress, usdcAmount, fiatAmount,
     screening,
     mode = "modal", open = true, demo = false,
+    theme,
     onClose, onOrderPlaced, onComplete, onError, onCancel,
   } = props;
+  const themeStyle = themeToCssVars(theme);
 
   useEffect(injectKeyframes, []);
 
@@ -151,7 +153,7 @@ export function P2PCheckout(props: P2PCheckoutProps) {
   const hasPlaceOrder = Boolean(placeOrder);
 
   const content = (
-    <div style={{ fontFamily: "Inter, system-ui, sans-serif", color: color.text }}>
+    <div style={{ ...themeStyle, fontFamily: "var(--p2p-font, inherit)", color: color.text }}>
       {/* Header */}
       <div style={{
         padding: "16px 24px", borderBottom: `1px solid ${color.border}`,

@@ -7,7 +7,7 @@ import {
   type Order,
 } from "@p2pdotme/sdk/orders";
 import { DEFAULT_DIAMOND_ADDRESS, DIAMOND_ABI, USDC_DECIMALS } from "../core/contracts";
-import { color, radius, font, weight, S } from "../ui/theme";
+import { color, radius, font, weight, S, themeToCssVars, type P2PTheme } from "../ui/theme";
 import { Spinner, CenterStatus, injectKeyframes } from "../ui/components";
 import type { CheckoutSigner } from "../types";
 
@@ -68,6 +68,8 @@ export interface P2POrderHistoryProps {
    * (manual refetch via `refreshKey` only). Default: 15000.
    */
   pollIntervalMs?: number;
+  /** Optional theming overrides. See `P2PTheme` for the surface. */
+  theme?: P2PTheme;
 }
 
 const PENDING_STATUSES: ReadonlyArray<Order["status"]> = ["placed", "accepted", "paid"];
@@ -81,7 +83,9 @@ export function P2POrderHistory(props: P2POrderHistoryProps) {
     refreshKey,
     optimisticUpdates,
     pollIntervalMs = 15_000,
+    theme,
   } = props;
+  const themeStyle = themeToCssVars(theme);
   const hideWhenEmpty = props.hideWhenEmpty ?? filter === "pending";
   const title = props.title ?? (filter === "pending" ? "Pending orders" : "Order history");
 
@@ -214,7 +218,7 @@ export function P2POrderHistory(props: P2POrderHistoryProps) {
   }
 
   return (
-    <div style={{ ...S.card, padding: 20, fontFamily: "Inter, system-ui, sans-serif", color: color.text, ...props.style }}>
+    <div style={{ ...themeStyle, ...S.card, padding: 20, fontFamily: "var(--p2p-font, inherit)", color: color.text, ...props.style }}>
       <div style={{ ...S.rowBetween, marginBottom: 16 }}>
         <h2 style={{ ...S.h2, margin: 0 }}>{title}</h2>
         <button

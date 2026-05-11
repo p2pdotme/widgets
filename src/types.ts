@@ -1,3 +1,6 @@
+import type { P2PTheme } from "./ui/theme";
+export type { P2PTheme } from "./ui/theme";
+
 export interface CheckoutSigner {
   address: `0x${string}`;
   sendTransaction: (tx: {
@@ -140,6 +143,8 @@ export interface P2PCheckoutProps {
   mode?: "inline" | "modal";
   open?: boolean;
   demo?: boolean;
+  /** Optional theming overrides. See `P2PTheme` for the surface. */
+  theme?: P2PTheme;
 
   // Optional B2B fraud screening. When provided, the widget logs the
   // buy attempt to the fraud engine before invoking `placeOrder`, then
@@ -223,6 +228,8 @@ export interface P2POfframpProps {
   /** UI mode. */
   mode?: "inline" | "modal";
   open?: boolean;
+  /** Optional theming overrides. See `P2PTheme` for the surface. */
+  theme?: P2PTheme;
 
   // ─── Events ──────────────────────────────────────────────────────
   onOrderPlaced?: (orderId: string, txHash: string) => void;
