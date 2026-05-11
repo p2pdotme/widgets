@@ -4,17 +4,16 @@
 // (e.g., `:root`) or by passing a `theme` prop on the widget — see
 // `themeToCssVars` below for the prop → CSS-var bridge.
 //
-// Tokens NOT exposed via the public theme prop (surfaceAlt, textFaint,
-// warning, borderStrong, etc.) remain as fixed widget tokens — they're
-// internal layering choices, not brand-level decisions. The "soft"
-// variants of accent/success/danger derive from their respective vars via
-// `color-mix`, so a custom accent gets a matching halo automatically.
+// Tokens NOT exposed via the public theme prop (textFaint, warning,
+// borderStrong) remain as fixed widget tokens. The "soft" variants of
+// accent/success/danger derive from their respective vars via `color-mix`,
+// so a custom accent gets a matching halo automatically.
 const v = (name: string, fallback: string) => `var(--p2p-color-${name}, ${fallback})`;
 
 export const color = {
   bg: "#fafafa",                                    // page bg — internal
   surface: v("bg", "#ffffff"),                      // → --p2p-color-bg
-  surfaceAlt: "#f5f5f5",                            // internal
+  surfaceAlt: v("surface-alt", "#f5f5f5"),          // → --p2p-color-surface-alt
   border: v("border", "#eaeaea"),                   // → --p2p-color-border
   borderStrong: "#d4d4d4",                          // internal
   text: v("fg", "#0a0b0d"),                         // → --p2p-color-fg
@@ -49,6 +48,14 @@ export const radius = {
 export interface P2PTheme {
   colors?: {
     bg?: string;
+    /**
+     * Secondary surface used inside the modal for inner panels — fee
+     * breakdown card, payment-details card, currency-picker active item,
+     * order-history row. Default `#f5f5f5` (a hair off white) works on
+     * light themes; on dark themes set this to a faint tint over `bg`
+     * (e.g. `rgba(255,255,255,0.04)`) so the inner panels stay readable.
+     */
+    surfaceAlt?: string;
     fg?: string;
     muted?: string;
     border?: string;
@@ -77,14 +84,15 @@ export function themeToCssVars(theme?: P2PTheme): React.CSSProperties {
   if (!theme) return {};
   const style: Record<string, string> = {};
   const c = theme.colors;
-  if (c?.bg)        style["--p2p-color-bg"] = c.bg;
-  if (c?.fg)        style["--p2p-color-fg"] = c.fg;
-  if (c?.muted)     style["--p2p-color-muted"] = c.muted;
-  if (c?.border)    style["--p2p-color-border"] = c.border;
-  if (c?.accent)    style["--p2p-color-accent"] = c.accent;
-  if (c?.accentFg)  style["--p2p-color-accent-fg"] = c.accentFg;
-  if (c?.success)   style["--p2p-color-success"] = c.success;
-  if (c?.danger)    style["--p2p-color-danger"] = c.danger;
+  if (c?.bg)         style["--p2p-color-bg"] = c.bg;
+  if (c?.surfaceAlt) style["--p2p-color-surface-alt"] = c.surfaceAlt;
+  if (c?.fg)         style["--p2p-color-fg"] = c.fg;
+  if (c?.muted)      style["--p2p-color-muted"] = c.muted;
+  if (c?.border)     style["--p2p-color-border"] = c.border;
+  if (c?.accent)     style["--p2p-color-accent"] = c.accent;
+  if (c?.accentFg)   style["--p2p-color-accent-fg"] = c.accentFg;
+  if (c?.success)    style["--p2p-color-success"] = c.success;
+  if (c?.danger)     style["--p2p-color-danger"] = c.danger;
   const r = theme.radii;
   if (r?.modal !== undefined)  style["--p2p-radius-modal"] = `${r.modal}px`;
   if (r?.button !== undefined) style["--p2p-radius-button"] = `${r.button}px`;
