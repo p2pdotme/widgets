@@ -21,13 +21,13 @@ export const color = {
   textFaint: "#9a9a9a",                             // internal
   accent: v("accent", "#7c3aed"),                   // → --p2p-color-accent
   accentText: v("accent-fg", "#ffffff"),            // → --p2p-color-accent-fg
-  accentSoft: `color-mix(in srgb, ${v("accent", "#7c3aed")} 12%, white)`,
+  accentSoft: `color-mix(in srgb, ${v("accent", "#7c3aed")} 12%, ${v("bg", "white")})`,
   success: v("success", "#0f9b53"),                 // → --p2p-color-success
-  successSoft: `color-mix(in srgb, ${v("success", "#0f9b53")} 12%, white)`,
+  successSoft: `color-mix(in srgb, ${v("success", "#0f9b53")} 12%, ${v("bg", "white")})`,
   warning: "#b5750a",                               // internal (not in public spec)
   warningSoft: "#fef4e2",                           // internal
   danger: v("danger", "#d12f2f"),                   // → --p2p-color-danger
-  dangerSoft: `color-mix(in srgb, ${v("danger", "#d12f2f")} 12%, white)`,
+  dangerSoft: `color-mix(in srgb, ${v("danger", "#d12f2f")} 12%, ${v("bg", "white")})`,
 };
 
 const rv = (name: string, fallback: string) => `var(--p2p-radius-${name}, ${fallback})`;
