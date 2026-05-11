@@ -8,7 +8,7 @@ import { color, radius, font, weight, shadow, S } from "../ui/theme";
 import { Modal } from "../ui/Modal";
 import {
   Spinner, PulseDot, CenterStatus, SuccessIcon, XIcon,
-  CopyRow, Stepper, CountdownPill, injectKeyframes,
+  CopyRow, Stepper, CountdownRing, injectKeyframes,
 } from "../ui/components";
 
 // Window the user has to pay after a merchant accepts before auto-cancellation.
@@ -35,6 +35,7 @@ export function P2PCheckout(props: P2PCheckoutProps) {
   const [isMarkingPaid, setIsMarkingPaid] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
   const [timerExpired, setTimerExpired] = useState(false);
+  const [breakdownExpanded, setBreakdownExpanded] = useState(false);
   const [selectedCurrency, setSelectedCurrency] = useState(currencies?.[0]);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = React.useRef<HTMLDivElement>(null);
@@ -310,23 +311,42 @@ export function P2PCheckout(props: P2PCheckoutProps) {
 
               {state.phase === "accepted" && (
                 <div>
-                  {acceptedDeadline !== null && (
-                    <div style={{ display: "flex", justifyContent: "center", marginBottom: 16 }}>
-                      <CountdownPill
+                  {/* Hero row: prominent circular countdown + "Pay exactly" */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 20 }}>
+                    {acceptedDeadline !== null && (
+                      <CountdownRing
                         deadline={acceptedDeadline}
+                        totalMs={AUTO_CANCEL_WINDOW_MS}
                         onExpire={() => setTimerExpired(true)}
                       />
+                    )}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <p style={{ ...S.label, marginBottom: 2 }}>Pay exactly</p>
+                      <h1 style={{ ...S.h1, fontSize: font.xxl, ...S.num, lineHeight: 1.1 }}>
+                        {state.currency} {fiatDisplay}
+                      </h1>
+                      <p style={{ ...S.muted, marginTop: 4, marginBottom: 0 }}>
+                        for {productName ?? (usdcDisplay ? `${usdcDisplay} USDC` : "your order")}
+                      </p>
+                      {orderBreakdown && (
+                        <button
+                          type="button"
+                          onClick={() => setBreakdownExpanded((v) => !v)}
+                          style={{
+                            background: "none", border: "none", padding: 0, marginTop: 6,
+                            color: color.accent, fontSize: font.sm, fontWeight: weight.medium,
+                            cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4,
+                          }}
+                          aria-expanded={breakdownExpanded}
+                        >
+                          <span style={{ display: "inline-block", transform: breakdownExpanded ? "rotate(90deg)" : "none", transition: "transform 0.15s" }}>▸</span>
+                          {breakdownExpanded ? "Hide breakdown" : "View breakdown"}
+                        </button>
+                      )}
                     </div>
-                  )}
-                  <div style={{ textAlign: "center", marginBottom: 24 }}>
-                    <p style={S.label}>Pay exactly</p>
-                    <h1 style={{ ...S.h1, fontSize: font.hero, marginTop: 6, ...S.num }}>{state.currency} {fiatDisplay}</h1>
-                    <p style={{ ...S.muted, marginTop: 4 }}>
-                      for {productName ?? (usdcDisplay ? `${usdcDisplay} USDC` : "your order")}
-                    </p>
                   </div>
 
-                  {orderBreakdown && (
+                  {breakdownExpanded && orderBreakdown && (
                     <div style={{ ...S.cardFlat, padding: "14px 16px", marginBottom: 16, background: color.surfaceAlt }}>
                       <div style={S.rowBetween}>
                         <span style={S.label}>Subtotal</span>

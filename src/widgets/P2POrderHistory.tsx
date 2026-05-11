@@ -1,12 +1,12 @@
-import React, { useCallback, useEffect, useState } from "react";
-import { createPublicClient, http, formatUnits } from "viem";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { createPublicClient, http, formatUnits, stringToHex } from "viem";
 import { baseSepolia, base } from "viem/chains";
 import {
   createOrders,
   createLocalStorageRelayStore,
   type Order,
 } from "@p2pdotme/sdk/orders";
-import { DEFAULT_DIAMOND_ADDRESS, USDC_DECIMALS } from "../core/contracts";
+import { DEFAULT_DIAMOND_ADDRESS, DIAMOND_ABI, USDC_DECIMALS } from "../core/contracts";
 import { color, radius, font, weight, S } from "../ui/theme";
 import { Spinner, CenterStatus, injectKeyframes } from "../ui/components";
 import type { CheckoutSigner } from "../types";
@@ -90,6 +90,14 @@ export function P2POrderHistory(props: P2POrderHistoryProps) {
   const [orders, setOrders] = useState<Order[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  // Per-currency on-chain config — fetched lazily for currencies that have
+  // at least one order missing `actualFiatAmount` (i.e. pre-acceptance:
+  // placed orders and orders cancelled before a merchant accepted). Lets us
+  // reconstruct the gross-fiat (subtotal + fee) the user would have paid,
+  // instead of falling back to the base `fiatAmount`.
+  const [currencyConfigs, setCurrencyConfigs] = useState<Record<string, {
+    buyPrice: bigint; smallOrderThreshold: bigint; smallOrderFixedFee: bigint;
+  }>>({});
 
   const fetchOrders = useCallback(async () => {
     if (!signer?.address) return;
@@ -116,6 +124,64 @@ export function P2POrderHistory(props: P2POrderHistoryProps) {
   }, [signer?.address, subgraphUrl, usdcAddress, chainId, diamondAddress, rpcUrl, limit]);
 
   useEffect(() => { fetchOrders(); }, [fetchOrders, refreshKey]);
+
+  // Currencies that need on-chain config to compute a gross display amount
+  // (any order whose chain-side `actualFiatAmount` hasn't been populated yet).
+  // Deduped via a stable key so we don't refetch on every render.
+  const currenciesNeedingConfig = useMemo(() => {
+    const set = new Set<string>();
+    for (const o of orders ?? []) {
+      if (o.actualFiatAmount === 0n && o.currency) set.add(o.currency);
+    }
+    return Array.from(set);
+  }, [orders]);
+  const currenciesKey = currenciesNeedingConfig.join(",");
+
+  useEffect(() => {
+    const missing = currenciesNeedingConfig.filter((c) => !currencyConfigs[c]);
+    if (missing.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      const chain = chainId === 84532 ? baseSepolia : base;
+      const publicClient = createPublicClient({ chain, transport: http(rpcUrl) });
+      const results = await Promise.all(missing.map(async (currency) => {
+        try {
+          const currencyHex = stringToHex(currency, { size: 32 });
+          const [price, threshold, fixedFee] = await Promise.all([
+            publicClient.readContract({
+              address: diamondAddress, abi: DIAMOND_ABI,
+              functionName: "getPriceConfig", args: [currencyHex],
+            }) as Promise<{ buyPrice: bigint }>,
+            publicClient.readContract({
+              address: diamondAddress, abi: DIAMOND_ABI,
+              functionName: "getSmallOrderThreshold", args: [currencyHex],
+            }) as Promise<bigint>,
+            publicClient.readContract({
+              address: diamondAddress, abi: DIAMOND_ABI,
+              functionName: "getSmallOrderFixedFee", args: [currencyHex],
+            }) as Promise<bigint>,
+          ]);
+          return [currency, {
+            buyPrice: price.buyPrice,
+            smallOrderThreshold: threshold,
+            smallOrderFixedFee: fixedFee,
+          }] as const;
+        } catch {
+          return null;
+        }
+      }));
+      if (cancelled) return;
+      const fetched = results.filter((r): r is NonNullable<typeof r> => r !== null);
+      if (fetched.length === 0) return;
+      setCurrencyConfigs((prev) => {
+        const next = { ...prev };
+        for (const [currency, cfg] of fetched) next[currency] = cfg;
+        return next;
+      });
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currenciesKey, diamondAddress, chainId, rpcUrl]);
 
   // Apply optimistic overrides BEFORE filtering / rendering. The host knows
   // about terminal transitions (onComplete/onCancel) before the subgraph
@@ -183,7 +249,7 @@ export function P2POrderHistory(props: P2POrderHistoryProps) {
           {past.length > 0 && <p style={{ ...S.label, marginBottom: 8 }}>Pending</p>}
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {pending.map((o) => (
-              <OrderRow key={o.orderId.toString()} order={o} onResume={onResume} highlight />
+              <OrderRow key={o.orderId.toString()} order={o} onResume={onResume} highlight config={currencyConfigs[o.currency]} />
             ))}
           </div>
         </div>
@@ -194,7 +260,7 @@ export function P2POrderHistory(props: P2POrderHistoryProps) {
           {pending.length > 0 && <p style={{ ...S.label, marginBottom: 8 }}>Past</p>}
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {past.map((o) => (
-              <OrderRow key={o.orderId.toString()} order={o} onResume={onResume} />
+              <OrderRow key={o.orderId.toString()} order={o} onResume={onResume} config={currencyConfigs[o.currency]} />
             ))}
           </div>
         </div>
@@ -203,9 +269,30 @@ export function P2POrderHistory(props: P2POrderHistoryProps) {
   );
 }
 
-function OrderRow({ order, onResume, highlight }: { order: Order; onResume?: (orderId: string) => void; highlight?: boolean }) {
+function OrderRow({ order, onResume, highlight, config }: {
+  order: Order;
+  onResume?: (orderId: string) => void;
+  highlight?: boolean;
+  config?: { buyPrice: bigint; smallOrderThreshold: bigint; smallOrderFixedFee: bigint };
+}) {
   const isPending = PENDING_STATUSES.includes(order.status);
-  const fiat = (Number(order.fiatAmount) / 1e6).toFixed(2);
+  // Source-of-truth precedence for the gross fiat the user paid (or would
+  // pay): chain-stored `actualFiatAmount` is set on merchant acceptance and
+  // already includes the protocol fee. Pre-acceptance (placed orders, or
+  // orders cancelled before any merchant accepted) the chain hasn't
+  // committed it — we reconstruct from on-chain config so the row still
+  // shows the gross figure consistently.
+  const fiatRaw: bigint = (() => {
+    if (order.actualFiatAmount > 0n) return order.actualFiatAmount;
+    if (config) {
+      const feeUsdc =
+        order.usdcAmount <= config.smallOrderThreshold ? config.smallOrderFixedFee : 0n;
+      const feeFiat = (feeUsdc * config.buyPrice) / 1_000_000n;
+      return order.fiatAmount + feeFiat;
+    }
+    return order.fiatAmount;
+  })();
+  const fiat = (Number(fiatRaw) / 1e6).toFixed(2);
   const usdc = formatUnits(order.usdcAmount, USDC_DECIMALS);
   const ts = Number(order.placedAt) * 1000;
   const when = ts > 0 ? relativeTime(ts) : "—";
