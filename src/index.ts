@@ -33,6 +33,7 @@ export type {
   OfframpPhase,
   PlaceOrderResult,
   PlaceOrderContext,
+  PendingOrderSummary,
   PlaceOfframpContext,
   PlaceOfframpResult,
   DeliverUpiContext,
