@@ -269,10 +269,13 @@ What the widget does, in order:
 
 1. Reads the user's USDC balance for the "Max" affordance + insufficient-
    balance hint (standard ERC20 `balanceOf` — no integrator dependency).
-2. Reads `getPriceConfig(currency).sellPrice` from the Diamond, renders
-   the "You receive" preview as `principal × sellPrice` (subtotal). The
-   protocol's small-order fee is paid in USDC by the integrator's pool
-   on the SELL side — it does **not** come out of the user's fiat receipt.
+2. Reads `getPriceConfig(currency).sellPrice` + `getSmallOrderThreshold` /
+   `getSmallOrderFixedFee` from the Diamond, renders the breakdown:
+   `You receive = principal × sellPrice` in fiat (no deduction; Diamond
+   leaves `actualFiatAmount` unchanged for SELL) and `Total charged =
+   principal + fee` in USDC (Diamond pulls `actualUsdtAmount = principal
+   + fee` at `setSellOrderUpi`). The fee is USDC-denominated, waived
+   when `principal > smallOrderThreshold`.
 3. On submit, if the selected currency has no `circleId`, calls
    `@p2pdotme/sdk` `placeOrder.prepare({ orderType: 1, … })` and harvests
    `prepared.meta.circleId`. Diamond-level operation — no integrator code.
@@ -330,8 +333,14 @@ type PlaceOfframpContext = {
   /** Raw fiat payment address (UPI / PIX / etc). Do NOT submit on-chain
    *  — the widget will encrypt it and call `deliverUpi` later. */
   paymentAddress: string;
-  /** USDC amount, 6-decimal bigint. */
+  /** Principal (6-decimal bigint). This is the `amount` you pass to the
+   *  integrator's place-offramp tx — NOT what the user's wallet is
+   *  debited. */
   usdcAmount: bigint;
+  /** Small-order fixed fee (6-decimal bigint), `0n` when waived. The
+   *  Diamond pulls `usdcAmount + feeUsdc` from `order.user` at
+   *  `setSellOrderUpi`, so approve this total to your integrator. */
+  feeUsdc: bigint;
   /** User's relay pubkey — pass to the integrator's place-offramp tx so
    *  the merchant knows what key to encrypt their fiat-receipt against. */
   userPubKey: string;
@@ -373,14 +382,16 @@ const LOTPOT_INTEGRATOR_ABI = [
 ] as const;
 
 const placeOfframp = async (ctx: PlaceOfframpContext): Promise<PlaceOfframpResult> => {
-  // 1. Approve USDC to the integrator if allowance is short.
+  // 1. Approve USDC to the integrator if allowance is short. Approve the
+  //    TOTAL (`principal + fee`) — Diamond pulls that much at setSellOrderUpi.
+  const totalCharge = ctx.usdcAmount + ctx.feeUsdc;
   const allowance = await publicClient.readContract({ address: USDC, abi: ERC20_ABI,
     functionName: "allowance", args: [signer.address, INTEGRATOR] }) as bigint;
-  if (allowance < ctx.usdcAmount) {
+  if (allowance < totalCharge) {
     const { hash } = await signer.sendTransaction({
       to: USDC,
       data: encodeFunctionData({ abi: ERC20_ABI, functionName: "approve",
-        args: [INTEGRATOR, ctx.usdcAmount] }),
+        args: [INTEGRATOR, totalCharge] }),
       gasLimit: 100_000,
     });
     await publicClient.waitForTransactionReceipt({ hash });
