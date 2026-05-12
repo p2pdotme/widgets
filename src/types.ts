@@ -55,6 +55,23 @@ export interface ScreeningConfig {
 export interface PlaceOrderResult {
   orderId: string;
   txHash: string;
+  /** Set to `true` when the host's tx redeemed integrator-side credit
+   *  exclusively — no Diamond order was placed. The widget snaps to the
+   *  "redeemed" success screen, skips merchant polling, and fires
+   *  `onComplete` immediately. `orderId` can be any host-chosen sentinel
+   *  (e.g. "0" for LotPot's credit-only path). When omitted or false, the
+   *  widget runs the normal place → accept → pay → complete flow. */
+  creditOnly?: boolean;
+}
+
+/** A user's currently-pending order, returned by the host's
+ *  `fetchPendingOrders` callback. `usdcAmount` is the FULL purchase intent
+ *  (not the Diamond-side delta on a credit-applied order) so the widget
+ *  can compare against its own `usdcAmount` prop for the same-amount
+ *  auto-resume rule. */
+export interface PendingOrderSummary {
+  orderId: string;
+  usdcAmount: bigint;
 }
 
 /**
@@ -151,6 +168,50 @@ export interface P2PCheckoutProps {
   // links the on-chain orderId back so the merchant app sees the order
   // as screened+approved. Requires `signer.signMessage`.
   screening?: ScreeningConfig;
+
+  // ─── Credit accounting (optional, integrator-agnostic) ──────────────
+  //
+  // When the integrator implements proxy-side credit (USDC stranded on a
+  // user's proxy from a previous skipped fulfillment, auto-applied to the
+  // next order), the host can plumb both callbacks below to (i) show the
+  // user their available credit on the pre-order screen and (ii) enforce
+  // the credit-aware concurrency rule. The widget itself stays
+  // integrator-agnostic — it never imports integrator ABIs. See README
+  // §"Credit accounting" for the host-side recipe.
+
+  /** Returns the user's redeemable USDC credit (6-dec bigint). The widget
+   *  reads at mount + after each completion. When > 0:
+   *   - shows a "Credit applied: −X USDC" row in the fiat breakdown,
+   *   - bills `max(usdcAmount − credit, 0)` instead of the full amount,
+   *   - when credit ≥ usdcAmount, the CTA becomes "Redeem credit"
+   *     (no fiat is charged) and the host's `placeOrder` is expected
+   *     to take the integrator's credit-only fast path and return
+   *     `{ ..., creditOnly: true }`.
+   *  Hosts read this from whatever surface their integrator exposes
+   *  (e.g. LotPot's `availableCredit(user)` view). */
+  fetchCredit?: (user: `0x${string}`) => Promise<bigint>;
+
+  /** Returns the user's currently-pending orders (Diamond status PLACED /
+   *  ACCEPTED / PAID). `usdcAmount` must be the full purchase intent (not
+   *  the Diamond delta on a credit-applied order). When both this and
+   *  `fetchCredit` are provided, the widget enforces:
+   *   - credit == 0                → no gate (existing `<P2POrderHistory>`
+   *                                  resume flow applies separately).
+   *   - credit > 0, no pending      → no gate.
+   *   - credit > 0, amount match   → auto-resume that order in tracking
+   *                                  mode (placement is skipped).
+   *   - credit > 0, no match       → render the rejection screen showing
+   *                                  the conflicting pending order's
+   *                                  amount; the user must finish that
+   *                                  order before placing a new one. */
+  fetchPendingOrders?: (user: `0x${string}`) => Promise<PendingOrderSummary[]>;
+
+  /** Fired when the rejection screen's "Resume that order" button is
+   *  clicked. The host should navigate the user (or re-open `<P2PCheckout>`)
+   *  with `orderId={pendingOrderId}` so the widget enters tracking-only
+   *  mode against that order. Omit to hide the resume button on the
+   *  rejection screen. */
+  onResumeRequest?: (pendingOrderId: string) => void;
 
   // Events
   onOrderPlaced?: (orderId: string, txHash: string) => void;

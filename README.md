@@ -223,6 +223,97 @@ error, and "merchant didn't accept in time" states are handled automatically.
 
 ---
 
+## Credit accounting (optional, integrator-agnostic)
+
+Some integrators (e.g. `LotPotCheckoutIntegrator`) accumulate redeemable
+USDC on a user's per-user proxy from previously-skipped fulfillments. The
+widget surfaces this credit on the pre-order screen and enforces a
+**concurrency rule** so a user can't accidentally place a second order
+while one is still in flight (which would race the credit accounting).
+
+### The rule
+
+| Credit | Pending order on chain | Widget behavior |
+|---|---|---|
+| 0     | none                    | normal flow                                |
+| 0     | any                     | normal flow (existing `<P2POrderHistory>` resume) |
+| > 0   | none                    | render "Credit applied: −X" row, bill `max(usdcAmount − credit, 0)` |
+| > 0   | same `usdcAmount`        | auto-flip to tracking-only mode for that order |
+| > 0   | different `usdcAmount`   | render rejection screen — user must finish the pending order first |
+
+When credit fully covers the order, the CTA changes to **Redeem credit**
+and the host's integrator is expected to skip the Diamond entirely (LotPot's
+`userPlaceOrder` does this when `credit >= total`, returning `orderId=0`).
+The host returns `{ ..., creditOnly: true }` and the widget snaps to a
+"Credit redeemed" success screen — no merchant polling.
+
+### Plumbing it in
+
+Two optional callbacks on `<P2PCheckout>` — both must be set together:
+
+```tsx
+import { P2PCheckout, type PendingOrderSummary } from "@p2pdotme/checkout-widget";
+import { createPublicClient, http, parseAbi } from "viem";
+import { baseSepolia } from "viem/chains";
+
+// Read your integrator's `availableCredit(user)` view. LotPot exposes it
+// as a uint256 on the deployed integrator contract.
+const LOTPOT_ABI = parseAbi([
+  "function availableCredit(address user) view returns (uint256)",
+]);
+
+const publicClient = createPublicClient({ chain: baseSepolia, transport: http() });
+const INTEGRATOR = "0xd1381f3e9a456da91Df1d178C7f1E91ef1Ec7056"; // your address
+
+async function fetchCredit(user: `0x${string}`): Promise<bigint> {
+  return (await publicClient.readContract({
+    address: INTEGRATOR, abi: LOTPOT_ABI,
+    functionName: "availableCredit", args: [user],
+  })) as bigint;
+}
+
+// Pending orders: the host knows the full purchase intent for each order
+// (Diamond stores only the credit-applied delta). For LotPot, the full
+// intent lives on the integrator's `LotPotOrderCreated.totalUsdcAmount`
+// event — query the subgraph or scan logs.
+async function fetchPendingOrders(user: `0x${string}`): Promise<PendingOrderSummary[]> {
+  const rows = await querySubgraph(/* … */);
+  return rows
+    .filter((r) => r.status === 0 || r.status === 1 || r.status === 2) // PLACED/ACCEPTED/PAID
+    .map((r) => ({ orderId: r.orderId.toString(), usdcAmount: BigInt(r.totalUsdcAmount) }));
+}
+
+<P2PCheckout
+  signer={signer}
+  placeOrder={placeOrder}        // unchanged — host submits the integrator tx
+  currencies={CURRENCIES}
+  usdcAmount={5_000_000n}        // 5 USDC
+  fetchCredit={fetchCredit}
+  fetchPendingOrders={fetchPendingOrders}
+  onResumeRequest={(orderId) => {
+    // Mismatched pending: user clicked "Resume that order". Re-open the
+    // widget in tracking-only mode by passing `orderId={orderId}` next time.
+    setResumeOrderId(orderId);
+  }}
+  // … the rest of P2PCheckoutProps
+/>
+```
+
+The host's `placeOrder` callback signature is unchanged — the widget
+doesn't pass credit info into the callback. The integrator handles
+credit netting on-chain (LotPot reads `balanceOf(proxy)` inside
+`userPlaceOrder` and nets the Diamond delta itself). The host should
+return `{ creditOnly: true, orderId: "0" or sentinel, txHash }` only when
+the on-chain redemption took the credit-only fast path (no Diamond
+order placed).
+
+> **No integrator-specific code in the widget.** The widget never imports
+> a LotPot ABI; the callbacks above are the entire API. Plug the same
+> callbacks in for any integrator that exposes its own equivalent of
+> `availableCredit(user)` + full-intent pending-order metadata.
+
+---
+
 ## Offramp flow (`<P2POfframp>`)
 
 Convert USDC the user already holds on Base into local fiat (UPI, PIX,

@@ -20,12 +20,13 @@ async function resolveIdentity(): Promise<RelayIdentity> {
   cachedIdentity = id;
   return id;
 }
-import type { CheckoutSigner, CheckoutPhase, PlaceOrderResult, PlaceOrderContext, CurrencyOption, ScreeningConfig } from "../types";
+import type { CheckoutSigner, CheckoutPhase, PlaceOrderResult, PlaceOrderContext, CurrencyOption, PendingOrderSummary, ScreeningConfig } from "../types";
 import { OrderStatus } from "../types";
 import { DIAMOND_ABI } from "./contracts";
 import { DEMO_FIAT_RATE } from "./config";
 import { processB2BBuyOrder } from "./b2b-fraud-engine";
 import { getActiveOrder, setActiveOrder, removeActiveOrder, keyFor, type ActiveOrderKey } from "./active-orders-store";
+import { computeGateDecision, type GateDecision } from "./credit-math";
 
 interface OrderState {
   phase: CheckoutPhase;
@@ -55,6 +56,21 @@ interface OrderState {
   // the user can still proceed (SDK routing falls back to a 0n fiatAmount,
   // i.e., no eligibility filter), they just won't see a fee breakdown.
   priceConfigFailed: boolean;
+
+  // ─── Credit accounting (host-supplied via fetchCredit / fetchPendingOrders) ─
+  // `credit` is the integrator-side redeemable balance (USDC, 6 dec).
+  // `null` means the host didn't provide a fetcher OR the fetch is still
+  // in flight on initial mount. Distinguished from `0n` (fetcher returned
+  // zero) so the UI can hide the credit row entirely until we know.
+  credit: bigint | null;
+  // Pending-order list from the host. null = unfetched; [] = none.
+  pendingOrders: PendingOrderSummary[] | null;
+  // Decision derived from (credit, pendingOrders, opts.usdcAmount).
+  // "loading" until both fetches resolve; then drives the gate UI.
+  gate: GateDecision | "loading";
+  // True when the host's `placeOrder` returned `creditOnly: true`. Drives
+  // the success-screen copy and tells the polling loop to short-circuit.
+  creditOnly: boolean;
 }
 
 type OrderAction =
@@ -73,7 +89,11 @@ type OrderAction =
   // RESUMABLE_FOUND attaches an orderId without flipping out of "checkout"
   // — the user still sees the form. Pay-now uses this id to skip placement.
   | { type: "RESUMABLE_FOUND"; orderId: string; txHash: string }
-  | { type: "RESUMABLE_CLEARED" };
+  | { type: "RESUMABLE_CLEARED" }
+  // Credit-accounting actions.
+  | { type: "CREDIT_LOADED"; credit: bigint; pending: PendingOrderSummary[]; gate: GateDecision }
+  | { type: "CREDIT_AUTO_RESUMED"; orderId: string }
+  | { type: "CREDIT_ONLY_PLACED"; orderId: string; txHash: string };
 
 const INITIAL: OrderState = {
   phase: "checkout", orderId: null, txHash: null,
@@ -83,6 +103,8 @@ const INITIAL: OrderState = {
   fee: null, actualUsdcAmount: null,
   acceptedTimestamp: null,
   priceConfigFailed: false,
+  credit: null, pendingOrders: null, gate: "loading",
+  creditOnly: false,
 };
 
 function reducer(state: OrderState, action: OrderAction): OrderState {
@@ -109,6 +131,17 @@ function reducer(state: OrderState, action: OrderAction): OrderState {
     case "PRICE_CONFIG_FAILED": return { ...state, priceConfigFailed: true };
     case "RESUMABLE_FOUND": return { ...state, orderId: action.orderId, txHash: action.txHash };
     case "RESUMABLE_CLEARED": return { ...state, orderId: null, txHash: null };
+    case "CREDIT_LOADED": return {
+      ...state, credit: action.credit, pendingOrders: action.pending, gate: action.gate,
+    };
+    case "CREDIT_AUTO_RESUMED": return {
+      ...state, phase: "placed", orderId: action.orderId, txHash: "",
+    };
+    case "CREDIT_ONLY_PLACED": return {
+      ...state, phase: "completed",
+      orderId: action.orderId, txHash: action.txHash,
+      creditOnly: true,
+    };
     default: return state;
   }
 }
@@ -129,6 +162,9 @@ export interface UseOrderMachineOpts {
   usdcAmount?: bigint;
   fiatAmount?: bigint;
   screening?: ScreeningConfig;
+  // Credit accounting (optional; both must be set for the gate to engage).
+  fetchCredit?: (user: `0x${string}`) => Promise<bigint>;
+  fetchPendingOrders?: (user: `0x${string}`) => Promise<PendingOrderSummary[]>;
   onOrderPlaced?: (orderId: string, txHash: string) => void;
   onComplete?: (orderId: string) => void;
   onError?: (error: Error) => void;
@@ -165,6 +201,10 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
   stateRef.current = state;
 
   const fetchOrderStatus = useCallback(async () => {
+    // Credit-only orders aren't on the Diamond — `state.orderId` is a host-
+    // chosen sentinel (e.g. "0" for LotPot's credit-only path). Reading
+    // getOrdersById against it would revert. Skip entirely.
+    if (state.creditOnly) return;
     if (!state.orderId || state.orderId.startsWith("demo")) return;
     try {
       const [rawOrder, details] = await Promise.all([
@@ -250,10 +290,11 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
   // that were already accepted before the refresh).
   const didInitialFetch = useRef(false);
   useEffect(() => {
+    if (state.creditOnly) return;
     if (!state.orderId || state.orderId.startsWith("demo") || didInitialFetch.current) return;
     didInitialFetch.current = true;
     fetchOrderStatus();
-  }, [state.orderId, fetchOrderStatus]);
+  }, [state.orderId, fetchOrderStatus, state.creditOnly]);
 
   useEffect(() => {
     if (pollingRef.current) clearInterval(pollingRef.current);
@@ -335,6 +376,59 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
     })();
     return () => { cancelled = true; };
   }, [currencySymbol, opts.diamondAddress, opts.demo]);
+
+  // Credit + pending-order fetch. Runs on mount, on signer rotation, and
+  // after each completion (so post-redemption credit refreshes). When the
+  // host didn't supply both callbacks, the gate stays in "loading" until
+  // we explicitly mark it allow — done synchronously here.
+  //
+  // Why both must be set: enforcing the rule with only one callback leaves
+  // a half-state — e.g. seeing credit but not knowing if a pending order
+  // exists means we either over- or under-block. Easier to require both
+  // up-front than to define partial-mode semantics.
+  const fetchKeyStr = `${opts.signer?.address ?? ""}|${opts.usdcAmount?.toString() ?? ""}`;
+  useEffect(() => {
+    if (!opts.fetchCredit || !opts.fetchPendingOrders || !opts.signer?.address) {
+      // No gate to compute — record explicit "allow" so the UI doesn't
+      // hang on the "loading" state forever.
+      dispatch({ type: "CREDIT_LOADED", credit: 0n, pending: [], gate: { kind: "allow" } });
+      return;
+    }
+    // Re-fetch is gated on `phase === "checkout"` so we don't churn the
+    // gate state mid-flow; the post-completion refresh hook below
+    // re-triggers explicitly when needed.
+    if (state.phase !== "checkout") return;
+    const userAddr = opts.signer.address;
+    let cancelled = false;
+    (async () => {
+      try {
+        const [credit, pending] = await Promise.all([
+          opts.fetchCredit!(userAddr),
+          opts.fetchPendingOrders!(userAddr),
+        ]);
+        if (cancelled) return;
+        const gate = computeGateDecision(credit, pending, opts.usdcAmount);
+        dispatch({ type: "CREDIT_LOADED", credit, pending, gate });
+        // Auto-resume side effect: when the gate decides to flip into
+        // tracking-only mode for a matching pending order, do it here
+        // (the reducer can't fetch chain state — the regular polling
+        // effect on `state.orderId` walks it forward from PLACED).
+        if (gate.kind === "auto-resume") {
+          dispatch({ type: "CREDIT_AUTO_RESUMED", orderId: gate.orderId });
+        }
+      } catch {
+        // Treat fetch failure as no-credit/no-pending so the user can
+        // still place an order — better than blocking on a transient RPC
+        // blip. The host's `onError` is reserved for placement-side
+        // failures; failed credit reads aren't user-facing.
+        if (!cancelled) {
+          dispatch({ type: "CREDIT_LOADED", credit: 0n, pending: [], gate: { kind: "allow" } });
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fetchKeyStr, state.phase]);
 
   // Inline fast-forward: when the user clicks Pay on a resumable order,
   // dispatch PLACED to flip out of the form, then read on-chain status
@@ -506,6 +600,21 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
             placeOrder: runPlace,
           })
         : await runPlace();
+
+      // Credit-only fast path: the host's integrator skipped the Diamond
+      // entirely and redeemed credit on the spot (e.g. LotPot's
+      // `userPlaceOrder` returning orderId=0 with credit covering the
+      // total). No order tracking is needed — snap to the redeemed
+      // success screen and fire onComplete immediately. The active-order
+      // store is intentionally NOT touched here: no Diamond order id
+      // means nothing to resume on a page reload.
+      if (result.creditOnly) {
+        dispatch({ type: "CREDIT_ONLY_PLACED", orderId: result.orderId, txHash: result.txHash });
+        opts.onOrderPlaced?.(result.orderId, result.txHash);
+        opts.onComplete?.(result.orderId);
+        return;
+      }
+
       dispatch({ type: "PLACED", orderId: result.orderId, txHash: result.txHash });
       if (storeKey) setActiveOrder(storeKey, { orderId: result.orderId, txHash: result.txHash });
       opts.onOrderPlaced?.(result.orderId, result.txHash);
