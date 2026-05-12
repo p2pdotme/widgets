@@ -52,14 +52,18 @@ export function P2POfframp(props: P2POfframpProps) {
   const dropdownRef = useRef<HTMLDivElement>(null);
   const [balance, setBalance] = useState<bigint | null>(null);
 
-  // Per-currency on-chain quote — `sellPrice` (fiat-per-USDC, 6-dec). The
-  // Diamond's `getFeeAndActualAmounts` does NOT deduct the small-order fee
-  // from `actualFiatAmount` for SELL orders — the fee is paid in USDC by
-  // the integrator's pool, not from the user's fiat receipt. So the user's
-  // "you receive" is just `principal * sellPrice`. We still track the
-  // selected currency on `priceCurrency` so we can detect a stale quote
-  // after the dropdown changes (skeleton placeholders during refetch).
+  // Per-currency on-chain quote — `sellPrice` (fiat-per-USDC, 6-dec) + the
+  // small-order fee config (USDC-denominated). Matches the user-app-client
+  // model: the user receives `principal × sellPrice` in fiat (the Diamond
+  // does NOT deduct the fee from `actualFiatAmount` for SELL), and is
+  // charged `principal + fee` in USDC (the Diamond pulls `actualUsdtAmount
+  // = amount + fee` at setSellOrderUpi). We track the currency that the
+  // quote actually came from in `priceCurrency` so the breakdown can show
+  // skeletons during a switch instead of flashing the previous currency's
+  // pricing.
   const [sellPrice, setSellPrice] = useState<bigint | null>(null);
+  const [smallOrderThreshold, setSmallOrderThreshold] = useState<bigint | null>(null);
+  const [smallOrderFixedFee, setSmallOrderFixedFee] = useState<bigint | null>(null);
   const [priceCurrency, setPriceCurrency] = useState<string | null>(null);
   const [priceConfigFailed, setPriceConfigFailed] = useState(false);
 
@@ -72,12 +76,15 @@ export function P2POfframp(props: P2POfframpProps) {
     const currencyHex = stringToHex(selectedCurrency.symbol, { size: 32 });
     (async () => {
       try {
-        const price = (await pc.readContract({
-          address: diamondAddress, abi: DIAMOND_ABI,
-          functionName: "getPriceConfig", args: [currencyHex],
-        })) as { sellPrice: bigint };
+        const [price, threshold, fee] = await Promise.all([
+          pc.readContract({ address: diamondAddress, abi: DIAMOND_ABI, functionName: "getPriceConfig", args: [currencyHex] }) as Promise<{ sellPrice: bigint }>,
+          pc.readContract({ address: diamondAddress, abi: DIAMOND_ABI, functionName: "getSmallOrderThreshold", args: [currencyHex] }) as Promise<bigint>,
+          pc.readContract({ address: diamondAddress, abi: DIAMOND_ABI, functionName: "getSmallOrderFixedFee", args: [currencyHex] }) as Promise<bigint>,
+        ]);
         if (cancelled) return;
         setSellPrice(price.sellPrice);
+        setSmallOrderThreshold(threshold);
+        setSmallOrderFixedFee(fee);
         setPriceCurrency(selectedCurrency.symbol);
       } catch {
         if (!cancelled) setPriceConfigFailed(true);
@@ -141,20 +148,36 @@ export function P2POfframp(props: P2POfframpProps) {
   const balanceDisplay = balance !== null
     ? (Number(balance) / 10 ** USDC_DECIMALS).toLocaleString(undefined, { maximumFractionDigits: 2 })
     : null;
-  const insufficientBalance = parsedAmount !== null && balance !== null && parsedAmount > balance;
 
-  // Pre-order fiat preview. For SELL the user receives `principal *
-  // sellPrice` — no fee deduction. The protocol's small-order fee is
-  // charged in USDC on the integrator side (via additionalOrderDetails
-  // .actualUsdtAmount = amount + fee, pulled from the system proxy), so
-  // it never affects the user's fiat receipt. Matches the post-PAID
-  // "watch for X" message + the COMPLETED summary so the user sees the
-  // same number end-to-end.
+  // Small-order fee applies when principal is at or below the threshold.
+  // Same rule as `libOrderProcessorFacet.isOrderSmall` on chain. The fee
+  // is in USDC (6-dec). When the quote hasn't loaded yet (initial render
+  // or mid-currency-switch), we conservatively treat fee as 0 — the
+  // balance check would re-tighten once the real fee is in.
+  const feeUsdc = (() => {
+    if (parsedAmount === null || smallOrderThreshold === null || smallOrderFixedFee === null) return 0n;
+    return parsedAmount <= smallOrderThreshold ? smallOrderFixedFee : 0n;
+  })();
+  const totalCharge = parsedAmount !== null ? parsedAmount + feeUsdc : null;
+  // Validation: balance must cover principal + fee. Same predicate
+  // user-app-client uses (`sell/index.tsx` line 70-78).
+  const insufficientBalance = totalCharge !== null && balance !== null && totalCharge > balance;
+
+  // Pre-order preview. The fiat side is unchanged (`principal × sellPrice`)
+  // — Diamond never deducts the fee from `actualFiatAmount` on SELL. The
+  // USDC side surfaces the fee as a separate line so the user knows their
+  // wallet is debited `principal + fee`, matching the on-chain charge.
+  const thresholdLabel = smallOrderThreshold !== null
+    ? `${Number(smallOrderThreshold) / 1e6} USDC`
+    : "10 USDC";
   const preview = (() => {
     if (!parsedAmount || !sellPrice) return null;
     const subtotalFiat = (parsedAmount * sellPrice) / 1_000_000n;
     return {
-      subtotal: (Number(subtotalFiat) / 1e6).toFixed(2),
+      receive: (Number(subtotalFiat) / 1e6).toFixed(2),
+      fee: feeUsdc > 0n ? formatUnits(feeUsdc, USDC_DECIMALS) : null,
+      totalCharge: (Number((totalCharge ?? 0n)) / 10 ** USDC_DECIMALS).toLocaleString(undefined, { maximumFractionDigits: 6 }),
+      principal: formatUnits(parsedAmount, USDC_DECIMALS),
       symbol: selectedCurrency.symbol,
     };
   })();
@@ -322,20 +345,43 @@ export function P2POfframp(props: P2POfframpProps) {
               </div>
             )}
 
-            {/* On-chain SELL has no fiat-side fee deduction (the protocol's
-                small-order fee is paid in USDC by the integrator pool), so
-                this card just surfaces what the user will receive. During
-                a currency switch the skeleton holds the layout so the
-                previous currency's number can't flash under the new
-                symbol. */}
+            {/* On-chain SELL: fiat side gets the full `principal × sellPrice`
+                (Diamond does NOT deduct from actualFiatAmount). USDC side
+                gets `principal + fee` pulled at setSellOrderUpi. So this
+                card shows what the user receives + how much their wallet
+                is debited, both lines stable across the currency-switch
+                skeleton transition. */}
             {(isQuotePending || preview) && (
               <div style={{ marginBottom: 16, padding: "14px 16px", background: color.surfaceAlt, borderRadius: radius.md, border: `1px solid ${color.border}` }}>
                 <div style={S.rowBetween}>
                   <span style={{ ...S.label, color: color.text, fontWeight: weight.semibold }}>You receive</span>
                   {isQuotePending
                     ? <Skeleton width={110} height={16} />
-                    : <span style={{ ...S.body, fontWeight: weight.bold, ...S.num }}>{preview!.symbol} {preview!.subtotal}</span>}
+                    : <span style={{ ...S.body, fontWeight: weight.bold, ...S.num }}>{preview!.symbol} {preview!.receive}</span>}
                 </div>
+                <div style={{ ...S.rowBetween, marginTop: 8 }}>
+                  <span style={S.label}>For</span>
+                  {isQuotePending
+                    ? <Skeleton width={70} />
+                    : <span style={{ ...S.body, ...S.num, color: color.textMuted }}>{preview!.principal} USDC</span>}
+                </div>
+                {!isQuotePending && preview!.fee && (
+                  <>
+                    <div style={{ ...S.rowBetween, marginTop: 8 }}>
+                      <span style={S.label}>Service fee</span>
+                      <span style={{ ...S.body, ...S.num, color: color.textMuted }}>+ {preview!.fee} USDC</span>
+                    </div>
+                    <p style={{ ...S.faint, margin: "4px 0 0", lineHeight: 1.4 }}>
+                      Waived on orders above {thresholdLabel}.
+                    </p>
+                  </>
+                )}
+                {!isQuotePending && preview!.fee && (
+                  <div style={{ ...S.rowBetween, marginTop: 10, paddingTop: 10, borderTop: `1px solid ${color.border}` }}>
+                    <span style={{ ...S.label, color: color.text, fontWeight: weight.semibold }}>Total charged</span>
+                    <span style={{ ...S.body, fontWeight: weight.semibold, ...S.num }}>{preview!.totalCharge} USDC</span>
+                  </div>
+                )}
               </div>
             )}
 
@@ -349,7 +395,7 @@ export function P2POfframp(props: P2POfframpProps) {
             <button
               type="button"
               disabled={!canSubmit}
-              onClick={() => submit(selectedCurrency, paymentAddress.trim(), parsedAmount!)}
+              onClick={() => submit(selectedCurrency, paymentAddress.trim(), parsedAmount!, feeUsdc)}
               style={{
                 ...S.primaryBtn,
                 marginTop: 20,
@@ -363,7 +409,7 @@ export function P2POfframp(props: P2POfframpProps) {
                   Loading quote…
                 </>
               ) : preview ? (
-                `Withdraw ${preview.symbol} ${preview.subtotal}`
+                `Withdraw ${preview.symbol} ${preview.receive}`
               ) : (
                 "Withdraw"
               )}

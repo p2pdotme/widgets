@@ -220,8 +220,18 @@ export interface PlaceOfframpContext {
    *  must NOT submit this on-chain. The widget encrypts it at the ACCEPTED
    *  handoff and calls `deliverUpi` separately. */
   paymentAddress: string;
-  /** USDC amount the user is offramping (6-decimal bigint). */
+  /** USDC principal the user is offramping (6-decimal bigint). This is the
+   *  `amount` you pass to the integrator's `userInitiateOfframp` / Diamond
+   *  SELL — NOT what the user's wallet is debited (see `feeUsdc`). */
   usdcAmount: bigint;
+  /** Small-order fixed fee (6-decimal bigint), read from
+   *  `getSmallOrderFixedFee(currency)`. `0n` when the principal exceeds
+   *  `getSmallOrderThreshold(currency)`. The Diamond pulls
+   *  `actualUsdtAmount = usdcAmount + feeUsdc` from `order.user` at
+   *  `setSellOrderUpi`, so the integrator must end up funding the system
+   *  proxy with that total. Approve `usdcAmount + feeUsdc` to your
+   *  integrator. */
+  feeUsdc: bigint;
   /** User's relay pubkey. Pass to the integrator's `userInitiateOfframp` /
    *  equivalent so the assigned merchant knows what key to encrypt their
    *  UPI/PIX response against. Comes from the SDK's relay identity store. */

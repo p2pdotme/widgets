@@ -124,7 +124,7 @@ export function useOfframpMachine(opts: UseOfframpMachineOpts) {
   // ─── User submits the form ───────────────────────────────────────────
 
   const submit = useCallback(
-    async (currency: CurrencyOption, paymentAddress: string, usdcAmount: bigint) => {
+    async (currency: CurrencyOption, paymentAddress: string, usdcAmount: bigint, feeUsdc: bigint) => {
       // Transition to "placing" IMMEDIATELY so the form unmounts and the
       // user sees the loading screen — the steps below (encryption preflight,
       // SDK routing, host's approve+place txs) can each take several seconds
@@ -186,10 +186,14 @@ export function useOfframpMachine(opts: UseOfframpMachineOpts) {
 
         // Hand off to the host. Host approves USDC + submits whatever
         // integrator-specific tx places the SELL, then returns orderId.
+        // `feeUsdc` is the small-order fee the Diamond will pull on top of
+        // `usdcAmount` (= principal) at setSellOrderUpi — host should
+        // approve `usdcAmount + feeUsdc` so the user's balance covers both.
         const result = await opts.placeOfframp({
           currency: { ...currency, circleId: resolvedCircleId },
           paymentAddress,
           usdcAmount,
+          feeUsdc,
           userPubKey,
         });
 
