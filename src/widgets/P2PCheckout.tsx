@@ -24,6 +24,7 @@ export function P2PCheckout(props: P2PCheckoutProps) {
     currencies,
     subgraphUrl, usdcAddress, usdcAmount, fiatAmount,
     screening,
+    fetchCredit, fetchPendingOrders, onResumeRequest,
     mode = "modal", open = true, demo = false,
     theme,
     onClose, onOrderPlaced, onComplete, onError, onCancel,
@@ -60,6 +61,7 @@ export function P2PCheckout(props: P2PCheckoutProps) {
     demoCurrency, selectedCurrency,
     subgraphUrl, usdcAddress, usdcAmount, fiatAmount,
     screening,
+    fetchCredit, fetchPendingOrders,
     onOrderPlaced, onComplete, onError, onCancel,
   });
 
@@ -102,22 +104,51 @@ export function P2PCheckout(props: P2PCheckoutProps) {
   // (the user always receives the full `usdcAmount`). Per protocol config:
   // small orders (usdcAmount ≤ smallOrderThreshold) pay `smallOrderFixedFee`
   // USDC, converted to fiat at the same buyPrice. Larger orders pay zero.
+  //
+  // Credit accounting: when `state.credit > 0`, the user owes fiat only for
+  // `chargedUsdc = max(usdcAmount − credit, 0)`. The full quantity / receipt
+  // amount stays the same (= `usdcAmount` worth of goods); only the fiat
+  // side is netted. Display surfaces both the credit row and the deducted
+  // total. Fee logic uses the FULL `usdcAmount` for threshold comparison —
+  // protocol fee is charged on the gross order, not the post-credit net.
+  const credit = state.credit ?? 0n;
+  const chargedUsdc = (() => {
+    if (!usdcAmount) return null;
+    if (credit >= usdcAmount) return 0n;
+    return usdcAmount - credit;
+  })();
   const preview = (() => {
-    if (!usdcAmount || !state.buyPrice || !selectedCurrency) return null;
-    const subtotalFiat = (usdcAmount * state.buyPrice) / 1_000_000n;
+    if (!usdcAmount || !state.buyPrice || !selectedCurrency || chargedUsdc === null) return null;
+    const chargedFiat = (chargedUsdc * state.buyPrice) / 1_000_000n;
+    // Fee follows the DELTA (charged amount), not the gross order:
+    //   - credit covers fully (chargedUsdc == 0): no Diamond order, no fee
+    //   - chargedUsdc > 0 + chargedUsdc ≤ smallOrderThreshold: fee applies
+    //   - chargedUsdc > smallOrderThreshold: waived
+    // Mirrors the Diamond's on-chain fee logic, which evaluates the
+    // small-order threshold against `order.amount` (= delta when credit
+    // is netted on-chain by the integrator).
     const feeUsdc =
       state.smallOrderThreshold !== null &&
       state.smallOrderFixedFee !== null &&
-      usdcAmount <= state.smallOrderThreshold
+      chargedUsdc > 0n &&
+      chargedUsdc <= state.smallOrderThreshold
         ? state.smallOrderFixedFee
         : 0n;
     const feeFiat = (feeUsdc * state.buyPrice) / 1_000_000n;
-    const totalFiat = subtotalFiat + feeFiat;
+    const totalFiat = chargedFiat + feeFiat;
+    // Subtotal-without-credit: shown when credit > 0 to make the deduction
+    // visible. Equals what the user would have paid pre-credit.
+    const grossFiat = (usdcAmount * state.buyPrice) / 1_000_000n;
+    const creditFiat = (credit * state.buyPrice) / 1_000_000n;
     return {
-      subtotal: (Number(subtotalFiat) / 1e6).toFixed(2),
+      subtotal: (Number(chargedFiat) / 1e6).toFixed(2),
+      gross: (Number(grossFiat) / 1e6).toFixed(2),
+      creditUsdc: credit > 0n ? (Number(credit) / 1e6).toFixed(2) : null,
+      creditFiat: credit > 0n ? (Number(creditFiat) / 1e6).toFixed(2) : null,
       fee: feeFiat > 0n ? (Number(feeFiat) / 1e6).toFixed(2) : null,
       total: (Number(totalFiat) / 1e6).toFixed(2),
       symbol: selectedCurrency.symbol,
+      creditCoversFully: credit >= usdcAmount,
     };
   })();
 
@@ -138,6 +169,12 @@ export function P2PCheckout(props: P2PCheckoutProps) {
   // Post-order breakdown — derived from on-chain `actualFiatAmount` (already
   // includes fee) and `fixedFeePaid` (in USDC, converted to fiat at current
   // buyPrice for display consistency with the pre-order screen).
+  //
+  // When credit was netted on-chain (the integrator's delta path), the
+  // Diamond's `actualUsdtAmount` is just the delta. The user's full intent
+  // is the host-passed `usdcAmount` prop. We recover the credit-used by
+  // subtracting and surface it as a "Credit applied" row, parallel to the
+  // pre-order preview.
   const orderBreakdown = (() => {
     if (state.phase !== "accepted" || !state.fiatAmount || !state.usdcAmount) return null;
     const feeFiat =
@@ -145,11 +182,28 @@ export function P2PCheckout(props: P2PCheckoutProps) {
         ? (state.fee * state.buyPrice) / 1_000_000n
         : 0n;
     const subtotalFiat = state.fiatAmount > feeFiat ? state.fiatAmount - feeFiat : state.fiatAmount;
+
+    // Credit-used reconstruction: intent − delta. Only reliable when the
+    // host passed `usdcAmount` AND it's larger than the Diamond delta —
+    // otherwise we skip the credit row (e.g. tracking-only resumes where
+    // the prop isn't set).
+    const intent = usdcAmount ?? 0n;
+    const delta = state.usdcAmount;
+    const creditUsed = intent > delta ? intent - delta : 0n;
+    const creditFiat =
+      creditUsed > 0n && state.buyPrice
+        ? (creditUsed * state.buyPrice) / 1_000_000n
+        : 0n;
+    const grossFiat = subtotalFiat + creditFiat;
+
     return {
       subtotal: (Number(subtotalFiat) / 1e6).toFixed(2),
       fee: feeFiat > 0n ? (Number(feeFiat) / 1e6).toFixed(2) : null,
       total: (Number(state.fiatAmount) / 1e6).toFixed(2),
       symbol: state.currency,
+      creditUsdc: creditUsed > 0n ? (Number(creditUsed) / 1e6).toFixed(2) : null,
+      creditFiat: creditUsed > 0n ? (Number(creditFiat) / 1e6).toFixed(2) : null,
+      gross: creditUsed > 0n ? (Number(grossFiat) / 1e6).toFixed(2) : null,
     };
   })();
   const isCompound = currencyConfig && currencyConfig.compoundFields;
@@ -157,6 +211,12 @@ export function P2PCheckout(props: P2PCheckoutProps) {
 
   const stepIndex = state.phase === "completed" ? 3 : state.phase === "paid" ? 2 : state.phase === "accepted" ? 1 : 0;
   const hasPlaceOrder = Boolean(placeOrder);
+
+  // Narrow the gate union once so the JSX render block doesn't have to
+  // re-check `state.gate !== "loading"` on every property access. `rejection`
+  // is null when the gate is loading or allowing; `Conflict` otherwise.
+  const rejection =
+    state.gate !== "loading" && state.gate.kind === "reject" ? state.gate.conflict : null;
 
   const content = (
     <div style={{ ...themeStyle, fontFamily: "var(--p2p-font, inherit)", color: color.text }}>
@@ -187,8 +247,53 @@ export function P2PCheckout(props: P2PCheckoutProps) {
       </div>
 
       <div style={{ padding: "24px" }}>
+        {/* CREDIT GATE REJECTION — credit > 0 + a pending order with a
+            different intended amount blocks new placement. The host can
+            wire `onResumeRequest` to navigate the user to that order
+            (typically re-opens the widget with `orderId={pendingOrderId}`).
+            Hidden in tracking-only mode (initialOrderId set) since the
+            host is already driving a specific order. */}
+        {state.phase === "checkout" && hasPlaceOrder && rejection && (
+          <div>
+            <CenterStatus
+              icon={<PulseDot />}
+              title="Finish your pending order first"
+              subtitle={
+                usdcAmount
+                  ? `You have a pending order for ${formatUnits(rejection.usdcAmount, USDC_DECIMALS)} USDC. Complete or cancel it before placing this ${formatUnits(usdcAmount, USDC_DECIMALS)} USDC order.`
+                  : `You have a pending order for ${formatUnits(rejection.usdcAmount, USDC_DECIMALS)} USDC. Complete or cancel it before placing another.`
+              }
+            />
+            <div style={{ ...S.cardFlat, padding: 14, marginTop: 16, background: color.surfaceAlt }}>
+              <div style={S.rowBetween}>
+                <span style={S.label}>Pending order</span>
+                <span style={{ ...S.mono, fontSize: font.sm }}>#{rejection.orderId}</span>
+              </div>
+              <div style={{ ...S.rowBetween, marginTop: 6 }}>
+                <span style={S.label}>Amount</span>
+                <span style={{ ...S.body, ...S.num }}>
+                  {formatUnits(rejection.usdcAmount, USDC_DECIMALS)} USDC
+                </span>
+              </div>
+            </div>
+            {onResumeRequest && (
+              <button
+                style={{ ...S.primaryBtn, marginTop: 20 }}
+                onClick={() => onResumeRequest(rejection.orderId)}
+              >
+                Resume that order
+              </button>
+            )}
+            {onClose && (
+              <button style={{ ...S.ghostBtn, width: "100%", marginTop: 8, height: 40 }} onClick={onClose}>
+                Close
+              </button>
+            )}
+          </div>
+        )}
+
         {/* PRE-ORDER: client provides placeOrder callback */}
-        {state.phase === "checkout" && hasPlaceOrder && (
+        {state.phase === "checkout" && hasPlaceOrder && !rejection && (
           <div>
             <p style={S.label}>Order Summary</p>
             {amount && <h1 style={{ ...S.h1, marginTop: 4, fontSize: font.display }}><span style={S.num}>{amount}</span></h1>}
@@ -269,20 +374,44 @@ export function P2PCheckout(props: P2PCheckoutProps) {
                 </div>
               </div>
             )}
-            {/* Pre-order breakdown is only useful when there's a fee on top
-                of the order amount — otherwise subtotal === total and the
-                user just sees the same number twice. During the loading
-                window we don't yet know the fee, so the skeleton block is
-                shown speculatively and collapses to nothing if it turns
-                out the fee is zero. */}
-            {(isQuotePending || (preview && preview.fee)) && (
+            {/* Pre-order breakdown. Renders when there's a fee, when credit
+                is being applied, or while the quote is still loading. The
+                credit row replaces the subtotal display ("Order: gross —
+                Credit: −X = Subtotal: chargedFiat") so the user sees both
+                the gross order they're getting and the deduction. */}
+            {(isQuotePending || (preview && (preview.fee || preview.creditUsdc))) && (
               <div style={{ marginBottom: 16, padding: "14px 16px", background: color.surfaceAlt, borderRadius: radius.md, border: `1px solid ${color.border}` }}>
-                <div style={S.rowBetween}>
-                  <span style={S.label}>Subtotal</span>
-                  {isQuotePending
-                    ? <Skeleton width={84} />
-                    : <span style={{ ...S.body, ...S.num }}>{preview!.symbol} {preview!.subtotal}</span>}
-                </div>
+                {isQuotePending ? (
+                  <div style={S.rowBetween}>
+                    <span style={S.label}>Subtotal</span>
+                    <Skeleton width={84} />
+                  </div>
+                ) : preview!.creditUsdc ? (
+                  <>
+                    <div style={S.rowBetween}>
+                      <span style={S.label}>Order</span>
+                      <span style={{ ...S.body, ...S.num }}>{preview!.symbol} {preview!.gross}</span>
+                    </div>
+                    <div style={{ ...S.rowBetween, marginTop: 8 }}>
+                      <span style={S.label}>
+                        Credit applied
+                        <span style={{ ...S.faint, marginLeft: 6 }}>({preview!.creditUsdc} USDC)</span>
+                      </span>
+                      <span style={{ ...S.body, ...S.num, color: color.accent }}>
+                        −{preview!.symbol} {preview!.creditFiat}
+                      </span>
+                    </div>
+                    <div style={{ ...S.rowBetween, marginTop: 8, paddingTop: 8, borderTop: `1px solid ${color.border}` }}>
+                      <span style={S.label}>Subtotal</span>
+                      <span style={{ ...S.body, ...S.num }}>{preview!.symbol} {preview!.subtotal}</span>
+                    </div>
+                  </>
+                ) : (
+                  <div style={S.rowBetween}>
+                    <span style={S.label}>Subtotal</span>
+                    <span style={{ ...S.body, ...S.num }}>{preview!.symbol} {preview!.subtotal}</span>
+                  </div>
+                )}
                 {!isQuotePending && preview!.fee && (
                   <>
                     <div style={{ ...S.rowBetween, marginTop: 8 }}>
@@ -295,10 +424,14 @@ export function P2PCheckout(props: P2PCheckoutProps) {
                   </>
                 )}
                 <div style={{ ...S.rowBetween, marginTop: 10, paddingTop: 10, borderTop: `1px solid ${color.border}` }}>
-                  <span style={{ ...S.label, color: color.text, fontWeight: weight.semibold }}>Total</span>
+                  <span style={{ ...S.label, color: color.text, fontWeight: weight.semibold }}>You pay</span>
                   {isQuotePending
                     ? <Skeleton width={100} height={16} />
-                    : <span style={{ ...S.body, fontWeight: weight.bold, ...S.num }}>{preview!.symbol} {preview!.total}</span>}
+                    : <span style={{ ...S.body, fontWeight: weight.bold, ...S.num }}>
+                        {preview!.creditCoversFully
+                          ? "Free (credit covers)"
+                          : `${preview!.symbol} ${preview!.total}`}
+                      </span>}
                 </div>
               </div>
             )}
@@ -322,6 +455,8 @@ export function P2PCheckout(props: P2PCheckoutProps) {
                   <Spinner size={14} />
                   Loading quote…
                 </>
+              ) : preview?.creditCoversFully ? (
+                "Redeem credit"
               ) : preview ? (
                 `Pay ${preview.symbol} ${preview.total}`
               ) : (
@@ -387,10 +522,32 @@ export function P2PCheckout(props: P2PCheckoutProps) {
 
                   {breakdownExpanded && orderBreakdown && (
                     <div style={{ ...S.cardFlat, padding: "14px 16px", marginBottom: 16, background: color.surfaceAlt }}>
-                      <div style={S.rowBetween}>
-                        <span style={S.label}>Subtotal</span>
-                        <span style={{ ...S.body, ...S.num }}>{orderBreakdown.symbol} {orderBreakdown.subtotal}</span>
-                      </div>
+                      {orderBreakdown.creditUsdc ? (
+                        <>
+                          <div style={S.rowBetween}>
+                            <span style={S.label}>Order</span>
+                            <span style={{ ...S.body, ...S.num }}>{orderBreakdown.symbol} {orderBreakdown.gross}</span>
+                          </div>
+                          <div style={{ ...S.rowBetween, marginTop: 8 }}>
+                            <span style={S.label}>
+                              Credit applied
+                              <span style={{ ...S.faint, marginLeft: 6 }}>({orderBreakdown.creditUsdc} USDC)</span>
+                            </span>
+                            <span style={{ ...S.body, ...S.num, color: color.accent }}>
+                              −{orderBreakdown.symbol} {orderBreakdown.creditFiat}
+                            </span>
+                          </div>
+                          <div style={{ ...S.rowBetween, marginTop: 8, paddingTop: 8, borderTop: `1px solid ${color.border}` }}>
+                            <span style={S.label}>Subtotal</span>
+                            <span style={{ ...S.body, ...S.num }}>{orderBreakdown.symbol} {orderBreakdown.subtotal}</span>
+                          </div>
+                        </>
+                      ) : (
+                        <div style={S.rowBetween}>
+                          <span style={S.label}>Subtotal</span>
+                          <span style={{ ...S.body, ...S.num }}>{orderBreakdown.symbol} {orderBreakdown.subtotal}</span>
+                        </div>
+                      )}
                       {orderBreakdown.fee && (
                         <>
                           <div style={{ ...S.rowBetween, marginTop: 8 }}>
@@ -403,7 +560,7 @@ export function P2PCheckout(props: P2PCheckoutProps) {
                         </>
                       )}
                       <div style={{ ...S.rowBetween, marginTop: 10, paddingTop: 10, borderTop: `1px solid ${color.border}` }}>
-                        <span style={{ ...S.label, color: color.text, fontWeight: weight.semibold }}>Total</span>
+                        <span style={{ ...S.label, color: color.text, fontWeight: weight.semibold }}>Total paid</span>
                         <span style={{ ...S.body, fontWeight: weight.bold, ...S.num }}>
                           {orderBreakdown.symbol} {orderBreakdown.total}
                         </span>
@@ -489,8 +646,16 @@ export function P2PCheckout(props: P2PCheckoutProps) {
               {state.phase === "completed" && (
                 <div style={{ textAlign: "center" }}>
                   <SuccessIcon />
-                  <h1 style={{ ...S.h1, fontSize: font.xxl }}>Payment complete</h1>
-                  {usdcDisplay && <p style={{ ...S.muted, marginTop: 8 }}>{usdcDisplay} USDC delivered.</p>}
+                  <h1 style={{ ...S.h1, fontSize: font.xxl }}>
+                    {state.creditOnly ? "Credit redeemed" : "Payment complete"}
+                  </h1>
+                  {state.creditOnly ? (
+                    <p style={{ ...S.muted, marginTop: 8 }}>
+                      Order fulfilled from your existing credit. No fiat was charged.
+                    </p>
+                  ) : (
+                    usdcDisplay && <p style={{ ...S.muted, marginTop: 8 }}>{usdcDisplay} USDC delivered.</p>
+                  )}
                   {onClose && <button style={{ ...S.primaryBtn, marginTop: 20 }} onClick={onClose}>Done</button>}
                 </div>
               )}

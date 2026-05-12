@@ -48,6 +48,7 @@
     "build": "tsup",
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test 'src/core/*.test.ts'",
     "clean": "rm -rf dist",
     "prepublishOnly": "npm run clean && npm run build"
   },
