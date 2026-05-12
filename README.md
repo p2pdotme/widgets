@@ -6,8 +6,10 @@ receives **USDC on Base**. Three widgets in one package:
 
 - **`<P2PCheckout>`** — the buy flow. User picks currency → pays merchant
   off-chain → your contract is paid USDC.
-- **`<P2POfframp>`** — the sell-back flow. User sells back an NFT they
-  bought through `<P2PCheckout>` and receives local fiat in return.
+- **`<P2POfframp>`** — the sell / withdraw flow. User converts USDC they
+  already hold on Base into local fiat. Integrator-agnostic — host
+  supplies three callbacks (`placeOfframp`, `deliverUpi`, optional
+  `reconcile`); widget orchestrates the Diamond lifecycle.
 - **`<P2POrderHistory>`** — a subgraph-backed list of the connected user's
   orders. Auto-hides when there's nothing pending. Click "Resume" on a
   pending row to re-open `<P2PCheckout>` in tracking-only mode.
@@ -221,39 +223,178 @@ error, and "merchant didn't accept in time" states are handled automatically.
 
 ---
 
-## Sell-back flow (`<P2POfframp>`)
+## Offramp flow (`<P2POfframp>`)
 
-Available when your integrator is `MarketplaceCheckoutIntegrator`-shaped (has
-`userInitiateSellBack`, `deliverOfframpUpi`, `reconcile`, `proxyAddress`).
-The widget handles: optional sweep of the NFT from the user's `UserProxy` to
-their EOA, the burn, the encrypted UPI delivery, and status polling through
-to either `COMPLETED` or `CANCELLED` (refund).
+Convert USDC the user already holds on Base into local fiat (UPI, PIX,
+SPEI, …). Same callback-shaped API as `<P2PCheckout>` — the widget is
+integrator-agnostic. It orchestrates the **Diamond-level** lifecycle
+(auto-route circleId, poll status, encrypt the user's payment address)
+and delegates the integrator-specific tx encoding to host callbacks.
 
 ```tsx
-import { P2POfframp, type CurrencyOption } from "@p2pdotme/checkout-widget";
+import {
+  P2POfframp,
+  type CurrencyOption,
+  type PlaceOfframpContext, type PlaceOfframpResult,
+  type DeliverUpiContext, type ReconcileContext,
+} from "@p2pdotme/checkout-widget";
+
+const CURRENCIES: CurrencyOption[] = [
+  { symbol: "INR", flag: "🇮🇳", paymentMethod: "UPI" /* circleId optional */ },
+  { symbol: "BRL", flag: "🇧🇷", paymentMethod: "PIX" },
+];
 
 <P2POfframp
-  integratorAddress="0x59422CFb0b1951F98eCD5C720bC3F4ec4E00Bb64" // MarketplaceCheckoutIntegrator
-  marketplaceAddress="0xFCd89B3022b4C13F57bB97aCd040F2e4C458290F" // SimpleNFTMarketplace-style
-  tokenId={42n}
   signer={signer}
-  currencies={CURRENCIES}
-  diamondAddress="0xeb0BB8E3c014D915D9B2df03aBB130a1Fb44beb9"
   usdcAddress="0x4095fE4f1E636f11A95820BA2bB87F335Bd1040d"
-  chainId={84532}
+  diamondAddress="0xeb0BB8E3c014D915D9B2df03aBB130a1Fb44beb9"
+  // Required when any CurrencyOption omits circleId — widget routes via the SDK.
+  subgraphUrl="https://api.studio.thegraph.com/query/.../graphql"
+  currencies={CURRENCIES}
+  defaultAmountUsdc={2_000_000n} // optional — pre-fills the amount input
+
+  // Three host callbacks — see "Offramp callback contract" below.
+  placeOfframp={hostPlaceOfframp}
+  deliverUpi={hostDeliverUpi}
+  reconcile={hostReconcile}
+
+  onOrderPlaced={(id, hash) => console.log("placed", id, hash)}
   onComplete={(orderId) => console.log("paid out", orderId)}
   onCancelled={(orderId) => console.warn("refunded", orderId)}
   onError={(err) => console.error(err)}
 />
 ```
 
-`integratorAddress` must have `offrampEnabled = true`, a configured
-`offrampRelayer`, a non-zero `maxUsdcPerOfframp`, and a USDC pool to fund the
-sell-back. See the contracts repo's deployment scripts for setup.
+What the widget does, in order:
 
-> **Offramp does not auto-route.** Every currency you pass to `<P2POfframp>`
-> must carry an explicit `circleId` — the sell flow uses it directly in the
-> integrator tx. (Only the buy widget calls the SDK's routing path.)
+1. Reads the user's USDC balance for the "Max" affordance + insufficient-
+   balance hint (standard ERC20 `balanceOf` — no integrator dependency).
+2. Reads `getPriceConfig(currency).sellPrice` + small-order fee config
+   from the Diamond, renders the **fiat breakdown** on the form.
+3. On submit, if the selected currency has no `circleId`, calls
+   `@p2pdotme/sdk` `placeOrder.prepare({ orderType: 1, … })` and harvests
+   `prepared.meta.circleId`. Diamond-level operation — no integrator code.
+4. Calls **`placeOfframp`** — the host approves USDC + submits the
+   integrator's place-offramp tx + parses the receipt for an `orderId`.
+5. Polls `getOrdersById(orderId)`. On `ACCEPTED` (1) encrypts the user's
+   payment address against the merchant's pubkey via the SDK, then calls
+   **`deliverUpi`** — host submits the integrator's `deliverOfframpUpi`.
+6. On `COMPLETED` (3) or `CANCELLED` (4), best-effort calls
+   **`reconcile`** so the integrator can close out its bookkeeping.
+
+### Offramp callback contract
+
+Three callbacks. Required: `placeOfframp`, `deliverUpi`. Optional:
+`reconcile` (skip if your integrator doesn't expose it).
+
+```ts
+type PlaceOfframpContext = {
+  /** Currency the user picked. `circleId` is guaranteed populated —
+   *  either the value the host pinned, or one the SDK routed. */
+  currency: CurrencyOption;
+  /** Raw fiat payment address (UPI / PIX / etc). Do NOT submit on-chain
+   *  — the widget will encrypt it and call `deliverUpi` later. */
+  paymentAddress: string;
+  /** USDC amount, 6-decimal bigint. */
+  usdcAmount: bigint;
+  /** User's relay pubkey — pass to the integrator's place-offramp tx so
+   *  the merchant knows what key to encrypt their fiat-receipt against. */
+  userPubKey: string;
+};
+
+type PlaceOfframpResult = { orderId: string; txHash: string };
+type DeliverUpiContext  = { orderId: string; encryptedUpi: string };
+type ReconcileContext   = { orderId: string; status: number /* 3=COMPLETED, 4=CANCELLED */ };
+```
+
+### Reference implementation — `LotPotCheckoutIntegrator`
+
+The merchant-app's `marketplace.tsx` is the canonical example (paste-able):
+
+```ts
+// Host-side: ABI fragments + helpers live in YOUR app, not the widget.
+const LOTPOT_INTEGRATOR_ABI = [
+  { name: "userInitiateOfframp", type: "function", stateMutability: "nonpayable",
+    inputs: [
+      { name: "amount", type: "uint256" }, { name: "currency", type: "bytes32" },
+      { name: "fiatAmount", type: "uint256" }, { name: "circleId", type: "uint256" },
+      { name: "preferredPaymentChannelConfigId", type: "uint256" },
+      { name: "userPubKey", type: "string" },
+    ],
+    outputs: [{ name: "orderId", type: "uint256" }] },
+  { name: "deliverOfframpUpi", type: "function", stateMutability: "nonpayable",
+    inputs: [{ name: "orderId", type: "uint256" }, { name: "encUpi", type: "string" }],
+    outputs: [] },
+  { name: "reconcile", type: "function", stateMutability: "nonpayable",
+    inputs: [{ name: "orderId", type: "uint256" }, { name: "currentStatus", type: "uint8" }],
+    outputs: [] },
+  // LotPot OfframpInitiated event for receipt parsing:
+  { type: "event", name: "OfframpInitiated",
+    inputs: [
+      { name: "orderId", type: "uint256", indexed: true },
+      { name: "user", type: "address", indexed: true },
+      { name: "usdcAmount", type: "uint256", indexed: false },
+    ] },
+] as const;
+
+const placeOfframp = async (ctx: PlaceOfframpContext): Promise<PlaceOfframpResult> => {
+  // 1. Approve USDC to the integrator if allowance is short.
+  const allowance = await publicClient.readContract({ address: USDC, abi: ERC20_ABI,
+    functionName: "allowance", args: [signer.address, INTEGRATOR] }) as bigint;
+  if (allowance < ctx.usdcAmount) {
+    const { hash } = await signer.sendTransaction({
+      to: USDC,
+      data: encodeFunctionData({ abi: ERC20_ABI, functionName: "approve",
+        args: [INTEGRATOR, ctx.usdcAmount] }),
+      gasLimit: 100_000,
+    });
+    await publicClient.waitForTransactionReceipt({ hash });
+  }
+  // 2. Submit the integrator's place-offramp tx.
+  const data = encodeFunctionData({
+    abi: LOTPOT_INTEGRATOR_ABI, functionName: "userInitiateOfframp",
+    args: [
+      ctx.usdcAmount, stringToHex(ctx.currency.symbol, { size: 32 }),
+      0n /* fiatAmountLimit */, ctx.currency.circleId!,
+      ctx.currency.paymentChannelConfigId ?? 0n, ctx.userPubKey,
+    ],
+  });
+  const { hash } = await signer.sendTransaction({ to: INTEGRATOR, data, gasLimit: 1_000_000 });
+  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  // 3. Parse orderId from the integrator's OfframpInitiated event.
+  const orderId = parseLotPotOfframpOrderId(receipt);
+  if (!orderId) throw new Error("orderId not in receipt");
+  return { orderId, txHash: hash };
+};
+
+const deliverUpi = async (ctx: DeliverUpiContext) => {
+  const data = encodeFunctionData({
+    abi: LOTPOT_INTEGRATOR_ABI, functionName: "deliverOfframpUpi",
+    args: [BigInt(ctx.orderId), ctx.encryptedUpi],
+  });
+  const { hash } = await signer.sendTransaction({ to: INTEGRATOR, data, gasLimit: 500_000 });
+  await publicClient.waitForTransactionReceipt({ hash });
+  return { txHash: hash };
+};
+
+const reconcile = async (ctx: ReconcileContext) => {
+  const data = encodeFunctionData({
+    abi: LOTPOT_INTEGRATOR_ABI, functionName: "reconcile",
+    args: [BigInt(ctx.orderId), ctx.status],
+  });
+  const { hash } = await signer.sendTransaction({ to: INTEGRATOR, data, gasLimit: 200_000 });
+  await publicClient.waitForTransactionReceipt({ hash });
+  return { txHash: hash };
+};
+```
+
+For a different integrator (e.g., a custom one not following the LotPot
+shape), the contract above is the same — only the ABI fragments and event
+parser change. The widget never knows the difference.
+
+> **Tip:** `userPubKey` is auto-generated from the SDK's relay identity
+> (lazily persisted in localStorage). Hosts that already use `<P2PCheckout>`
+> share the same identity — no extra wiring required.
 
 ---
 
@@ -740,17 +881,18 @@ Sell-back (offramp) phases: `form` → `sweeping?` → `placing` → `placed` �
 
 | Prop | Type | Required | Notes |
 |---|---|---|---|
-| `integratorAddress` | `0x…` | ✅ | Must be a `MarketplaceCheckoutIntegrator`-shaped contract. |
-| `marketplaceAddress` | `0x…` | ✅ | Client implementing `IMarketplaceClient` (`ownerOf`, `tokenProduct`, `tokenPrice`). |
-| `tokenId` | `bigint` | ✅ | Token to sell back; user (or their proxy) must own it. |
 | `signer` | `CheckoutSigner` | ✅ | Same signer you use for buys. |
-| `currencies` | `CurrencyOption[]` | ✅ | Currency picker. **Every entry must carry an explicit `circleId`** — offramp does not auto-route. |
-| `diamondAddress` | `0x…` | ✅ | Status polling. |
-| `usdcAddress` | `0x…` | ✅ | For decimal formatting + balance reads. |
+| `usdcAddress` | `0x…` | ✅ | For the "you have X USDC available" affordance + balance check. Standard ERC20 read — no integrator dependency. |
+| `diamondAddress` | `0x…` | ✅ | Status polling + on-chain price-config reads + SDK setup. |
+| `currencies` | `CurrencyOption[]` | ✅ | Currency picker. `circleId` optional — left off → SDK auto-routes (orderType=1). |
+| `placeOfframp` | `(ctx) => Promise<{ orderId, txHash }>` | ✅ | Host callback — approves USDC + submits the integrator's place-offramp tx + parses receipt. See [Offramp callback contract](#offramp-callback-contract). |
+| `deliverUpi` | `(ctx) => Promise<{ txHash }>` | ✅ | Host callback — submits the integrator's `deliverOfframpUpi` (widget supplies the already-encrypted blob). |
+| `reconcile` | `(ctx) => Promise<{ txHash }>` | — | Host callback — submits the integrator's `reconcile` once the Diamond hits a terminal status. Skip if your integrator doesn't expose it. Called best-effort (errors swallowed). |
 | `chainId` | `number` | — | Default `84532`. |
-| `rpcUrl` | `string` | — | Status polling RPC. |
-| `subgraphUrl` | `string` | — | Reserved for SDK reads. |
+| `rpcUrl` | `string` | — | Custom RPC. |
+| `subgraphUrl` | `string` | — | Required when any `CurrencyOption` omits `circleId` — passed to the SDK for routing. |
 | `fiatAmountLimit` | `bigint` | — | Slippage floor (6 decimals). `0` = no check. |
+| `defaultAmountUsdc` | `bigint` | — | Pre-fills the amount input (6-dec). User can still edit. |
 | `theme` | `P2PTheme` | — | Optional visual overrides. See [Theming](#theming). |
 | `mode` / `open` / events | — | — | Same shape as `<P2PCheckout>`. |
 
@@ -765,13 +907,17 @@ import {
   P2PCheckout,
   P2POfframp,
   P2POrderHistory,
-  // event-decoding helpers
+  // event-decoding helper (for V2-shaped integrator buy receipts)
   parseOrderIdFromReceipt,
-  parseOfframpOrderIdFromReceipt,
   // integrator reads (see "Reading integrator limits")
   useUserTxLimit,
   fetchUserTxLimit,
   INTEGRATOR_LIMITS_ABI,
+  // Diamond + ERC20 read fragment (no integrator code)
+  DIAMOND_ABI,
+  DEFAULT_DIAMOND_ADDRESS,
+  USDC_DECIMALS,
+  ERC20_READ_ABI,
   // currency defaults
   DEFAULT_VALIDATORS,
   DEFAULT_PLACEHOLDERS,
@@ -785,11 +931,17 @@ import {
 } from "@p2pdotme/checkout-widget";
 ```
 
+**The package ships no integrator-specific ABIs.** `MarketplaceCheckoutIntegrator`,
+`LotPotCheckoutIntegrator`, etc. live in your host app — the widget never
+imports them. See the [Offramp callback contract](#offramp-callback-contract)
+for what the host has to provide.
+
 Type-only exports include `P2PCheckoutProps`, `P2POfframpProps`,
 `P2POrderHistoryProps`, `P2PTheme`, `CheckoutSigner`, `CheckoutPhase`, `OfframpPhase`,
-`PlaceOrderResult`, `PlaceOrderContext`, `CurrencyOption`,
-`PaymentAddressValidator`, `ScreeningConfig`, `ScreeningOrderDetails`,
-and `ScreeningUserDetails`.
+`PlaceOrderResult`, `PlaceOrderContext`, `PlaceOfframpContext`,
+`PlaceOfframpResult`, `DeliverUpiContext`, `ReconcileContext`,
+`CurrencyOption`, `PaymentAddressValidator`, `ScreeningConfig`,
+`ScreeningOrderDetails`, and `ScreeningUserDetails`.
 
 ---
 

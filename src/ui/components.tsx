@@ -96,7 +96,7 @@ export function CopyRow({ value, copied, onCopy, disabled }: {
 export function Stepper({ stepIndex }: { stepIndex: number }) {
   const steps = ["Merchant", "Payment", "Complete"];
   return (
-    <div style={{
+    <div className="p2p-stepper" style={{
       display: "flex", alignItems: "center", gap: 0,
       padding: "16px 20px", background: color.surface,
       border: `1px solid ${color.border}`, borderRadius: radius.lg,
@@ -105,8 +105,8 @@ export function Stepper({ stepIndex }: { stepIndex: number }) {
         const done = stepIndex > i;
         const active = stepIndex === i;
         return (
-          <div key={label} style={{ display: "flex", alignItems: "center", flex: i < steps.length - 1 ? 1 : "initial" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div key={label} className="p2p-stepper-step" style={{ display: "flex", alignItems: "center", flex: i < steps.length - 1 ? 1 : "initial" }}>
+            <div className="p2p-stepper-cell" style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <div style={{
                 width: 28, height: 28, borderRadius: "50%",
                 display: "flex", alignItems: "center", justifyContent: "center",
@@ -114,19 +114,45 @@ export function Stepper({ stepIndex }: { stepIndex: number }) {
                 color: done || active ? "#fff" : color.textMuted,
                 border: done || active ? "none" : `1px solid ${color.border}`,
                 fontSize: font.sm, fontWeight: weight.semibold,
+                flexShrink: 0,
               }}>{done ? "✓" : i + 1}</div>
-              <span style={{
+              <span className="p2p-stepper-label" style={{
                 fontSize: font.md, fontWeight: active ? weight.semibold : weight.medium,
                 color: done || active ? color.text : color.textMuted,
+                whiteSpace: "nowrap",
               }}>{label}</span>
             </div>
             {i < steps.length - 1 && (
-              <div style={{ flex: 1, height: 1, background: done ? color.accent : color.border, margin: "0 12px" }} />
+              <div className="p2p-stepper-line" style={{ flex: 1, height: 1, background: done ? color.accent : color.border, margin: "0 12px" }} />
             )}
           </div>
         );
       })}
     </div>
+  );
+}
+
+/**
+ * Inline shimmering placeholder for values being fetched. Use when the
+ * surrounding text labels stay stable and only the numbers are loading
+ * (e.g. price breakdown during a currency switch) — keeps the layout in
+ * place instead of collapsing/flashing.
+ */
+export function Skeleton({
+  width = 80, height = 14, radius: r = 4,
+}: { width?: number | string; height?: number | string; radius?: number }) {
+  return (
+    <span
+      aria-hidden
+      style={{
+        display: "inline-block",
+        width, height, borderRadius: r,
+        background: `linear-gradient(90deg, ${color.surfaceAlt} 0%, ${color.border} 50%, ${color.surfaceAlt} 100%)`,
+        backgroundSize: "200% 100%",
+        animation: "p2p-shimmer 1.4s ease-in-out infinite",
+        verticalAlign: "middle",
+      }}
+    />
   );
 }
 
@@ -217,9 +243,20 @@ export function injectKeyframes() {
   if (typeof document !== "undefined" && !document.getElementById(id)) {
     const style = document.createElement("style");
     style.id = id;
+    // The narrow-viewport rules below collapse the order-tracker stepper to
+    // just circles + connectors so it fits inside a phone-sized modal. We
+    // can't use CSS-in-JS for `@media` blocks, so they live alongside the
+    // keyframes in this one-time global injection.
     style.textContent = `
       @keyframes p2p-spin { to { transform: rotate(360deg); } }
       @keyframes p2p-pulse { 0% { transform: scale(0.6); opacity: 0.5; } 100% { transform: scale(1.6); opacity: 0; } }
+      @keyframes p2p-shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+      @media (max-width: 480px) {
+        .p2p-stepper { padding: 12px 14px !important; }
+        .p2p-stepper-label { display: none !important; }
+        .p2p-stepper-cell { gap: 0 !important; }
+        .p2p-stepper-line { margin: 0 8px !important; }
+      }
     `;
     document.head.appendChild(style);
   }

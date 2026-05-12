@@ -178,20 +178,24 @@ export type CheckoutPhase =
   | "cancelled"
   | "error";
 
-// ─── Offramp ───────────────────────────────────────────────────────
+// ─── Offramp (USDC balance → fiat) ──────────────────────────────────
+//
+// The widget orchestrates the Diamond-level offramp lifecycle and delegates
+// integrator-specific work (USDC approve, integrator tx encoding, receipt
+// parsing) to host callbacks. The widget itself never imports an integrator
+// ABI — see README §"Offramp callback contract" for the host-side recipe
+// against any specific integrator (LotPotCheckoutIntegrator, etc.).
 
 export type OfframpPhase =
-  /** Pre-order screen: collect currency + payment address. */
+  /** Pre-order screen: collect currency + amount + payment address. */
   | "form"
-  /** Auto-sweeping NFT from proxy → user EOA before sell-back. */
-  | "sweeping"
-  /** Sending the userInitiateSellBack tx. */
+  /** Host's `placeOfframp` callback is running (approve + integrator tx). */
   | "placing"
   /** Sell order placed; waiting for a merchant to accept. */
   | "placed"
   /** Merchant accepted; about to encrypt + deliver UPI. */
   | "accepted"
-  /** Merchant accepted; encrypting UPI and submitting deliverOfframpUpi. */
+  /** Encrypting UPI in-browser + host's `deliverUpi` callback running. */
   | "encrypting"
   /** Encrypted UPI submitted; Diamond pulled USDC; merchant paying user fiat. */
   | "paid"
@@ -201,30 +205,91 @@ export type OfframpPhase =
   | "cancelled"
   | "error";
 
+/**
+ * Passed to the host's `placeOfframp` callback. The host is responsible for
+ * approving USDC to its integrator and submitting whatever integrator-specific
+ * tx places the SELL on the Diamond.
+ *
+ * `currency.circleId` is guaranteed populated — either the value the host
+ * pinned on `CurrencyOption.circleId`, or the value the widget routed via
+ * the SDK when the host left `circleId` undefined.
+ */
+export interface PlaceOfframpContext {
+  currency: CurrencyOption;
+  /** Raw fiat payment address the user entered. NOT yet encrypted — host
+   *  must NOT submit this on-chain. The widget encrypts it at the ACCEPTED
+   *  handoff and calls `deliverUpi` separately. */
+  paymentAddress: string;
+  /** USDC amount the user is offramping (6-decimal bigint). */
+  usdcAmount: bigint;
+  /** User's relay pubkey. Pass to the integrator's `userInitiateOfframp` /
+   *  equivalent so the assigned merchant knows what key to encrypt their
+   *  UPI/PIX response against. Comes from the SDK's relay identity store. */
+  userPubKey: string;
+}
+
+export interface PlaceOfframpResult {
+  /** Diamond order id parsed from the tx receipt. */
+  orderId: string;
+  /** Hash of the placement tx. */
+  txHash: string;
+}
+
+/** Passed to `deliverUpi`. The widget already encrypted `paymentAddress`
+ *  against the merchant's on-chain pubkey; the host just submits the
+ *  integrator's `deliverOfframpUpi` / equivalent. */
+export interface DeliverUpiContext {
+  orderId: string;
+  encryptedUpi: string;
+}
+
+/** Passed to the optional `reconcile` callback when the order reaches a
+ *  terminal Diamond state (status = 3 COMPLETED or 4 CANCELLED). Skip
+ *  implementing if your integrator doesn't expose a reconcile selector. */
+export interface ReconcileContext {
+  orderId: string;
+  status: number;
+}
+
 export interface P2POfframpProps {
   // ─── Required ────────────────────────────────────────────────────
-  /** MarketplaceCheckoutIntegrator address (must have offrampEnabled = true). */
-  integratorAddress: `0x${string}`;
-  /** SimpleNFTMarketplace-style client. Must implement IMarketplaceClient. */
-  marketplaceAddress: `0x${string}`;
-  /** Token to sell back. The connected wallet (or its proxy) must own it. */
-  tokenId: bigint;
+  /** USDC token address (used for the "you have X available" affordance). */
+  usdcAddress: `0x${string}`;
+  /** Diamond address (for status polling + SDK reads). */
+  diamondAddress: `0x${string}`;
   /** Wallet abstraction matching the buy widget's CheckoutSigner. */
   signer: CheckoutSigner;
-  /** Currencies/circles the user can pick from. */
+  /** Currencies/circles the user can pick from.
+   *
+   *  `circleId` is optional per currency:
+   *  - Pin a specific merchant circle by setting `circleId` explicitly.
+   *  - Leave it off and the widget routes via `@p2pdotme/sdk`'s
+   *    `placeOrder.prepare()` (orderType=1, SELL). Routing requires
+   *    `subgraphUrl` on these props.
+   *  Mix-and-match is fine — any currency without a pinned circleId is
+   *  routed; any with one is honored as-is. */
   currencies: CurrencyOption[];
-  /** Diamond address (for status polling + getNextOrderId). */
-  diamondAddress: `0x${string}`;
-  /** USDC token address. */
-  usdcAddress: `0x${string}`;
+  /** Host callback — submits the integrator-specific tx that places the
+   *  SELL on the Diamond. See `PlaceOfframpContext`. */
+  placeOfframp: (ctx: PlaceOfframpContext) => Promise<PlaceOfframpResult>;
+  /** Host callback — submits the integrator's `deliverOfframpUpi` (the
+   *  widget passes in the already-encrypted blob). */
+  deliverUpi: (ctx: DeliverUpiContext) => Promise<{ txHash: string }>;
 
   // ─── Optional ────────────────────────────────────────────────────
+  /** Host callback — submits the integrator's `reconcile` after the
+   *  Diamond hits a terminal status. Skip if your integrator doesn't
+   *  need it. Always called best-effort (errors swallowed). */
+  reconcile?: (ctx: ReconcileContext) => Promise<{ txHash: string }>;
   chainId?: number;
   rpcUrl?: string;
-  /** Subgraph URL for SDK reads. Empty string if not used. */
+  /** Required when any selected `CurrencyOption` omits `circleId` — passed
+   *  to `@p2pdotme/sdk` for SDK routing. */
   subgraphUrl?: string;
   /** Slippage floor on fiat amount (sell). 0 = no check. */
   fiatAmountLimit?: bigint;
+  /** Pre-fill the amount input (USDC, 6-decimals). User can still edit. */
+  defaultAmountUsdc?: bigint;
   /** UI mode. */
   mode?: "inline" | "modal";
   open?: boolean;

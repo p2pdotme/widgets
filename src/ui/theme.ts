@@ -118,20 +118,24 @@ export const S: Record<string, React.CSSProperties> = {
   faint: { fontSize: font.sm, color: color.textFaint },
   mono: { fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: font.md },
   num: { fontVariantNumeric: "tabular-nums" },
+  // `boxSizing: "border-box"` on the button styles guarantees `width: 100%`
+  // controls never overflow their container — relevant for buttons inside
+  // modal cards where padding sits on the parent, not the button.
   primaryBtn: {
     display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "8px",
-    width: "100%", height: "46px", padding: "0 16px",
+    width: "100%", height: "46px", padding: "0 16px", boxSizing: "border-box" as const,
     background: color.accent, color: color.accentText, border: "none", borderRadius: radius.md,
     fontSize: font.base, fontWeight: weight.semibold, cursor: "pointer",
   },
   secondaryBtn: {
     display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "8px",
-    height: "46px", padding: "0 16px",
+    height: "46px", padding: "0 16px", boxSizing: "border-box" as const,
     background: color.surface, color: color.text, border: `1px solid ${color.border}`, borderRadius: radius.md,
     fontSize: font.base, fontWeight: weight.medium, cursor: "pointer",
   },
   ghostBtn: {
-    height: "36px", padding: "0 12px", background: "transparent", color: color.textMuted,
+    height: "36px", padding: "0 12px", boxSizing: "border-box" as const,
+    background: "transparent", color: color.textMuted,
     border: "none", borderRadius: radius.sm, fontSize: font.md, fontWeight: weight.medium, cursor: "pointer",
   },
   rowBetween: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px" },

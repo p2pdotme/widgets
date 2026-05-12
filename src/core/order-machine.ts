@@ -1,4 +1,4 @@
-import { useReducer, useCallback, useEffect, useRef } from "react";
+import { useReducer, useCallback, useEffect, useMemo, useRef } from "react";
 import { createPublicClient, http, encodeFunctionData, fromHex, stringToHex } from "viem";
 import { baseSepolia, base } from "viem/chains";
 import {
@@ -25,6 +25,7 @@ import { OrderStatus } from "../types";
 import { DIAMOND_ABI } from "./contracts";
 import { DEMO_FIAT_RATE } from "./config";
 import { processB2BBuyOrder } from "./b2b-fraud-engine";
+import { getActiveOrder, setActiveOrder, removeActiveOrder, keyFor, type ActiveOrderKey } from "./active-orders-store";
 
 interface OrderState {
   phase: CheckoutPhase;
@@ -67,7 +68,12 @@ type OrderAction =
   | { type: "ERROR"; message: string }
   | { type: "INLINE_ERROR"; message: string | null }
   | { type: "PRICE_CONFIG"; currency: string; buyPrice: bigint; smallOrderThreshold: bigint; smallOrderFixedFee: bigint }
-  | { type: "PRICE_CONFIG_FAILED" };
+  | { type: "PRICE_CONFIG_FAILED" }
+  // Used while phase=checkout to hold a resumable order in the background.
+  // RESUMABLE_FOUND attaches an orderId without flipping out of "checkout"
+  // — the user still sees the form. Pay-now uses this id to skip placement.
+  | { type: "RESUMABLE_FOUND"; orderId: string; txHash: string }
+  | { type: "RESUMABLE_CLEARED" };
 
 const INITIAL: OrderState = {
   phase: "checkout", orderId: null, txHash: null,
@@ -101,6 +107,8 @@ function reducer(state: OrderState, action: OrderAction): OrderState {
       priceConfigFailed: false,
     };
     case "PRICE_CONFIG_FAILED": return { ...state, priceConfigFailed: true };
+    case "RESUMABLE_FOUND": return { ...state, orderId: action.orderId, txHash: action.txHash };
+    case "RESUMABLE_CLEARED": return { ...state, orderId: null, txHash: null };
     default: return state;
   }
 }
@@ -137,6 +145,25 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
   const chain = opts.chainId === 84532 ? baseSepolia : base;
   const publicClient = createPublicClient({ chain, transport: http(opts.rpcUrl) });
 
+  // Composite key for the resumable-order store. null when the host hasn't
+  // supplied enough context (no signer / no currency picker / no amount) —
+  // in that mode the machine just acts like the previous version (no resume).
+  const storeKey = useMemo<ActiveOrderKey | null>(() => {
+    if (!opts.signer?.address || !opts.selectedCurrency || opts.usdcAmount === undefined) return null;
+    return {
+      user: opts.signer.address,
+      chainId: opts.chainId,
+      currency: opts.selectedCurrency.symbol,
+      usdcAmount: opts.usdcAmount,
+    };
+  }, [opts.signer?.address, opts.chainId, opts.selectedCurrency?.symbol, opts.usdcAmount]);
+  const storeKeyStr = storeKey ? keyFor(storeKey) : null;
+
+  // Hold a ref to current state so the resumable-store effect can decide
+  // whether to attach a stored order without re-firing on every state tick.
+  const stateRef = useRef(state);
+  stateRef.current = state;
+
   const fetchOrderStatus = useCallback(async () => {
     if (!state.orderId || state.orderId.startsWith("demo")) return;
     try {
@@ -151,6 +178,20 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
       let cur = "";
       try { cur = fromHex(o.currency as `0x${string}`, "string").replace(/\0/g, ""); } catch { cur = "INR"; }
 
+      // Background poll while the user is still on the form, holding a
+      // resumable order in state.orderId. Only act on terminal status —
+      // anything else stays parked until the user clicks "Pay now". This
+      // is what surfaces auto-cancellations: a stored order that the
+      // protocol has already expired gets silently dropped here so the
+      // user doesn't try to resume a dead order.
+      if (state.phase === "checkout") {
+        if (status === OrderStatus.CANCELLED || status === OrderStatus.COMPLETED) {
+          if (storeKey) removeActiveOrder(storeKey);
+          dispatch({ type: "RESUMABLE_CLEARED" });
+        }
+        return;
+      }
+
       // Resume-safe: walk the local state machine forward to whatever the
       // chain says, regardless of where we currently are. A page refresh
       // mid-flow lands here with `state.phase === "placed"` and may need to
@@ -158,6 +199,7 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
 
       if (status === OrderStatus.CANCELLED) {
         if (state.phase !== "cancelled") {
+          if (storeKey) removeActiveOrder(storeKey);
           dispatch({ type: "CANCELLED" });
           opts.onCancel?.(state.orderId);
         }
@@ -196,11 +238,12 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
       }
 
       if (status === OrderStatus.COMPLETED && state.phase !== "completed") {
+        if (storeKey) removeActiveOrder(storeKey);
         dispatch({ type: "COMPLETED" });
         opts.onComplete?.(state.orderId);
       }
     } catch {}
-  }, [state.orderId, state.phase, state.acceptedTimestamp, opts.diamondAddress]);
+  }, [state.orderId, state.phase, state.acceptedTimestamp, opts.diamondAddress, storeKeyStr]);
 
   // Fire one immediate fetch as soon as we have an orderId (covers the
   // resume-from-localStorage case — no 3s "Finding merchant" flash for orders
@@ -219,9 +262,29 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
     if (state.phase === "placed") interval = 3000;
     else if (state.phase === "accepted") interval = 15000;
     else if (state.phase === "paid") interval = 10000;
+    // Slower poll while the user holds the resumable order on the form —
+    // we only need to notice the auto-cancel before they click "Pay now".
+    else if (state.phase === "checkout") interval = 8000;
     if (interval) pollingRef.current = setInterval(fetchOrderStatus, interval);
     return () => { if (pollingRef.current) clearInterval(pollingRef.current); };
   }, [state.phase, state.orderId, fetchOrderStatus]);
+
+  // Attach (or detach) a resumable order whenever the composite store key
+  // changes — currency switch, amount edit, signer rotation. Gated on
+  // phase=checkout so it can't override a mid-flow orderId.
+  useEffect(() => {
+    if (stateRef.current.phase !== "checkout") return;
+    if (!storeKey) {
+      if (stateRef.current.orderId) dispatch({ type: "RESUMABLE_CLEARED" });
+      return;
+    }
+    const entry = getActiveOrder(storeKey);
+    if (entry) {
+      dispatch({ type: "RESUMABLE_FOUND", orderId: entry.orderId, txHash: entry.txHash });
+    } else if (stateRef.current.orderId) {
+      dispatch({ type: "RESUMABLE_CLEARED" });
+    }
+  }, [storeKeyStr]);
 
   // Fetch on-chain price config for the selected currency so we can derive a
   // pre-order fiat quote + fee estimate. One read per currency change; no
@@ -273,8 +336,92 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
     return () => { cancelled = true; };
   }, [currencySymbol, opts.diamondAddress, opts.demo]);
 
+  // Inline fast-forward: when the user clicks Pay on a resumable order,
+  // dispatch PLACED to flip out of the form, then read on-chain status
+  // and walk the state machine forward to ACCEPTED / PAID / COMPLETED /
+  // CANCELLED in one shot — avoids the 3s "Finding a merchant" flash on
+  // an order that was already accepted while the modal was closed.
+  // Mirrors the relevant branches of fetchOrderStatus; failures fall
+  // back to the regular polling loop.
+  const resumeOrder = useCallback(async (orderId: string, txHash: string) => {
+    dispatch({ type: "PLACED", orderId, txHash });
+    opts.onOrderPlaced?.(orderId, txHash);
+    try {
+      const [rawOrder, details] = await Promise.all([
+        publicClient.readContract({ address: opts.diamondAddress, abi: DIAMOND_ABI, functionName: "getOrdersById", args: [BigInt(orderId)] }),
+        publicClient.readContract({ address: opts.diamondAddress, abi: DIAMOND_ABI, functionName: "getAdditionalOrderDetails", args: [BigInt(orderId)] }),
+      ]);
+      const o = rawOrder as any;
+      const d = details as any;
+      const status = Number(o.status) as OrderStatus;
+
+      if (status === OrderStatus.CANCELLED) {
+        if (storeKey) removeActiveOrder(storeKey);
+        dispatch({ type: "CANCELLED" });
+        opts.onCancel?.(orderId);
+        return;
+      }
+
+      if (status >= OrderStatus.ACCEPTED) {
+        let cur = "INR";
+        try { cur = fromHex(o.currency as `0x${string}`, "string").replace(/\0/g, ""); } catch {}
+        const actualFiat = d.actualFiatAmount > 0n ? d.actualFiatAmount : o.fiatAmount;
+        const actualUsdc = d.actualUsdtAmount > 0n ? d.actualUsdtAmount : o.amount;
+        const acceptedTs = d.acceptedTimestamp && d.acceptedTimestamp > 0n
+          ? BigInt(d.acceptedTimestamp)
+          : BigInt(Math.floor(Date.now() / 1000));
+        dispatch({
+          type: "ACCEPTED",
+          fiatAmount: actualFiat,
+          usdcAmount: o.amount,
+          currency: cur,
+          fee: BigInt(d.fixedFeePaid ?? 0n),
+          actualUsdcAmount: actualUsdc,
+          acceptedTimestamp: acceptedTs,
+        });
+        const recipientIdentity = await resolveIdentity();
+        const dec = await decryptPaymentAddress({ encrypted: o.encUpi, recipientIdentity });
+        dispatch({ type: "DECRYPTED_UPI", upi: dec.isOk() ? dec.value : "Session changed" });
+
+        if (status === OrderStatus.PAID) dispatch({ type: "PAID" });
+        if (status === OrderStatus.COMPLETED) {
+          if (storeKey) removeActiveOrder(storeKey);
+          dispatch({ type: "COMPLETED" });
+          opts.onComplete?.(orderId);
+        }
+      }
+    } catch {
+      // Non-fatal — the regular polling loop will catch up.
+    }
+  }, [opts, storeKeyStr]);
+
   const handlePlaceOrder = useCallback(async () => {
     if (!opts.placeOrder) return;
+
+    // Resume short-circuit. The mount-time `RESUMABLE_FOUND` effect
+    // populates `state.orderId` async, so a fast click before it fires
+    // would miss the resume and place a duplicate. Read the store
+    // synchronously as a safety net. "Pending" here means any non-
+    // terminal status — PLACED, ACCEPTED, PAID all resume to the
+    // tracking flow, which then fast-forwards to the right phase via
+    // the inline chain fetch below. The 8s background poll handles
+    // the cancellation case by clearing the entry before we get here.
+    if (state.phase === "checkout") {
+      let resumeOrderId = state.orderId;
+      let resumeTxHash = state.txHash;
+      if (!resumeOrderId && storeKey) {
+        const stored = getActiveOrder(storeKey);
+        if (stored) {
+          resumeOrderId = stored.orderId;
+          resumeTxHash = stored.txHash;
+        }
+      }
+      if (resumeOrderId && !resumeOrderId.startsWith("demo")) {
+        await resumeOrder(resumeOrderId, resumeTxHash ?? "");
+        return;
+      }
+    }
+
     dispatch({ type: "PLACING" });
 
     if (opts.demo) {
@@ -360,6 +507,7 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
           })
         : await runPlace();
       dispatch({ type: "PLACED", orderId: result.orderId, txHash: result.txHash });
+      if (storeKey) setActiveOrder(storeKey, { orderId: result.orderId, txHash: result.txHash });
       opts.onOrderPlaced?.(result.orderId, result.txHash);
     } catch (err: any) {
       dispatch({ type: "ERROR", message: err?.shortMessage || err?.message || "Failed to place order" });
@@ -398,6 +546,7 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
       });
       const { hash } = await opts.signer.sendTransaction({ to: opts.diamondAddress, data, gasLimit: 300000 });
       await publicClient.waitForTransactionReceipt({ hash });
+      if (storeKey) removeActiveOrder(storeKey);
       dispatch({ type: "CANCELLED" }); opts.onCancel?.(state.orderId);
     } catch (err: any) {
       // Inline-only: keep the accepted-screen context so the user sees what

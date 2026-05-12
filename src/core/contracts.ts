@@ -1,6 +1,15 @@
 import { createPublicClient, decodeEventLog, formatUnits, http } from "viem";
 import { base, baseSepolia } from "viem/chains";
 
+// ─── Diamond ABI ──────────────────────────────────────────────────────
+//
+// Only Diamond-level reads/writes ship in this package. Integrator-specific
+// ABIs (MarketplaceCheckoutIntegrator, LotPotCheckoutIntegrator, etc.) live
+// with the host app — the widgets accept callbacks that encode whatever
+// integrator-specific tx the host needs to submit. See README §"Implementing
+// offramp callbacks" + the merchant-app's `marketplace.tsx` for the
+// canonical pattern.
+
 const ORDER_TUPLE = {
   name: "",
   type: "tuple",
@@ -112,6 +121,13 @@ export const DIAMOND_ABI = [
 export const DEFAULT_DIAMOND_ADDRESS = "0xeb0BB8E3c014D915D9B2df03aBB130a1Fb44beb9" as `0x${string}`;
 export const USDC_DECIMALS = 6;
 
+// ─── V2 integrator event helper (convenience, not Diamond) ───────────
+//
+// Decodes `CheckoutOrderCreated` / `B2BOrderPlaced` — the two events V2-shaped
+// integrators emit when placing a buy order. Exported so hosts using a
+// V2-style integrator can drop it straight into their `placeOrder` callback.
+// Integrators that emit different events should parse the receipt themselves.
+
 const CHECKOUT_ORDER_CREATED_EVENT = {
   type: "event" as const,
   name: "CheckoutOrderCreated",
@@ -135,11 +151,6 @@ const B2B_ORDER_PLACED_EVENT = {
   ],
 };
 
-/**
- * Convenience: parse orderId from a tx receipt containing
- * CheckoutOrderCreated or B2BOrderPlaced events. Clients using
- * standard integrators can use this in their placeOrder callback.
- */
 export function parseOrderIdFromReceipt(receipt: { logs: readonly { data: `0x${string}`; topics: readonly `0x${string}`[] }[] }): string | null {
   for (const log of receipt.logs) {
     try {
@@ -156,126 +167,11 @@ export function parseOrderIdFromReceipt(receipt: { logs: readonly { data: `0x${s
   return null;
 }
 
-// ─── Offramp ABIs ────────────────────────────────────────────────────
-
-const OFFRAMP_INITIATED_EVENT = {
-  type: "event" as const,
-  name: "OfframpInitiated",
-  inputs: [
-    { name: "orderId", type: "uint256", indexed: true },
-    { name: "user", type: "address", indexed: true },
-    { name: "client", type: "address", indexed: true },
-    { name: "tokenId", type: "uint256", indexed: false },
-    { name: "productId", type: "uint256", indexed: false },
-    { name: "usdcAmount", type: "uint256", indexed: false },
-  ],
-};
-
-export const MARKETPLACE_INTEGRATOR_ABI = [
-  {
-    name: "userInitiateSellBack",
-    type: "function",
-    stateMutability: "nonpayable",
-    inputs: [
-      { name: "client", type: "address" },
-      { name: "tokenId", type: "uint256" },
-      { name: "currency", type: "bytes32" },
-      { name: "fiatAmount", type: "uint256" },
-      { name: "circleId", type: "uint256" },
-      { name: "preferredPaymentChannelConfigId", type: "uint256" },
-      { name: "userPubKey", type: "string" },
-    ],
-    outputs: [{ name: "orderId", type: "uint256" }],
-  },
-  {
-    name: "deliverOfframpUpi",
-    type: "function",
-    stateMutability: "nonpayable",
-    inputs: [
-      { name: "orderId", type: "uint256" },
-      { name: "encUpi", type: "string" },
-    ],
-    outputs: [],
-  },
-  {
-    name: "reconcile",
-    type: "function",
-    stateMutability: "nonpayable",
-    inputs: [
-      { name: "orderId", type: "uint256" },
-      { name: "currentStatus", type: "uint8" },
-    ],
-    outputs: [],
-  },
-  {
-    name: "proxyAddress",
-    type: "function",
-    stateMutability: "view",
-    inputs: [{ name: "user", type: "address" }],
-    outputs: [{ name: "", type: "address" }],
-  },
-  {
-    name: "offrampEnabled",
-    type: "function",
-    stateMutability: "view",
-    inputs: [],
-    outputs: [{ name: "", type: "bool" }],
-  },
-  OFFRAMP_INITIATED_EVENT,
-] as const;
-
-export const MARKETPLACE_CLIENT_ABI = [
-  {
-    name: "ownerOf",
-    type: "function",
-    stateMutability: "view",
-    inputs: [{ name: "tokenId", type: "uint256" }],
-    outputs: [{ name: "", type: "address" }],
-  },
-  {
-    name: "tokenPrice",
-    type: "function",
-    stateMutability: "view",
-    inputs: [{ name: "tokenId", type: "uint256" }],
-    outputs: [{ name: "", type: "uint256" }],
-  },
-  {
-    name: "tokenProduct",
-    type: "function",
-    stateMutability: "view",
-    inputs: [{ name: "tokenId", type: "uint256" }],
-    outputs: [{ name: "", type: "uint256" }],
-  },
-  {
-    name: "balanceOf",
-    type: "function",
-    stateMutability: "view",
-    inputs: [{ name: "owner", type: "address" }],
-    outputs: [{ name: "", type: "uint256" }],
-  },
-] as const;
-
-export const USER_PROXY_ABI = [
-  {
-    name: "sweepERC721",
-    type: "function",
-    stateMutability: "nonpayable",
-    inputs: [
-      { name: "token", type: "address" },
-      { name: "tokenId", type: "uint256" },
-    ],
-    outputs: [],
-  },
-  {
-    name: "owner",
-    type: "function",
-    stateMutability: "view",
-    inputs: [],
-    outputs: [{ name: "", type: "address" }],
-  },
-] as const;
-
-// ─── Integrator read helpers ─────────────────────────────────────────
+// ─── Common integrator interface helpers ─────────────────────────────
+//
+// `userTxLimit()` is the one selector our integrator templates all expose
+// (returns the per-tx USDC cap in 6-dec). Useful as a sanity check before
+// the host submits placeOrder — kept here as a documented convenience.
 
 export const INTEGRATOR_LIMITS_ABI = [
   {
@@ -310,13 +206,26 @@ export async function fetchUserTxLimit(
   return { raw, formatted: formatUnits(raw, decimals) };
 }
 
-/** Parse orderId from an OfframpInitiated event in a receipt. */
-export function parseOfframpOrderIdFromReceipt(receipt: { logs: readonly { data: `0x${string}`; topics: readonly `0x${string}`[] }[] }): string | null {
-  for (const log of receipt.logs) {
-    try {
-      const d = decodeEventLog({ abi: [OFFRAMP_INITIATED_EVENT], data: log.data, topics: log.topics as any });
-      if (d.eventName === "OfframpInitiated") return (d.args as any).orderId.toString();
-    } catch {}
-  }
-  return null;
-}
+// ─── ERC20 read fragment ─────────────────────────────────────────────
+//
+// Just the read selectors `balanceOf` + `decimals`. The widget uses this to
+// render an optional "you have X USDC available" affordance on the
+// amount-input offramp. Approve/transfer are intentionally absent — those
+// go to integrator-specific code (host concern).
+
+export const ERC20_READ_ABI = [
+  {
+    name: "balanceOf",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "owner", type: "address" }],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    name: "decimals",
+    type: "function",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint8" }],
+  },
+] as const;

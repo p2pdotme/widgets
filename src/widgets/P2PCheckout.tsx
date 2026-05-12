@@ -8,7 +8,7 @@ import { color, radius, font, weight, shadow, S, themeToCssVars } from "../ui/th
 import { Modal } from "../ui/Modal";
 import {
   Spinner, PulseDot, CenterStatus, SuccessIcon, XIcon,
-  CopyRow, Stepper, CountdownRing, injectKeyframes,
+  CopyRow, Stepper, CountdownRing, Skeleton, injectKeyframes,
 } from "../ui/components";
 
 // Window the user has to pay after a merchant accepts before auto-cancellation.
@@ -122,11 +122,17 @@ export function P2PCheckout(props: P2PCheckoutProps) {
   })();
 
   // True while we expect a breakdown but the on-chain price config hasn't
-  // arrived. Gates the "Pay now" button so the user can't fire the order
-  // before they've seen what they're paying. Releases when the breakdown
-  // materializes OR the fetch fails (so a bad RPC doesn't strand the user).
+  // arrived OR the fetched config is for a different currency than the
+  // user just picked. Gates the "Pay now" button so the user can't fire
+  // the order before they've seen what they're paying, and also drives
+  // the skeleton placeholders in the breakdown — otherwise the numbers
+  // would render with the previous currency's pricing under the newly
+  // selected currency's symbol for a frame.
+  // Releases when state.currency catches up OR the fetch fails (so a
+  // bad RPC doesn't strand the user).
   const isQuotePending = Boolean(
-    !demo && usdcAmount && selectedCurrency && !preview && !state.priceConfigFailed
+    !demo && usdcAmount && selectedCurrency && !state.priceConfigFailed &&
+    (!preview || state.currency !== selectedCurrency.symbol)
   );
 
   // Post-order breakdown — derived from on-chain `actualFiatAmount` (already
@@ -204,7 +210,8 @@ export function P2PCheckout(props: P2PCheckoutProps) {
                     type="button"
                     onClick={() => setDropdownOpen((o) => !o)}
                     style={{
-                      width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
+                      width: "100%", boxSizing: "border-box",
+                      display: "flex", alignItems: "center", justifyContent: "space-between",
                       gap: 10, padding: "12px 14px", borderRadius: radius.md,
                       border: `1px solid ${color.border}`, background: color.surface,
                       color: color.text, fontSize: font.base, fontWeight: weight.medium, cursor: "pointer",
@@ -234,7 +241,8 @@ export function P2PCheckout(props: P2PCheckoutProps) {
                           <button key={c.symbol} type="button"
                             onClick={() => { setSelectedCurrency(c); setDropdownOpen(false); }}
                             style={{
-                              width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
+                              width: "100%", boxSizing: "border-box",
+                      display: "flex", alignItems: "center", justifyContent: "space-between",
                               gap: 10, padding: "12px 14px", border: "none",
                               background: active ? color.accentSoft : "transparent",
                               color: color.text, fontSize: font.base, fontWeight: weight.medium,
@@ -261,17 +269,25 @@ export function P2PCheckout(props: P2PCheckoutProps) {
                 </div>
               </div>
             )}
-            {preview && (
+            {/* Pre-order breakdown is only useful when there's a fee on top
+                of the order amount — otherwise subtotal === total and the
+                user just sees the same number twice. During the loading
+                window we don't yet know the fee, so the skeleton block is
+                shown speculatively and collapses to nothing if it turns
+                out the fee is zero. */}
+            {(isQuotePending || (preview && preview.fee)) && (
               <div style={{ marginBottom: 16, padding: "14px 16px", background: color.surfaceAlt, borderRadius: radius.md, border: `1px solid ${color.border}` }}>
                 <div style={S.rowBetween}>
                   <span style={S.label}>Subtotal</span>
-                  <span style={{ ...S.body, ...S.num }}>{preview.symbol} {preview.subtotal}</span>
+                  {isQuotePending
+                    ? <Skeleton width={84} />
+                    : <span style={{ ...S.body, ...S.num }}>{preview!.symbol} {preview!.subtotal}</span>}
                 </div>
-                {preview.fee && (
+                {!isQuotePending && preview!.fee && (
                   <>
                     <div style={{ ...S.rowBetween, marginTop: 8 }}>
                       <span style={S.label}>Transaction Fee</span>
-                      <span style={{ ...S.body, ...S.num, color: color.textMuted }}>{preview.symbol} {preview.fee}</span>
+                      <span style={{ ...S.body, ...S.num, color: color.textMuted }}>{preview!.symbol} {preview!.fee}</span>
                     </div>
                     <p style={{ ...S.faint, margin: "4px 0 0", lineHeight: 1.4 }}>
                       Waived on orders above {thresholdLabel}.
@@ -280,9 +296,9 @@ export function P2PCheckout(props: P2PCheckoutProps) {
                 )}
                 <div style={{ ...S.rowBetween, marginTop: 10, paddingTop: 10, borderTop: `1px solid ${color.border}` }}>
                   <span style={{ ...S.label, color: color.text, fontWeight: weight.semibold }}>Total</span>
-                  <span style={{ ...S.body, fontWeight: weight.bold, ...S.num }}>
-                    {preview.symbol} {preview.total}
-                  </span>
+                  {isQuotePending
+                    ? <Skeleton width={100} height={16} />
+                    : <span style={{ ...S.body, fontWeight: weight.bold, ...S.num }}>{preview!.symbol} {preview!.total}</span>}
                 </div>
               </div>
             )}
