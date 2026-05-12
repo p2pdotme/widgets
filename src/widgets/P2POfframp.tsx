@@ -12,6 +12,7 @@ import {
   SuccessIcon,
   XIcon,
   Stepper,
+  Skeleton,
   injectKeyframes,
 } from "../ui/components";
 import { PaymentAddressInput } from "../ui/PaymentAddressInput";
@@ -51,13 +52,15 @@ export function P2POfframp(props: P2POfframpProps) {
   const dropdownRef = useRef<HTMLDivElement>(null);
   const [balance, setBalance] = useState<bigint | null>(null);
 
-  // Per-currency on-chain quote — `sellPrice` (fiat-per-USDC, 6-dec) + the
-  // small-order fee config. Drives the pre-order fiat breakdown so the user
-  // sees their net receivable in fiat before signing. Same pattern as the
-  // buy widget's `getPriceConfig` fetch.
+  // Per-currency on-chain quote — `sellPrice` (fiat-per-USDC, 6-dec). The
+  // Diamond's `getFeeAndActualAmounts` does NOT deduct the small-order fee
+  // from `actualFiatAmount` for SELL orders — the fee is paid in USDC by
+  // the integrator's pool, not from the user's fiat receipt. So the user's
+  // "you receive" is just `principal * sellPrice`. We still track the
+  // selected currency on `priceCurrency` so we can detect a stale quote
+  // after the dropdown changes (skeleton placeholders during refetch).
   const [sellPrice, setSellPrice] = useState<bigint | null>(null);
-  const [smallOrderThreshold, setSmallOrderThreshold] = useState<bigint | null>(null);
-  const [smallOrderFixedFee, setSmallOrderFixedFee] = useState<bigint | null>(null);
+  const [priceCurrency, setPriceCurrency] = useState<string | null>(null);
   const [priceConfigFailed, setPriceConfigFailed] = useState(false);
 
   useEffect(() => {
@@ -69,15 +72,13 @@ export function P2POfframp(props: P2POfframpProps) {
     const currencyHex = stringToHex(selectedCurrency.symbol, { size: 32 });
     (async () => {
       try {
-        const [price, threshold, fee] = await Promise.all([
-          pc.readContract({ address: diamondAddress, abi: DIAMOND_ABI, functionName: "getPriceConfig", args: [currencyHex] }) as Promise<{ sellPrice: bigint }>,
-          pc.readContract({ address: diamondAddress, abi: DIAMOND_ABI, functionName: "getSmallOrderThreshold", args: [currencyHex] }) as Promise<bigint>,
-          pc.readContract({ address: diamondAddress, abi: DIAMOND_ABI, functionName: "getSmallOrderFixedFee", args: [currencyHex] }) as Promise<bigint>,
-        ]);
+        const price = (await pc.readContract({
+          address: diamondAddress, abi: DIAMOND_ABI,
+          functionName: "getPriceConfig", args: [currencyHex],
+        })) as { sellPrice: bigint };
         if (cancelled) return;
         setSellPrice(price.sellPrice);
-        setSmallOrderThreshold(threshold);
-        setSmallOrderFixedFee(fee);
+        setPriceCurrency(selectedCurrency.symbol);
       } catch {
         if (!cancelled) setPriceConfigFailed(true);
       }
@@ -142,27 +143,28 @@ export function P2POfframp(props: P2POfframpProps) {
     : null;
   const insufficientBalance = parsedAmount !== null && balance !== null && parsedAmount > balance;
 
-  // Pre-order fiat preview. Mirror the P2POfframp logic — fee deducted from
-  // the fiat the user receives.
-  const thresholdLabel = smallOrderThreshold !== null
-    ? `${Number(smallOrderThreshold) / 1e6} USDC`
-    : "10 USDC";
+  // Pre-order fiat preview. For SELL the user receives `principal *
+  // sellPrice` — no fee deduction. The protocol's small-order fee is
+  // charged in USDC on the integrator side (via additionalOrderDetails
+  // .actualUsdtAmount = amount + fee, pulled from the system proxy), so
+  // it never affects the user's fiat receipt. Matches the post-PAID
+  // "watch for X" message + the COMPLETED summary so the user sees the
+  // same number end-to-end.
   const preview = (() => {
     if (!parsedAmount || !sellPrice) return null;
     const subtotalFiat = (parsedAmount * sellPrice) / 1_000_000n;
-    const feeUsdc =
-      smallOrderThreshold !== null && smallOrderFixedFee !== null &&
-      parsedAmount <= smallOrderThreshold ? smallOrderFixedFee : 0n;
-    const feeFiat = (feeUsdc * sellPrice) / 1_000_000n;
-    const netFiat = subtotalFiat > feeFiat ? subtotalFiat - feeFiat : subtotalFiat;
     return {
       subtotal: (Number(subtotalFiat) / 1e6).toFixed(2),
-      fee: feeFiat > 0n ? (Number(feeFiat) / 1e6).toFixed(2) : null,
-      net: (Number(netFiat) / 1e6).toFixed(2),
       symbol: selectedCurrency.symbol,
     };
   })();
-  const isQuotePending = Boolean(parsedAmount && !sellPrice && !priceConfigFailed);
+  // Pending = currency selected but on-chain quote not yet for that currency
+  // (initial load OR mid-switch). Drives the breakdown skeleton + gates
+  // the Withdraw button.
+  const isQuotePending = Boolean(
+    parsedAmount && !priceConfigFailed &&
+    (!sellPrice || priceCurrency !== selectedCurrency.symbol),
+  );
 
   const canSubmit = paymentValid && parsedAmount !== null && !insufficientBalance && !isQuotePending;
 
@@ -320,28 +322,19 @@ export function P2POfframp(props: P2POfframpProps) {
               </div>
             )}
 
-            {preview && (
+            {/* On-chain SELL has no fiat-side fee deduction (the protocol's
+                small-order fee is paid in USDC by the integrator pool), so
+                this card just surfaces what the user will receive. During
+                a currency switch the skeleton holds the layout so the
+                previous currency's number can't flash under the new
+                symbol. */}
+            {(isQuotePending || preview) && (
               <div style={{ marginBottom: 16, padding: "14px 16px", background: color.surfaceAlt, borderRadius: radius.md, border: `1px solid ${color.border}` }}>
                 <div style={S.rowBetween}>
-                  <span style={S.label}>Subtotal</span>
-                  <span style={{ ...S.body, ...S.num }}>{preview.symbol} {preview.subtotal}</span>
-                </div>
-                {preview.fee && (
-                  <>
-                    <div style={{ ...S.rowBetween, marginTop: 8 }}>
-                      <span style={S.label}>Transaction Fee</span>
-                      <span style={{ ...S.body, ...S.num, color: color.textMuted }}>− {preview.symbol} {preview.fee}</span>
-                    </div>
-                    <p style={{ ...S.faint, margin: "4px 0 0", lineHeight: 1.4 }}>
-                      Waived on orders above {thresholdLabel}.
-                    </p>
-                  </>
-                )}
-                <div style={{ ...S.rowBetween, marginTop: 10, paddingTop: 10, borderTop: `1px solid ${color.border}` }}>
                   <span style={{ ...S.label, color: color.text, fontWeight: weight.semibold }}>You receive</span>
-                  <span style={{ ...S.body, fontWeight: weight.bold, ...S.num }}>
-                    {preview.symbol} {preview.net}
-                  </span>
+                  {isQuotePending
+                    ? <Skeleton width={110} height={16} />
+                    : <span style={{ ...S.body, fontWeight: weight.bold, ...S.num }}>{preview!.symbol} {preview!.subtotal}</span>}
                 </div>
               </div>
             )}
@@ -370,7 +363,7 @@ export function P2POfframp(props: P2POfframpProps) {
                   Loading quote…
                 </>
               ) : preview ? (
-                `Withdraw ${preview.symbol} ${preview.net}`
+                `Withdraw ${preview.symbol} ${preview.subtotal}`
               ) : (
                 "Withdraw"
               )}
@@ -399,7 +392,7 @@ export function P2POfframp(props: P2POfframpProps) {
                 <CenterStatus
                   icon={<PulseDot />}
                   title="Finding a merchant"
-                  subtitle={`Order #${state.orderId}: A P2P merchant will be assigned to receive the USDC and pay you in your local currency. This is a manual swap process and may take 2–3 minutes to complete. We appreciate your patience.`}
+                  subtitle={`Order #${state.orderId}: A P2P merchant will be assigned to receive your ${usdcDisplay ?? ""} USDC and pay${state.currency ? ` ${state.currency.symbol}` : ""} into your ${state.currency?.paymentMethod ?? "account"} on your behalf. Please note that this is a manual swap process and may take 2–3 minutes to complete. We appreciate your patience.`}
                 />
               )}
 
