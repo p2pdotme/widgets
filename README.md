@@ -269,8 +269,10 @@ What the widget does, in order:
 
 1. Reads the user's USDC balance for the "Max" affordance + insufficient-
    balance hint (standard ERC20 `balanceOf` — no integrator dependency).
-2. Reads `getPriceConfig(currency).sellPrice` + small-order fee config
-   from the Diamond, renders the **fiat breakdown** on the form.
+2. Reads `getPriceConfig(currency).sellPrice` from the Diamond, renders
+   the "You receive" preview as `principal × sellPrice` (subtotal). The
+   protocol's small-order fee is paid in USDC by the integrator's pool
+   on the SELL side — it does **not** come out of the user's fiat receipt.
 3. On submit, if the selected currency has no `circleId`, calls
    `@p2pdotme/sdk` `placeOrder.prepare({ orderType: 1, … })` and harvests
    `prepared.meta.circleId`. Diamond-level operation — no integrator code.
@@ -281,6 +283,39 @@ What the widget does, in order:
    **`deliverUpi`** — host submits the integrator's `deliverOfframpUpi`.
 6. On `COMPLETED` (3) or `CANCELLED` (4), best-effort calls
    **`reconcile`** so the integrator can close out its bookkeeping.
+
+### Integrator contract — selectors the widget expects
+
+Your integrator needs three functions (names can be anything; the host
+adapter is the only place the widget learns the actual ABI). Together
+they bridge user wallet → Diamond:
+
+1. **place-offramp** — pulls `amount` USDC from `msg.sender`, places a
+   SELL on the Diamond as a B2B order via your system proxy, emits an
+   event carrying `orderId`. Reference: `LotPotCheckoutIntegrator
+   .userInitiateOfframp` in `p2p-checkout/contracts`.
+
+2. **deliver-upi** — reads `getAdditionalOrderDetails(orderId)
+   .actualUsdtAmount` (= principal + fee in USDC) from the Diamond,
+   funds the system proxy with that amount, then has the proxy call
+   `setSellOrderUpi(orderId, encUpi, 0)`. The widget passes the
+   encrypted UPI blob in — your function never sees a plaintext address.
+
+3. **reconcile** *(optional)* — once the Diamond reaches `COMPLETED`
+   (3) or `CANCELLED` (4), sweeps any leftover USDC from the system
+   proxy (cancellations refund the principal here) and updates your
+   integrator's local order record. Skip if you don't keep bookkeeping
+   on the integrator.
+
+The widget itself never imports these ABIs. Your host wraps them in
+the three callbacks described next.
+
+> **Pool funding note.** The Diamond pulls `actualUsdtAmount` (principal
+> + fee) at `setSellOrderUpi`. `userInitiateOfframp` only pulls the
+> principal from the user. The fee comes from the integrator's USDC
+> balance (the "pool"). On a fresh deploy, top up the integrator's USDC
+> by at least a few hundred small-order fees, or `placeOfframp` will
+> revert with `OfframpInsufficientPool` on the first user.
 
 ### Offramp callback contract
 
@@ -830,7 +865,9 @@ wire the read into your own wagmi/viem setup (`useReadContract`, etc.).
 
 ## Order lifecycle (what the widget shows)
 
-| `phase` (buy) | When it's set | What's on screen |
+### Buy (`<P2PCheckout>`)
+
+| `phase` | When it's set | What's on screen |
 |---|---|---|
 | `checkout` | Initial render with a `placeOrder` callback | Pre-order screen: amount, product, currency picker, **fiat breakdown**, "Pay {total}" button |
 | `placing` | `placeOrder` running (incl. SDK routing) | "Placing order…" with spinner |
@@ -841,8 +878,83 @@ wire the read into your own wagmi/viem setup (`useReadContract`, etc.).
 | `cancelled` | order = `CANCELLED` | "Order cancelled / refunded" with **Done** button → fires `onCancel` |
 | `error` | Pre-order placement failure | Error message + retry/close → fires `onError`. Failures during `accepted`/`paid` actions (cancel, mark-paid) stay on-screen with an inline error — they don't reset the phase. |
 
-Sell-back (offramp) phases: `form` → `sweeping?` → `placing` → `placed` →
-`accepted` → `encrypting` → `paid` → `completed` (or `cancelled`).
+### Offramp (`<P2POfframp>`)
+
+| `phase` | When it's set | What's on screen |
+|---|---|---|
+| `form` | Initial render | Amount input (with balance + Max), currency picker, **"You receive X" preview**, payment-address input, "Withdraw {amount}" button |
+| `placing` | `placeOfframp` running (incl. SDK routing + preflight) | "Submitting withdrawal…" with spinner |
+| `placed` | place-offramp tx confirmed; order = `PLACED` | "Finding a merchant" — polls every 3 s |
+| `accepted` | order = `ACCEPTED` | "Sending payment details" — widget encrypts the payment address against the merchant's on-chain pubkey, then immediately calls `deliverUpi` |
+| `encrypting` | encrypt + `deliverUpi` running | Same screen as `accepted`, spinner |
+| `paid` | order = `PAID` (Diamond pulled USDC) | "Watch for {fiat} arriving via {paymentMethod}" — polls every 8 s for completion |
+| `completed` | order = `COMPLETED` (merchant marked done) | "Withdrawn!" success screen → fires `onComplete`; widget then fires optional `reconcile` callback best-effort |
+| `cancelled` | order = `CANCELLED` (refund) | "Order cancelled — USDC refunded" → fires `onCancelled`; `reconcile` fired best-effort |
+| `error` | Encrypt / deliver / placement failure | If `orderId` exists → retry-from-accepted screen. Otherwise → "Couldn't place withdrawal" with **Back to form**. |
+
+### Offramp flowchart
+
+```
+                              ┌──────────┐
+                              │   form   │  user picks currency,
+                              └────┬─────┘  amount, payment address
+                                   │ submit
+                                   ▼
+              widget: SDK routes circleId (Diamond-level)
+              host:   approve USDC + place-offramp tx → orderId
+                                   │
+                                   ▼
+                              ┌──────────┐
+                              │ placing  │
+                              └────┬─────┘
+                                   │ placeOfframp returns
+                                   ▼
+                              ┌──────────┐  poll every 3 s
+                              │  placed  │  ← merchant pool considers
+                              └────┬─────┘
+                                   │ Diamond: ACCEPTED
+                                   ▼
+              widget: encrypt payment-address against merchant pubkey
+              host:   deliverUpi(orderId, encryptedBlob)
+                                   │
+                                   ▼
+                              ┌──────────┐
+                              │encrypting│
+                              └────┬─────┘
+                                   │ Diamond pulls USDC → PAID
+                                   ▼
+                              ┌──────────┐  poll every 8 s
+                              │   paid   │  ← merchant pays fiat
+                              └────┬─────┘     off-chain
+                                   │ merchant calls completeOrder
+                                   ▼
+                              ┌──────────┐
+                              │completed │  widget: reconcile(3) best-effort
+                              └──────────┘
+
+   ─ cancellation path (any non-terminal phase) ─
+   Diamond auto-cancels on timeout (3 min PLACED / 30 min ACCEPTED|PAID).
+   USDC refunded to the user automatically; widget shows the cancelled
+   screen and fires reconcile(4) best-effort.
+```
+
+### What lives where
+
+| | Widget (`@p2pdotme/checkout-widget`) | Host (your app) |
+|---|---|---|
+| Diamond reads (status, price config, additional details) | ✅ | — |
+| SDK circle routing via `placeOrder.prepare` | ✅ | — |
+| Payment-address encryption against merchant pubkey | ✅ | — |
+| Status polling + state-machine UI | ✅ | — |
+| Resume-on-Pay + localStorage caching (buy) | ✅ | — |
+| `userInitiateOfframp` / equivalent tx + ABI | — | ✅ |
+| `deliverOfframpUpi` / equivalent tx + ABI | — | ✅ |
+| `reconcile` / equivalent tx + ABI | — | ✅ |
+| USDC `approve` to integrator | — | ✅ |
+| OrderId event parsing from receipt | — | ✅ |
+
+The widget never imports an integrator-specific ABI — all integrator I/O
+flows through the three host callbacks. That's the bright line.
 
 ---
 
