@@ -3,9 +3,12 @@ export { P2POfframp } from "./widgets/P2POfframp";
 export { P2POrderHistory, type P2POrderHistoryProps } from "./widgets/P2POrderHistory";
 export {
   parseOrderIdFromReceipt,
-  parseOfframpOrderIdFromReceipt,
   fetchUserTxLimit,
   INTEGRATOR_LIMITS_ABI,
+  ERC20_READ_ABI,
+  DIAMOND_ABI,
+  DEFAULT_DIAMOND_ADDRESS,
+  USDC_DECIMALS,
 } from "./core/contracts";
 export { useUserTxLimit } from "./hooks/useUserTxLimit";
 export type {
@@ -30,6 +33,10 @@ export type {
   OfframpPhase,
   PlaceOrderResult,
   PlaceOrderContext,
+  PlaceOfframpContext,
+  PlaceOfframpResult,
+  DeliverUpiContext,
+  ReconcileContext,
   CurrencyOption,
   PaymentAddressValidator,
   ScreeningConfig,

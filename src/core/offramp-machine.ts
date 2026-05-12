@@ -1,5 +1,5 @@
 import { useReducer, useCallback, useEffect, useMemo, useRef } from "react";
-import { createPublicClient, http, encodeFunctionData } from "viem";
+import { createPublicClient, http } from "viem";
 import { baseSepolia, base } from "viem/chains";
 import {
   createOrders,
@@ -7,24 +7,30 @@ import {
   createRelayIdentity,
   type OrdersClient,
 } from "@p2pdotme/sdk/orders";
-import type { CheckoutSigner, CurrencyOption, OfframpPhase } from "../types";
-import {
-  MARKETPLACE_INTEGRATOR_ABI,
-  MARKETPLACE_CLIENT_ABI,
-  USER_PROXY_ABI,
-  DIAMOND_ABI,
-  parseOfframpOrderIdFromReceipt,
-} from "./contracts";
+import type {
+  CheckoutSigner, CurrencyOption, OfframpPhase,
+  PlaceOfframpContext, PlaceOfframpResult,
+  DeliverUpiContext, ReconcileContext,
+} from "../types";
+import { DIAMOND_ABI } from "./contracts";
 
 /**
- * State machine for the offramp (sell-back) flow. Mirrors how user-app-spa
- * structures its sell flow:
- *   - SDK orders client (createOrders) holds the relay identity in
- *     localStorage and exposes encryptPaymentAddress + getOrder.
- *   - Encryption runs through the SDK so it picks up the same crypto
- *     primitives + relay identity that production uses.
- *   - The integrator-mediated wrapper layer (userInitiateSellBack +
- *     deliverOfframpUpi) is widget-specific.
+ * Callback-based offramp state machine. Widget-side responsibilities:
+ *   - Auto-route circleId via SDK (Diamond-level; uses subgraph)
+ *   - Mint a relay identity & supply userPubKey
+ *   - Encrypt the user's payment address against the merchant's chain pubkey
+ *   - Poll Diamond status (PLACED → ACCEPTED → PAID → COMPLETED/CANCELLED)
+ *   - Drive the visual state machine
+ *
+ * Host-side responsibilities (via callbacks):
+ *   - `placeOfframp`   — approve USDC, submit the integrator-specific
+ *                        userInitiateOfframp / equivalent tx, parse the
+ *                        receipt for an orderId.
+ *   - `deliverUpi`     — submit the integrator's deliverOfframpUpi (the
+ *                        widget hands over the already-encrypted blob).
+ *   - `reconcile`      — optional. Submit the integrator's reconcile() so
+ *                        the integrator's local order state catches up to
+ *                        the Diamond. Skip if your integrator doesn't need it.
  */
 interface OfframpState {
   phase: OfframpPhase;
@@ -38,9 +44,8 @@ interface OfframpState {
 }
 
 type OfframpAction =
-  | { type: "SWEEPING" }
-  | { type: "PLACING"; currency: CurrencyOption; paymentAddress: string }
-  | { type: "PLACED"; orderId: string; txHash: string; usdcAmount: bigint }
+  | { type: "PLACING"; currency: CurrencyOption; paymentAddress: string; usdcAmount: bigint }
+  | { type: "PLACED"; orderId: string; txHash: string }
   | { type: "ACCEPTED" }
   | { type: "ENCRYPTING" }
   | { type: "PAID"; fiatAmount: bigint }
@@ -57,9 +62,8 @@ const INITIAL: OfframpState = {
 
 function reducer(s: OfframpState, a: OfframpAction): OfframpState {
   switch (a.type) {
-    case "SWEEPING": return { ...s, phase: "sweeping", error: null };
-    case "PLACING": return { ...s, phase: "placing", currency: a.currency, paymentAddress: a.paymentAddress, error: null };
-    case "PLACED": return { ...s, phase: "placed", orderId: a.orderId, txHash: a.txHash, usdcAmount: a.usdcAmount };
+    case "PLACING": return { ...s, phase: "placing", currency: a.currency, paymentAddress: a.paymentAddress, usdcAmount: a.usdcAmount, error: null };
+    case "PLACED": return { ...s, phase: "placed", orderId: a.orderId, txHash: a.txHash };
     case "ACCEPTED": return { ...s, phase: "accepted" };
     case "ENCRYPTING": return { ...s, phase: "encrypting" };
     case "PAID": return { ...s, phase: "paid", fiatAmount: a.fiatAmount };
@@ -72,20 +76,26 @@ function reducer(s: OfframpState, a: OfframpAction): OfframpState {
 }
 
 export interface UseOfframpMachineOpts {
-  integratorAddress: `0x${string}`;
-  marketplaceAddress: `0x${string}`;
-  tokenId: bigint;
-  signer: CheckoutSigner;
-  diamondAddress: `0x${string}`;
   usdcAddress: `0x${string}`;
+  diamondAddress: `0x${string}`;
+  signer: CheckoutSigner;
   chainId?: number;
   rpcUrl?: string;
+  /** Required when any `CurrencyOption.circleId` is omitted — used for SDK auto-routing. */
   subgraphUrl?: string;
+  /** Slippage floor on fiat amount; 0 = no check. */
   fiatAmountLimit?: bigint;
+
+  // ─── Host callbacks (integrator-specific) ────────────────────────────
+  placeOfframp: (ctx: PlaceOfframpContext) => Promise<PlaceOfframpResult>;
+  deliverUpi:   (ctx: DeliverUpiContext)   => Promise<{ txHash: string }>;
+  reconcile?:   (ctx: ReconcileContext)    => Promise<{ txHash: string }>;
+
+  // ─── Events ──────────────────────────────────────────────────────────
   onOrderPlaced?: (orderId: string, txHash: string) => void;
-  onComplete?: (orderId: string) => void;
-  onCancelled?: (orderId: string) => void;
-  onError?: (err: Error) => void;
+  onComplete?:    (orderId: string) => void;
+  onCancelled?:   (orderId: string) => void;
+  onError?:       (err: Error) => void;
 }
 
 export function useOfframpMachine(opts: UseOfframpMachineOpts) {
@@ -97,10 +107,9 @@ export function useOfframpMachine(opts: UseOfframpMachineOpts) {
     [chain, opts.rpcUrl]
   );
 
-  // SDK orders client — same pattern as user-app-spa's <SdkProvider>.
-  // Reuses the relay identity from localStorage so encrypt operations
-  // run through the production crypto path (and node-polyfills make
-  // crypto.getRandomValues reachable in the browser bundle).
+  // SDK orders client — used for the `placeOrder.prepare` auto-routing call
+  // (when host omits circleId) AND for encrypting the user's payment address
+  // against the merchant's on-chain pubkey at the ACCEPTED handoff.
   const ordersClient: OrdersClient = useMemo(
     () => createOrders({
       publicClient: publicClient as any,
@@ -112,99 +121,90 @@ export function useOfframpMachine(opts: UseOfframpMachineOpts) {
     [publicClient, opts.diamondAddress, opts.usdcAddress, opts.subgraphUrl]
   );
 
-  // ─── Pre-flight: ensure caller (or proxy → caller) owns the token ─
+  // ─── User submits the form ───────────────────────────────────────────
 
-  const ensureOwnedByCaller = useCallback(async (): Promise<void> => {
-    const owner = (await publicClient.readContract({
-      address: opts.marketplaceAddress, abi: MARKETPLACE_CLIENT_ABI as any,
-      functionName: "ownerOf", args: [opts.tokenId],
-    })) as `0x${string}`;
+  const submit = useCallback(
+    async (currency: CurrencyOption, paymentAddress: string, usdcAmount: bigint) => {
+      // Transition to "placing" IMMEDIATELY so the form unmounts and the
+      // user sees the loading screen — the steps below (encryption preflight,
+      // SDK routing, host's approve+place txs) can each take several seconds
+      // and would otherwise leave the user staring at a disabled button
+      // with no feedback.
+      dispatch({ type: "PLACING", currency, paymentAddress, usdcAmount });
 
-    if (owner.toLowerCase() === opts.signer.address.toLowerCase()) return;
-
-    const proxyAddr = (await publicClient.readContract({
-      address: opts.integratorAddress, abi: MARKETPLACE_INTEGRATOR_ABI as any,
-      functionName: "proxyAddress", args: [opts.signer.address],
-    })) as `0x${string}`;
-
-    if (owner.toLowerCase() !== proxyAddr.toLowerCase()) {
-      throw new Error(
-        `Token ${opts.tokenId} is owned by ${owner} — neither your wallet nor your proxy.`
-      );
-    }
-
-    dispatch({ type: "SWEEPING" });
-    const data = encodeFunctionData({
-      abi: USER_PROXY_ABI, functionName: "sweepERC721",
-      args: [opts.marketplaceAddress, opts.tokenId],
-    });
-    const { hash } = await opts.signer.sendTransaction({
-      to: proxyAddr, data, gasLimit: 200_000,
-    });
-    await publicClient.waitForTransactionReceipt({ hash });
-  }, [opts, publicClient]);
-
-  // ─── Place sell-back ──────────────────────────────────────────────
-
-  const placeSell = useCallback(
-    async (currency: CurrencyOption, paymentAddress: string) => {
       try {
-        // Pre-flight the encryption stack BEFORE we burn the NFT. If the
-        // SDK's randomness path is broken in this environment, fail loudly
-        // here rather than after the burn has already happened.
+        // Pre-flight: verify the encryption stack works BEFORE the host
+        // pulls user funds. Surfaces broken crypto polyfills early.
         await preflightEncryption(ordersClient);
 
-        await ensureOwnedByCaller();
-        dispatch({ type: "PLACING", currency, paymentAddress });
+        // Auto-route circleId via the SDK if the host didn't pin one.
+        // Diamond-level operation — no integrator code involved.
+        let resolvedCircleId = currency.circleId;
+        if (resolvedCircleId === undefined) {
+          if (!opts.subgraphUrl) {
+            throw new Error(
+              "Offramp routing requires either CurrencyOption.circleId or `subgraphUrl` (so the SDK can pick a merchant)."
+            );
+          }
+          const prepared = await ordersClient.placeOrder.prepare({
+            orderType: 1, // SELL
+            currency: currency.symbol as any,
+            user: opts.signer.address,
+            amount: usdcAmount,
+            // SELL routing uses fiatAmount as an eligibility floor. 0n
+            // disables the filter; host can pin a real number via
+            // `fiatAmountLimit` opt to restrict to merchants that can settle
+            // at that fiat size.
+            fiatAmount: opts.fiatAmountLimit ?? 0n,
+            // recipientAddr unused for SELL; SDK still requires the field.
+            recipientAddr: opts.signer.address,
+            preferredPaymentChannelConfigId: currency.paymentChannelConfigId ?? 0n,
+          });
+          if (prepared.isErr()) {
+            // Wrap the SDK's terse "No eligible circles" with actionable
+            // guidance — pin a known good circleId, or check that a
+            // merchant bot is live for this currency.
+            const msg = prepared.error.message || String(prepared.error);
+            throw new Error(
+              `Can't find a merchant for ${currency.symbol} right now (${msg}). ` +
+              `Either no merchant is online, or this currency hasn't been routed yet. ` +
+              `Try a different currency, or pin CurrencyOption.circleId if you know one.`
+            );
+          }
+          resolvedCircleId = prepared.value.meta?.circleId;
+          if (resolvedCircleId === undefined) {
+            throw new Error(
+              `SDK routing returned no circleId for ${currency.symbol}. ` +
+              `Pin CurrencyOption.circleId or contact the protocol team.`
+            );
+          }
+        }
 
-        const unitPrice = (await publicClient.readContract({
-          address: opts.marketplaceAddress, abi: MARKETPLACE_CLIENT_ABI as any,
-          functionName: "tokenPrice", args: [opts.tokenId],
-        })) as bigint;
-
-        // Stable user pubkey from the SDK's relay identity (lazily created
-        // + persisted in localStorage by the SDK).
+        // Host integrator txs need the user's relay pubkey (so merchants can
+        // encrypt their UPI back to the user later). Pull from SDK store.
         const userPubKey = await ensureRelayPubKey();
 
-        const data = encodeFunctionData({
-          abi: MARKETPLACE_INTEGRATOR_ABI, functionName: "userInitiateSellBack",
-          args: [
-            opts.marketplaceAddress,
-            opts.tokenId,
-            stringTo32(currency.symbol),
-            opts.fiatAmountLimit ?? 0n,
-            // Offramp does not yet auto-route. Callers must pass an explicit
-            // circleId on each CurrencyOption used with P2POfframp.
-            (() => {
-              if (currency.circleId === undefined) {
-                throw new Error("P2POfframp requires CurrencyOption.circleId to be set");
-              }
-              return currency.circleId;
-            })(),
-            0n,
-            userPubKey,
-          ],
+        // Hand off to the host. Host approves USDC + submits whatever
+        // integrator-specific tx places the SELL, then returns orderId.
+        const result = await opts.placeOfframp({
+          currency: { ...currency, circleId: resolvedCircleId },
+          paymentAddress,
+          usdcAmount,
+          userPubKey,
         });
 
-        const { hash } = await opts.signer.sendTransaction({
-          to: opts.integratorAddress, data, gasLimit: 1_000_000,
-        });
-        const receipt = await publicClient.waitForTransactionReceipt({ hash });
-        const orderId = parseOfframpOrderIdFromReceipt(receipt as any);
-        if (!orderId) throw new Error("Sell order placed but orderId not found in tx logs");
-
-        dispatch({ type: "PLACED", orderId, txHash: hash, usdcAmount: unitPrice });
-        opts.onOrderPlaced?.(orderId, hash);
+        dispatch({ type: "PLACED", orderId: result.orderId, txHash: result.txHash });
+        opts.onOrderPlaced?.(result.orderId, result.txHash);
       } catch (err: any) {
-        const message = err?.shortMessage || err?.message || "Failed to place sell order";
+        const message = err?.shortMessage || err?.message || "Failed to place offramp order";
         dispatch({ type: "ERROR", message });
         opts.onError?.(err);
       }
     },
-    [opts, publicClient, ordersClient, ensureOwnedByCaller]
+    [opts, ordersClient]
   );
 
-  // ─── Polling: PLACED → ACCEPTED → PAID → COMPLETED ────────────────
+  // ─── Polling: PLACED → ACCEPTED → PAID → COMPLETED ───────────────────
 
   const polling = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -214,38 +214,24 @@ export function useOfframpMachine(opts: UseOfframpMachineOpts) {
 
     dispatch({ type: "ENCRYPTING" });
 
-    // SDK encrypts the user's payment address with the merchant's pubkey,
-    // signed under the user's relay identity. Same call user-app-spa makes.
+    // SDK encrypts the user's payment address (UPI / PIX / etc) with the
+    // merchant's relay pubkey, signed under the user's relay identity.
     const encResult = await ordersClient.encryptPaymentAddress({
       paymentAddress: state.paymentAddress,
       recipientPublicKey: merchantPubkey,
     });
     if (encResult.isErr()) throw new Error(`Encrypt failed: ${encResult.error.message}`);
-    const encUpi = encResult.value;
 
-    const data = encodeFunctionData({
-      abi: MARKETPLACE_INTEGRATOR_ABI, functionName: "deliverOfframpUpi",
-      args: [BigInt(state.orderId), encUpi],
-    });
-    const { hash } = await opts.signer.sendTransaction({
-      to: opts.integratorAddress, data, gasLimit: 500_000,
-    });
-    await publicClient.waitForTransactionReceipt({ hash });
-  }, [state.paymentAddress, state.orderId, ordersClient, opts, publicClient]);
+    // Hand the encrypted blob to the host so they can submit the
+    // integrator's deliverOfframpUpi tx.
+    await opts.deliverUpi({ orderId: state.orderId, encryptedUpi: encResult.value });
+  }, [state.paymentAddress, state.orderId, ordersClient, opts]);
 
-  const reconcile = useCallback(async (status: number) => {
-    if (!state.orderId) return;
-    const data = encodeFunctionData({
-      abi: MARKETPLACE_INTEGRATOR_ABI, functionName: "reconcile",
-      args: [BigInt(state.orderId), status],
-    });
-    try {
-      const { hash } = await opts.signer.sendTransaction({
-        to: opts.integratorAddress, data, gasLimit: 200_000,
-      });
-      await publicClient.waitForTransactionReceipt({ hash });
-    } catch { /* best-effort */ }
-  }, [state.orderId, opts, publicClient]);
+  const runReconcile = useCallback(async (status: number) => {
+    if (!state.orderId || !opts.reconcile) return;
+    try { await opts.reconcile({ orderId: state.orderId, status }); }
+    catch { /* best-effort — Diamond status is the source of truth */ }
+  }, [state.orderId, opts]);
 
   const checkOrderStatus = useCallback(async () => {
     if (!state.orderId) return;
@@ -273,18 +259,18 @@ export function useOfframpMachine(opts: UseOfframpMachineOpts) {
       }
       if (numStatus === 3 && state.phase !== "completed") {
         dispatch({ type: "COMPLETED" });
-        reconcile(3).catch(() => {});
+        runReconcile(3);
         opts.onComplete?.(state.orderId);
         return;
       }
       if (numStatus === 4 && state.phase !== "cancelled") {
         dispatch({ type: "CANCELLED" });
-        reconcile(4).catch(() => {});
+        runReconcile(4);
         opts.onCancelled?.(state.orderId);
         return;
       }
     } catch { /* transient RPC */ }
-  }, [state.orderId, state.phase, publicClient, opts, encryptAndDeliver, reconcile]);
+  }, [state.orderId, state.phase, publicClient, opts, encryptAndDeliver, runReconcile]);
 
   useEffect(() => {
     if (polling.current) clearInterval(polling.current);
@@ -296,8 +282,9 @@ export function useOfframpMachine(opts: UseOfframpMachineOpts) {
   }, [state.phase, state.orderId, checkOrderStatus]);
 
   /**
-   * Re-attempt encrypt + deliver from the error screen. Useful if a polyfill
-   * issue corrected itself (page reload), or the wallet was disconnected.
+   * Re-attempt encrypt + deliver from the error screen. Useful if the
+   * encrypt path hiccupped (polyfill issue, wallet disconnect mid-tx) and
+   * the order is still ACCEPTED on chain.
    */
   const retryDeliver = useCallback(async () => {
     if (!state.orderId) return;
@@ -320,7 +307,7 @@ export function useOfframpMachine(opts: UseOfframpMachineOpts) {
 
   return {
     state,
-    placeSell,
+    submit,
     retryDeliver,
     canRetry: state.phase === "error" && state.orderId !== null,
     reset: () => dispatch({ type: "RESET" }),
@@ -329,12 +316,6 @@ export function useOfframpMachine(opts: UseOfframpMachineOpts) {
 
 // ─── helpers ─────────────────────────────────────────────────────────
 
-/**
- * Touch the SDK's encrypt path with throwaway inputs so any environment
- * issue (broken polyfill, missing crypto, etc.) surfaces *before* we burn
- * the NFT. Uses a fresh on-the-fly keypair as the recipient — guaranteed
- * to be a valid secp256k1 curve point.
- */
 async function preflightEncryption(ordersClient: OrdersClient): Promise<void> {
   const ephemeral = createRelayIdentity();
   const r = await ordersClient.encryptPaymentAddress({
@@ -349,15 +330,7 @@ async function preflightEncryption(ordersClient: OrdersClient): Promise<void> {
   }
 }
 
-/**
- * Read the SDK's relay identity (creates one if needed) and return the
- * uncompressed public key as a hex string — same shape merchant bots
- * encrypt against.
- */
 async function ensureRelayPubKey(): Promise<string> {
-  // The SDK persists this in localStorage via createLocalStorageRelayStore.
-  // We could also call ordersClient.getRelayIdentity but the SDK doesn't
-  // expose it directly; cleaner to read from the same store.
   const store = createLocalStorageRelayStore();
   let id = await store.get();
   if (!id) {
@@ -366,13 +339,4 @@ async function ensureRelayPubKey(): Promise<string> {
     await store.set(id);
   }
   return id.publicKey;
-}
-
-function stringTo32(s: string): `0x${string}` {
-  const hex = Array.from(new TextEncoder().encode(s))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("")
-    .padEnd(64, "0")
-    .slice(0, 64);
-  return `0x${hex}` as `0x${string}`;
 }

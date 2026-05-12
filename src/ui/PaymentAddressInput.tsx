@@ -52,6 +52,7 @@ export function PaymentAddressInput(props: PaymentAddressInputProps) {
         autoComplete="off"
         spellCheck={false}
         style={{
+          width: "100%", boxSizing: "border-box",
           height: 44,
           padding: "0 12px",
           background: color.surface,

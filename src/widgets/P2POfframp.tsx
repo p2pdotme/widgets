@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { createPublicClient, http, formatUnits } from "viem";
+import { createPublicClient, http, formatUnits, parseUnits, stringToHex } from "viem";
 import { baseSepolia, base } from "viem/chains";
 import type { P2POfframpProps, CurrencyOption } from "../types";
 import { useOfframpMachine } from "../core/offramp-machine";
@@ -15,16 +15,26 @@ import {
   injectKeyframes,
 } from "../ui/components";
 import { PaymentAddressInput } from "../ui/PaymentAddressInput";
-import { MARKETPLACE_CLIENT_ABI } from "../core/contracts";
+import { ERC20_READ_ABI, DIAMOND_ABI } from "../core/contracts";
 
 const USDC_DECIMALS = 6;
 
+/**
+ * P2POfframp — convert USDC the user holds on Base into local fiat. The
+ * widget orchestrates the Diamond-level lifecycle (auto-route circleId,
+ * poll status, encrypt UPI, drive UI). Integrator-specific work — USDC
+ * approve, the `userInitiateOfframp` / equivalent tx, the
+ * `deliverOfframpUpi` tx, optional `reconcile` — flows through the host
+ * callbacks (`placeOfframp`, `deliverUpi`, `reconcile`). The widget itself
+ * never imports an integrator ABI. See README §"Offramp callback contract"
+ * for the host-side recipe.
+ */
 export function P2POfframp(props: P2POfframpProps) {
   const {
-    integratorAddress, marketplaceAddress, tokenId, signer, currencies,
-    diamondAddress, usdcAddress, chainId = 84532, rpcUrl,
-    fiatAmountLimit, mode = "modal", open = true,
-    theme,
+    usdcAddress, diamondAddress, signer, currencies,
+    chainId = 84532, rpcUrl, subgraphUrl, fiatAmountLimit,
+    placeOfframp, deliverUpi, reconcile,
+    defaultAmountUsdc, mode = "modal", open = true, theme,
     onClose, onOrderPlaced, onComplete, onCancelled, onError,
   } = props;
   const themeStyle = themeToCssVars(theme);
@@ -34,22 +44,72 @@ export function P2POfframp(props: P2POfframpProps) {
   const [selectedCurrency, setSelectedCurrency] = useState<CurrencyOption>(currencies[0]);
   const [paymentAddress, setPaymentAddress] = useState("");
   const [paymentValid, setPaymentValid] = useState(false);
+  const [amountInput, setAmountInput] = useState<string>(
+    defaultAmountUsdc ? formatUnits(defaultAmountUsdc, USDC_DECIMALS) : ""
+  );
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
-  const [tokenPrice, setTokenPrice] = useState<bigint | null>(null);
-  const [showRefundConfirm, setShowRefundConfirm] = useState(false);
+  const [balance, setBalance] = useState<bigint | null>(null);
 
-  // Read the original token price upfront so the form shows "you'll receive X USDC".
+  // Per-currency on-chain quote — `sellPrice` (fiat-per-USDC, 6-dec) + the
+  // small-order fee config. Drives the pre-order fiat breakdown so the user
+  // sees their net receivable in fiat before signing. Same pattern as the
+  // buy widget's `getPriceConfig` fetch.
+  const [sellPrice, setSellPrice] = useState<bigint | null>(null);
+  const [smallOrderThreshold, setSmallOrderThreshold] = useState<bigint | null>(null);
+  const [smallOrderFixedFee, setSmallOrderFixedFee] = useState<bigint | null>(null);
+  const [priceConfigFailed, setPriceConfigFailed] = useState(false);
+
+  useEffect(() => {
+    if (!selectedCurrency?.symbol) return;
+    let cancelled = false;
+    setPriceConfigFailed(false);
+    const chain = chainId === 8453 ? base : baseSepolia;
+    const pc = createPublicClient({ chain, transport: http(rpcUrl) });
+    const currencyHex = stringToHex(selectedCurrency.symbol, { size: 32 });
+    (async () => {
+      try {
+        const [price, threshold, fee] = await Promise.all([
+          pc.readContract({ address: diamondAddress, abi: DIAMOND_ABI, functionName: "getPriceConfig", args: [currencyHex] }) as Promise<{ sellPrice: bigint }>,
+          pc.readContract({ address: diamondAddress, abi: DIAMOND_ABI, functionName: "getSmallOrderThreshold", args: [currencyHex] }) as Promise<bigint>,
+          pc.readContract({ address: diamondAddress, abi: DIAMOND_ABI, functionName: "getSmallOrderFixedFee", args: [currencyHex] }) as Promise<bigint>,
+        ]);
+        if (cancelled) return;
+        setSellPrice(price.sellPrice);
+        setSmallOrderThreshold(threshold);
+        setSmallOrderFixedFee(fee);
+      } catch {
+        if (!cancelled) setPriceConfigFailed(true);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [selectedCurrency?.symbol, diamondAddress, chainId, rpcUrl]);
+
+  // Parse the amount input → 6-decimal bigint. Returns null on invalid input
+  // (empty / NaN / negative); the "Sell" button disables on null.
+  const parsedAmount = useMemo((): bigint | null => {
+    const trimmed = amountInput.trim();
+    if (!trimmed) return null;
+    try {
+      const n = parseUnits(trimmed, USDC_DECIMALS);
+      if (n <= 0n) return null;
+      return n;
+    } catch {
+      return null;
+    }
+  }, [amountInput]);
+
+  // Read USDC balance for the "Max" affordance + insufficient-balance hint.
+  // Uses the read-only ERC20 ABI fragment — no integrator dependency.
   useEffect(() => {
     const chain = chainId === 8453 ? base : baseSepolia;
     const pc = createPublicClient({ chain, transport: http(rpcUrl) });
     pc.readContract({
-      address: marketplaceAddress, abi: MARKETPLACE_CLIENT_ABI as any,
-      functionName: "tokenPrice", args: [tokenId],
-    }).then((p) => setTokenPrice(p as bigint)).catch(() => {});
-  }, [chainId, rpcUrl, marketplaceAddress, tokenId]);
+      address: usdcAddress, abi: ERC20_READ_ABI,
+      functionName: "balanceOf", args: [signer.address],
+    }).then((b) => setBalance(b as bigint)).catch(() => {});
+  }, [chainId, rpcUrl, usdcAddress, signer.address]);
 
-  // Close dropdown on outside click.
   useEffect(() => {
     if (!dropdownOpen) return;
     const onClick = (e: MouseEvent) => {
@@ -61,20 +121,51 @@ export function P2POfframp(props: P2POfframpProps) {
     return () => document.removeEventListener("mousedown", onClick);
   }, [dropdownOpen]);
 
-  const { state, placeSell, retryDeliver, canRetry } = useOfframpMachine({
-    integratorAddress, marketplaceAddress, tokenId, signer,
-    diamondAddress, usdcAddress, chainId, rpcUrl, fiatAmountLimit,
+  const { state, submit, retryDeliver, canRetry, reset } = useOfframpMachine({
+    usdcAddress, diamondAddress, signer,
+    chainId, rpcUrl, subgraphUrl, fiatAmountLimit,
+    placeOfframp, deliverUpi, reconcile,
     onOrderPlaced, onComplete, onCancelled, onError,
   });
 
   const usdcDisplay = state.usdcAmount
     ? formatUnits(state.usdcAmount, USDC_DECIMALS)
-    : tokenPrice
-      ? formatUnits(tokenPrice, USDC_DECIMALS)
+    : parsedAmount
+      ? formatUnits(parsedAmount, USDC_DECIMALS)
       : null;
   const fiatDisplay = state.fiatAmount ? (Number(state.fiatAmount) / 1e6).toFixed(2) : null;
+  // Trim USDC balance to 2 decimals for the affordance text — `formatUnits`
+  // produces 6-dec strings which are visually noisy here. The Max button
+  // still sets the full-precision value into the input.
+  const balanceDisplay = balance !== null
+    ? (Number(balance) / 10 ** USDC_DECIMALS).toLocaleString(undefined, { maximumFractionDigits: 2 })
+    : null;
+  const insufficientBalance = parsedAmount !== null && balance !== null && parsedAmount > balance;
 
-  // Stepper indices: 0 placed, 1 accepted/encrypting, 2 paid, 3 completed.
+  // Pre-order fiat preview. Mirror the P2POfframp logic — fee deducted from
+  // the fiat the user receives.
+  const thresholdLabel = smallOrderThreshold !== null
+    ? `${Number(smallOrderThreshold) / 1e6} USDC`
+    : "10 USDC";
+  const preview = (() => {
+    if (!parsedAmount || !sellPrice) return null;
+    const subtotalFiat = (parsedAmount * sellPrice) / 1_000_000n;
+    const feeUsdc =
+      smallOrderThreshold !== null && smallOrderFixedFee !== null &&
+      parsedAmount <= smallOrderThreshold ? smallOrderFixedFee : 0n;
+    const feeFiat = (feeUsdc * sellPrice) / 1_000_000n;
+    const netFiat = subtotalFiat > feeFiat ? subtotalFiat - feeFiat : subtotalFiat;
+    return {
+      subtotal: (Number(subtotalFiat) / 1e6).toFixed(2),
+      fee: feeFiat > 0n ? (Number(feeFiat) / 1e6).toFixed(2) : null,
+      net: (Number(netFiat) / 1e6).toFixed(2),
+      symbol: selectedCurrency.symbol,
+    };
+  })();
+  const isQuotePending = Boolean(parsedAmount && !sellPrice && !priceConfigFailed);
+
+  const canSubmit = paymentValid && parsedAmount !== null && !insufficientBalance && !isQuotePending;
+
   const stepIndex =
     state.phase === "completed" ? 3 :
     state.phase === "paid" ? 2 :
@@ -87,7 +178,6 @@ export function P2POfframp(props: P2POfframpProps) {
 
   const content = (
     <div style={{ ...themeStyle, fontFamily: "var(--p2p-font, inherit)", color: color.text }}>
-      {/* Header — mirrors P2PCheckout */}
       <div style={{
         padding: "16px 24px", borderBottom: `1px solid ${color.border}`,
         display: "flex", alignItems: "center", justifyContent: "space-between",
@@ -98,7 +188,7 @@ export function P2POfframp(props: P2POfframpProps) {
             color: "#fff", display: "flex", alignItems: "center", justifyContent: "center",
             fontWeight: weight.bold, fontSize: 14,
           }}>P</div>
-          <span style={{ fontWeight: weight.semibold, fontSize: font.lg }}>P2P Sell-back</span>
+          <span style={{ fontWeight: weight.semibold, fontSize: font.lg }}>P2P Withdraw</span>
         </div>
         {mode === "modal" && onClose && (
           <button onClick={onClose} style={{
@@ -113,28 +203,64 @@ export function P2POfframp(props: P2POfframpProps) {
         {/* ─── PRE-ORDER FORM ─────────────────────────────────────── */}
         {state.phase === "form" && (
           <div>
-            <p style={S.label}>You'll receive</p>
-            <h1 style={{ ...S.h1, marginTop: 4, fontSize: font.display }}>
-              <span style={S.num}>{usdcDisplay ?? "—"}</span>
-              <span style={{ ...S.muted, marginLeft: 8, fontSize: font.lg, fontWeight: weight.medium }}>USDC</span>
-            </h1>
-            <p style={{ ...S.muted, marginTop: 6 }}>
-              Token #{tokenId.toString()} from this marketplace.{" "}
-              {tokenPrice ? "We'll burn it and place a sell order at its original price." : ""}
-            </p>
+            <p style={S.label}>Amount to withdraw</p>
+            <div style={{ position: "relative", marginTop: 6 }}>
+              <input
+                type="text"
+                inputMode="decimal"
+                value={amountInput}
+                onChange={(e) => setAmountInput(e.target.value)}
+                placeholder="0.00"
+                style={{
+                  width: "100%", boxSizing: "border-box",
+                  padding: "12px 60px 12px 14px", height: 52,
+                  border: `1px solid ${color.border}`, borderRadius: radius.md,
+                  background: color.surface, color: color.text,
+                  fontSize: font.xxl, fontWeight: weight.semibold, fontVariantNumeric: "tabular-nums",
+                  outline: "none",
+                }}
+                autoFocus
+              />
+              <span style={{
+                position: "absolute", right: 14, top: "50%", transform: "translateY(-50%)",
+                color: color.textMuted, fontSize: font.sm, fontWeight: weight.semibold,
+                letterSpacing: "0.04em",
+              }}>USDC</span>
+            </div>
+            <div style={{ ...S.rowBetween, marginTop: 6 }}>
+              <span style={{ ...S.faint }}>
+                {balanceDisplay !== null
+                  ? `Balance: ${balanceDisplay} USDC`
+                  : "Loading balance…"}
+              </span>
+              {balance !== null && balance > 0n && (
+                <button
+                  type="button"
+                  onClick={() => setAmountInput(formatUnits(balance, USDC_DECIMALS))}
+                  style={{
+                    border: "none", background: "transparent", color: color.accent,
+                    fontSize: font.sm, fontWeight: weight.semibold, cursor: "pointer", padding: 0,
+                  }}
+                >Max</button>
+              )}
+            </div>
+            {insufficientBalance && (
+              <p style={{ color: color.danger, fontSize: font.sm, marginTop: 4, marginBottom: 0 }}>
+                Insufficient USDC balance.
+              </p>
+            )}
 
-            <div style={S.divider} />
-
-            {/* Currency picker — same shape as P2PCheckout's */}
+            {/* Currency picker */}
             {currencies.length > 0 && (
-              <div style={{ marginBottom: 16 }}>
+              <div style={{ marginTop: 20, marginBottom: 16 }}>
                 <p style={{ ...S.label, marginBottom: 8 }}>Receive in</p>
                 <div ref={dropdownRef} style={{ position: "relative" }}>
                   <button
                     type="button"
                     onClick={() => setDropdownOpen((o) => !o)}
                     style={{
-                      width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
+                      width: "100%", boxSizing: "border-box",
+                      display: "flex", alignItems: "center", justifyContent: "space-between",
                       gap: 10, padding: "12px 14px", borderRadius: radius.md,
                       border: `1px solid ${color.border}`, background: color.surface,
                       color: color.text, fontSize: font.base, fontWeight: weight.medium, cursor: "pointer",
@@ -165,7 +291,8 @@ export function P2POfframp(props: P2POfframpProps) {
                           <button key={c.symbol} type="button"
                             onClick={() => { setSelectedCurrency(c); setDropdownOpen(false); }}
                             style={{
-                              width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
+                              width: "100%", boxSizing: "border-box",
+                              display: "flex", alignItems: "center", justifyContent: "space-between",
                               gap: 10, padding: "12px 14px", border: "none",
                               background: active ? color.accentSoft : "transparent",
                               color: color.text, fontSize: font.base, fontWeight: weight.medium,
@@ -193,42 +320,71 @@ export function P2POfframp(props: P2POfframpProps) {
               </div>
             )}
 
-            {/* Payment-address input — currency-aware validation */}
+            {preview && (
+              <div style={{ marginBottom: 16, padding: "14px 16px", background: color.surfaceAlt, borderRadius: radius.md, border: `1px solid ${color.border}` }}>
+                <div style={S.rowBetween}>
+                  <span style={S.label}>Subtotal</span>
+                  <span style={{ ...S.body, ...S.num }}>{preview.symbol} {preview.subtotal}</span>
+                </div>
+                {preview.fee && (
+                  <>
+                    <div style={{ ...S.rowBetween, marginTop: 8 }}>
+                      <span style={S.label}>Transaction Fee</span>
+                      <span style={{ ...S.body, ...S.num, color: color.textMuted }}>− {preview.symbol} {preview.fee}</span>
+                    </div>
+                    <p style={{ ...S.faint, margin: "4px 0 0", lineHeight: 1.4 }}>
+                      Waived on orders above {thresholdLabel}.
+                    </p>
+                  </>
+                )}
+                <div style={{ ...S.rowBetween, marginTop: 10, paddingTop: 10, borderTop: `1px solid ${color.border}` }}>
+                  <span style={{ ...S.label, color: color.text, fontWeight: weight.semibold }}>You receive</span>
+                  <span style={{ ...S.body, fontWeight: weight.bold, ...S.num }}>
+                    {preview.symbol} {preview.net}
+                  </span>
+                </div>
+              </div>
+            )}
+
             <PaymentAddressInput
               currency={selectedCurrency}
               value={paymentAddress}
               onChange={setPaymentAddress}
               onValidityChange={setPaymentValid}
-              autoFocus
             />
 
             <button
               type="button"
-              disabled={!paymentValid}
-              onClick={() => placeSell(selectedCurrency, paymentAddress.trim())}
+              disabled={!canSubmit}
+              onClick={() => submit(selectedCurrency, paymentAddress.trim(), parsedAmount!)}
               style={{
                 ...S.primaryBtn,
                 marginTop: 20,
-                opacity: paymentValid ? 1 : 0.5,
-                cursor: paymentValid ? "pointer" : "not-allowed",
+                opacity: canSubmit ? 1 : 0.5,
+                cursor: canSubmit ? "pointer" : isQuotePending ? "wait" : "not-allowed",
               }}
             >
-              Sell back
+              {isQuotePending ? (
+                <>
+                  <Spinner size={14} />
+                  Loading quote…
+                </>
+              ) : preview ? (
+                `Withdraw ${preview.symbol} ${preview.net}`
+              ) : (
+                "Withdraw"
+              )}
             </button>
           </div>
         )}
 
-        {/* ─── PRE-ORDER PROGRESS (sweeping/placing) ──────────────── */}
-        {(state.phase === "sweeping" || state.phase === "placing") && (
+        {/* ─── PRE-ORDER PROGRESS ─────────────────────────────────── */}
+        {state.phase === "placing" && (
           <div style={{ ...S.card, padding: "32px" }}>
             <CenterStatus
               icon={<Spinner />}
-              title={state.phase === "sweeping" ? "Recovering NFT…" : "Placing sell order…"}
-              subtitle={
-                state.phase === "sweeping"
-                  ? "Moving from your proxy to your wallet first."
-                  : "Burning the NFT and submitting the sell order on-chain."
-              }
+              title="Submitting withdrawal…"
+              subtitle="Resolving the merchant circle, approving USDC, and placing the SELL on-chain. Confirm any wallet prompts that pop up."
             />
           </div>
         )}
@@ -243,7 +399,7 @@ export function P2POfframp(props: P2POfframpProps) {
                 <CenterStatus
                   icon={<PulseDot />}
                   title="Finding a merchant"
-                  subtitle={`Order #${state.orderId}. A merchant will accept shortly.`}
+                  subtitle={`Order #${state.orderId}: A P2P merchant will be assigned to receive the USDC and pay you in your local currency. This is a manual swap process and may take 2–3 minutes to complete. We appreciate your patience.`}
                 />
               )}
 
@@ -258,6 +414,10 @@ export function P2POfframp(props: P2POfframpProps) {
                     <div style={S.rowBetween}>
                       <span style={S.label}>Order</span>
                       <span style={{ ...S.mono, fontSize: font.sm }}>#{state.orderId}</span>
+                    </div>
+                    <div style={S.rowBetween}>
+                      <span style={S.label}>Amount</span>
+                      <span style={{ ...S.mono, fontSize: font.sm }}>{usdcDisplay} USDC</span>
                     </div>
                     <div style={S.rowBetween}>
                       <span style={S.label}>Receive to</span>
@@ -282,7 +442,7 @@ export function P2POfframp(props: P2POfframpProps) {
               {state.phase === "completed" && (
                 <div style={{ textAlign: "center" }}>
                   <SuccessIcon />
-                  <h1 style={{ ...S.h1, fontSize: font.xxl, marginTop: 8 }}>Sold!</h1>
+                  <h1 style={{ ...S.h1, fontSize: font.xxl, marginTop: 8 }}>Withdrawn!</h1>
                   {fiatDisplay && state.currency && (
                     <p style={{ ...S.muted, marginTop: 8 }}>
                       You received <strong>{state.currency.symbol} {fiatDisplay}</strong> for{" "}
@@ -310,7 +470,7 @@ export function P2POfframp(props: P2POfframpProps) {
                   <CenterStatus
                     icon={<XIcon />}
                     title="Order cancelled"
-                    subtitle="USDC stays in the integrator's pool. The NFT was burned — contact support if you need a replacement."
+                    subtitle="Your USDC was refunded to your wallet automatically. You can try again any time."
                     variant="warning"
                   />
                   {onClose && (
@@ -328,7 +488,7 @@ export function P2POfframp(props: P2POfframpProps) {
                     variant="danger"
                   />
                   <div style={{ ...S.cardFlat, padding: 12, marginTop: 16, fontSize: font.md, color: color.textMuted, background: color.surfaceAlt }}>
-                    Your sell order is still active on-chain (#{state.orderId}).
+                    Your offramp order is still active on-chain (#{state.orderId}).
                     The merchant accepted; we couldn't deliver your encrypted payment
                     address. Retrying re-runs encryption + delivery against the same order.
                   </div>
@@ -348,21 +508,22 @@ export function P2POfframp(props: P2POfframpProps) {
           </div>
         )}
 
-        {/* Pre-order error (no orderId yet — placement itself failed) */}
+        {/* Pre-order error — no orderId yet, so the order never placed. */}
         {state.phase === "error" && !state.orderId && (
-          <div style={{ textAlign: "center", padding: "24px 0" }}>
-            <div style={{ color: color.danger, marginBottom: 16 }}>
-              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <div style={{ textAlign: "center", padding: "16px 0" }}>
+            <div style={{ color: color.danger, marginBottom: 16, display: "flex", justifyContent: "center" }}>
+              <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <circle cx="12" cy="12" r="10" />
                 <line x1="15" y1="9" x2="9" y2="15" />
                 <line x1="9" y1="9" x2="15" y2="15" />
               </svg>
             </div>
-            <h2 style={S.h2}>{state.error}</h2>
-            <button style={{ ...S.primaryBtn, marginTop: 20 }}
-              onClick={() => placeSell(selectedCurrency, paymentAddress.trim())}
-              disabled={!paymentValid}>
-              Try again
+            <h2 style={{ ...S.h2, fontSize: font.xl, marginBottom: 8 }}>Couldn't place withdrawal</h2>
+            <p style={{ ...S.muted, lineHeight: 1.5, maxWidth: 380, margin: "0 auto 20px" }}>
+              {state.error}
+            </p>
+            <button style={S.primaryBtn} onClick={reset}>
+              Back to form
             </button>
             {onClose && (
               <button style={{ ...S.ghostBtn, width: "100%", marginTop: 8, height: 40 }} onClick={onClose}>
