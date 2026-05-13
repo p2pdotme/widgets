@@ -22,7 +22,7 @@ async function resolveIdentity(): Promise<RelayIdentity> {
 }
 import type { CheckoutSigner, CheckoutPhase, PlaceOrderResult, PlaceOrderContext, CurrencyOption, PendingOrderSummary, ScreeningConfig } from "../types";
 import { OrderStatus } from "../types";
-import { DIAMOND_ABI } from "./contracts";
+import { DIAMOND_ABI, readSmallOrderFixedFee } from "./contracts";
 import { DEMO_FIAT_RATE } from "./config";
 import { processB2BBuyOrder } from "./b2b-fraud-engine";
 import { getActiveOrder, setActiveOrder, removeActiveOrder, keyFor, type ActiveOrderKey } from "./active-orders-store";
@@ -353,10 +353,10 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
             address: opts.diamondAddress, abi: DIAMOND_ABI,
             functionName: "getSmallOrderThreshold", args: [currencyHex],
           }) as Promise<bigint>,
-          publicClient.readContract({
-            address: opts.diamondAddress, abi: DIAMOND_ABI,
-            functionName: "getSmallOrderFixedFee", args: [currencyHex],
-          }) as Promise<bigint>,
+          // V22 charges half the unified fee on BUY; reads from the
+          // typed selector and falls back to the deprecated one for
+          // pre-V22 Diamonds. See `readSmallOrderFixedFee`.
+          readSmallOrderFixedFee(publicClient, opts.diamondAddress, currencyHex, "buy"),
         ]);
         if (cancelled) return;
         dispatch({

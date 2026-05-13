@@ -361,7 +361,9 @@ What the widget does, in order:
 1. Reads the user's USDC balance for the "Max" affordance + insufficient-
    balance hint (standard ERC20 `balanceOf` — no integrator dependency).
 2. Reads `getPriceConfig(currency).sellPrice` + `getSmallOrderThreshold` /
-   `getSmallOrderFixedFee` from the Diamond, renders the breakdown:
+   `getSmallOrderFixedFeeSell` from the Diamond (with a fallback to the
+   deprecated `getSmallOrderFixedFee` selector on pre-V22 Diamonds — see
+   `readSmallOrderFixedFee`), renders the breakdown:
    `You receive = principal × sellPrice` in fiat (no deduction; Diamond
    leaves `actualFiatAmount` unchanged for SELL) and `Total charged =
    principal + fee` in USDC (Diamond pulls `actualUsdtAmount = principal
@@ -889,12 +891,17 @@ and what the widget passes to the SDK routing call as the eligibility
 filter. The user always receives the full `usdcAmount` — the fee is
 charged on top, in fiat.
 
-**`getSmallOrderThreshold(currency)` / `getSmallOrderFixedFee(currency)`** —
+**`getSmallOrderThreshold(currency)` / `getSmallOrderFixedFeeBuy(currency)`** —
 the "Transaction Fee" row. Orders ≤ threshold incur the fixed fee in USDC,
-converted to fiat at the same `buyPrice` (currently **10 USDC threshold,
-0.125 USDC fee** in prod for INR / IDR / BRL — read dynamically per
-currency so this tracks any protocol updates). Orders above the threshold
-pay zero (row hidden).
+converted to fiat at the same `buyPrice`. V22 split the unified fee into
+three per-order-type values; BUY now pays **half** the configured fee to
+reduce buyer-side friction, while SELL/PAY pay the full fee (currently
+**10 USDC threshold; 0.0625 USDC BUY / 0.125 USDC SELL** in prod for INR /
+IDR / BRL — read dynamically per currency so this tracks any protocol
+updates). Orders above the threshold pay zero (row hidden). The widget's
+`readSmallOrderFixedFee` helper transparently falls back to the deprecated
+`getSmallOrderFixedFee` selector on pre-V22 Diamonds, so the same build
+works against both.
 
 **`getAdditionalOrderDetails(orderId).acceptedTimestamp`** — drives a
 **5-minute auto-cancel countdown** on the accepted screen. When time

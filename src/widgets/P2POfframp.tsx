@@ -16,7 +16,7 @@ import {
   injectKeyframes,
 } from "../ui/components";
 import { PaymentAddressInput } from "../ui/PaymentAddressInput";
-import { ERC20_READ_ABI, DIAMOND_ABI } from "../core/contracts";
+import { ERC20_READ_ABI, DIAMOND_ABI, readSmallOrderFixedFee } from "../core/contracts";
 
 const USDC_DECIMALS = 6;
 
@@ -79,7 +79,10 @@ export function P2POfframp(props: P2POfframpProps) {
         const [price, threshold, fee] = await Promise.all([
           pc.readContract({ address: diamondAddress, abi: DIAMOND_ABI, functionName: "getPriceConfig", args: [currencyHex] }) as Promise<{ sellPrice: bigint }>,
           pc.readContract({ address: diamondAddress, abi: DIAMOND_ABI, functionName: "getSmallOrderThreshold", args: [currencyHex] }) as Promise<bigint>,
-          pc.readContract({ address: diamondAddress, abi: DIAMOND_ABI, functionName: "getSmallOrderFixedFee", args: [currencyHex] }) as Promise<bigint>,
+          // SELL keeps the full configured fee on V22; the typed read
+          // falls back to the deprecated unified selector for pre-V22
+          // Diamonds. See `readSmallOrderFixedFee`.
+          readSmallOrderFixedFee(pc, diamondAddress, currencyHex, "sell"),
         ]);
         if (cancelled) return;
         setSellPrice(price.sellPrice);
