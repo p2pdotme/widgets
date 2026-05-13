@@ -4,6 +4,7 @@ export { P2POrderHistory, type P2POrderHistoryProps } from "./widgets/P2POrderHi
 export {
   parseOrderIdFromReceipt,
   fetchUserTxLimit,
+  readSmallOrderFixedFee,
   INTEGRATOR_LIMITS_ABI,
   ERC20_READ_ABI,
   DIAMOND_ABI,

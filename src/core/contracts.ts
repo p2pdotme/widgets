@@ -81,6 +81,33 @@ export const DIAMOND_ABI = [
     inputs: [{ name: "_currency", type: "bytes32" }],
     outputs: [{ name: "", type: "uint256" }],
   },
+  // V22 split the unified small-order fee into per-order-type selectors:
+  // BUY pays half (reduced buyer-side friction), SELL/PAY pay the full
+  // configured fee. The deprecated unified selector is kept here so the
+  // widget can transparently fall back on pre-V22 Diamond deployments —
+  // see `readSmallOrderFixedFee` below. Once every targeted Diamond has
+  // upgraded the deprecated entry can be deleted.
+  {
+    name: "getSmallOrderFixedFeeBuy",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "_currency", type: "bytes32" }],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    name: "getSmallOrderFixedFeeSell",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "_currency", type: "bytes32" }],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    name: "getSmallOrderFixedFeePay",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "_currency", type: "bytes32" }],
+    outputs: [{ name: "", type: "uint256" }],
+  },
   {
     name: "getSmallOrderFixedFee",
     type: "function",
@@ -165,6 +192,50 @@ export function parseOrderIdFromReceipt(receipt: { logs: readonly { data: `0x${s
     } catch {}
   }
   return null;
+}
+
+// ─── Small-order fee read (V22 forward-compat shim) ───────────────────
+//
+// V22 split the unified `getSmallOrderFixedFee(currency)` into three
+// per-order-type selectors (Buy / Sell / Pay). This helper reads the
+// right one and transparently falls back to the deprecated unified
+// selector on pre-V22 Diamonds, so a single widget build works against
+// every deployment in flight. The fallback path executes one extra
+// view (the post-V22 read costs a single round-trip).
+//
+// The returned bigint is 6-dec USDC. BUY is half the per-currency
+// `fixedFee/2` post-V22; SELL/PAY are the full configured fee on both
+// V21 (where Buy/Sell/Pay were all the same) and V22.
+
+type FixedFeeOrderType = "buy" | "sell" | "pay";
+
+export async function readSmallOrderFixedFee(
+  publicClient: { readContract: (args: any) => Promise<unknown> },
+  diamondAddress: `0x${string}`,
+  currencyHex: `0x${string}`,
+  orderType: FixedFeeOrderType,
+): Promise<bigint> {
+  const typedFn =
+    orderType === "buy"
+      ? "getSmallOrderFixedFeeBuy"
+      : orderType === "sell"
+        ? "getSmallOrderFixedFeeSell"
+        : "getSmallOrderFixedFeePay";
+  try {
+    return (await publicClient.readContract({
+      address: diamondAddress,
+      abi: DIAMOND_ABI,
+      functionName: typedFn,
+      args: [currencyHex],
+    })) as bigint;
+  } catch {
+    return (await publicClient.readContract({
+      address: diamondAddress,
+      abi: DIAMOND_ABI,
+      functionName: "getSmallOrderFixedFee",
+      args: [currencyHex],
+    })) as bigint;
+  }
 }
 
 // ─── Common integrator interface helpers ─────────────────────────────
