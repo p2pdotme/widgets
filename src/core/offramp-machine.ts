@@ -13,6 +13,7 @@ import type {
   DeliverUpiContext, ReconcileContext,
 } from "../types";
 import { DIAMOND_ABI } from "./contracts";
+import { logPlacementError } from "./place-error";
 
 /**
  * Callback-based offramp state machine. Widget-side responsibilities:
@@ -200,6 +201,15 @@ export function useOfframpMachine(opts: UseOfframpMachineOpts) {
         dispatch({ type: "PLACED", orderId: result.orderId, txHash: result.txHash });
         opts.onOrderPlaced?.(result.orderId, result.txHash);
       } catch (err: any) {
+        logPlacementError(err, {
+          flow: "sell",
+          chainId: opts.chainId,
+          user: opts.signer?.address,
+          diamondAddress: opts.diamondAddress,
+          currency: currency?.symbol,
+          circleId: currency?.circleId?.toString(),
+          amountUsdc: usdcAmount?.toString(),
+        });
         const message = err?.shortMessage || err?.message || "Failed to place offramp order";
         dispatch({ type: "ERROR", message });
         opts.onError?.(err);
