@@ -59,14 +59,20 @@ export type GateDecision =
   | { kind: "reject"; conflict: PendingOrderSummary };
 
 /**
- * The credit-aware concurrency gate. The rule (set by the CTO):
+ * The concurrency gate. Rule:
  *
- *   - credit == 0                → allow (existing P2POrderHistory resume
- *                                  flow handles pending orders separately)
- *   - credit > 0, no pending      → allow
- *   - credit > 0, pending matches → auto-resume that order
- *   - credit > 0, pending doesn't → reject; the user must finish the
- *                                   pending order before starting a new one
+ *   - no pending                  → allow
+ *   - pending matches `usdcAmount` → auto-resume that order (regardless of credit)
+ *   - pending doesn't match:
+ *       - credit > 0              → reject (credit can race across orders)
+ *       - credit == 0             → allow (concurrent different-amount orders ok)
+ *
+ * The same-amount auto-resume engages regardless of credit because clicking
+ * "Pay" with the same amount as an existing pending order is almost always
+ * a duplicate-click / refresh, not intentional concurrency. The
+ * different-amount-with-credit reject still exists because the integrator's
+ * on-chain credit-netting can produce inconsistent Diamond deltas if two
+ * orders compete for the same proxy USDC.
  *
  * `usdcAmount` is the new order's intended purchase total (full intent,
  * matching what hosts report via `fetchPendingOrders`).
@@ -76,7 +82,7 @@ export function computeGateDecision(
   pending: PendingOrderSummary[],
   usdcAmount: bigint | undefined,
 ): GateDecision {
-  if (credit === 0n || pending.length === 0) return { kind: "allow" };
+  if (pending.length === 0) return { kind: "allow" };
 
   // No widget-side amount to compare against → fall through to allow. This
   // happens for tracking-only modes where the host never set `usdcAmount`;
@@ -86,5 +92,11 @@ export function computeGateDecision(
 
   const match = findMatchingPending(pending, usdcAmount);
   if (match) return { kind: "auto-resume", orderId: match.orderId };
-  return { kind: "reject", conflict: pending[0] };
+
+  // No same-amount match. With credit, the user must finish the pending
+  // order first because the integrator's proxy USDC can be raced by two
+  // in-flight orders. Without credit, concurrent different-amount orders
+  // are independent and safe to allow.
+  if (credit > 0n) return { kind: "reject", conflict: pending[0] };
+  return { kind: "allow" };
 }

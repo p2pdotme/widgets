@@ -236,7 +236,8 @@ while one is still in flight (which would race the credit accounting).
 | Credit | Pending order on chain | Widget behavior |
 |---|---|---|
 | 0     | none                    | normal flow                                |
-| 0     | any                     | normal flow (existing `<P2POrderHistory>` resume) |
+| 0     | same `usdcAmount`        | auto-flip to tracking-only mode for that order (prevents duplicate placement) |
+| 0     | different `usdcAmount`   | normal flow (concurrent orders ok — no credit to race) |
 | > 0   | none                    | render "Credit applied: −X" row, bill `max(usdcAmount − credit, 0)` |
 | > 0   | same `usdcAmount`        | auto-flip to tracking-only mode for that order |
 | > 0   | different `usdcAmount`   | render rejection screen — user must finish the pending order first |

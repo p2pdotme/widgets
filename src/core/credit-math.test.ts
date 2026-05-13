@@ -66,13 +66,18 @@ test("findMatchingPending returns null for an empty pending list", () => {
 
 // ─── computeGateDecision ────────────────────────────────────────────
 
-test("computeGateDecision: zero credit always allows (P2POrderHistory handles its own resume)", () => {
-  const gate = computeGateDecision(0n, [pendingA], 5_000_000n);
-  assert.deepStrictEqual(gate, { kind: "allow" });
+test("computeGateDecision: no pending → allow (regardless of credit)", () => {
+  assert.deepStrictEqual(computeGateDecision(0n, [], 5_000_000n), { kind: "allow" });
+  assert.deepStrictEqual(computeGateDecision(2_000_000n, [], 5_000_000n), { kind: "allow" });
 });
 
-test("computeGateDecision: credit > 0 but no pending → allow", () => {
-  const gate = computeGateDecision(2_000_000n, [], 5_000_000n);
+test("computeGateDecision: zero credit + same-amount pending → auto-resume (prevents duplicate placement)", () => {
+  const gate = computeGateDecision(0n, [pendingA], 5_000_000n);
+  assert.deepStrictEqual(gate, { kind: "auto-resume", orderId: "100" });
+});
+
+test("computeGateDecision: zero credit + different-amount pending → allow (concurrent orders ok without credit)", () => {
+  const gate = computeGateDecision(0n, [pendingA], 7_000_000n);
   assert.deepStrictEqual(gate, { kind: "allow" });
 });
 
