@@ -161,9 +161,18 @@ export function P2PCheckout(props: P2PCheckoutProps) {
   // selected currency's symbol for a frame.
   // Releases when state.currency catches up OR the fetch fails (so a
   // bad RPC doesn't strand the user).
+  //
+  // Also holds while the credit/pending fetch is in flight (state.gate ===
+  // "loading"). Without this, the user would briefly see the un-credited
+  // price + Pay button — and could fire the order before the credit
+  // adjustment renders. The gate resolves to allow/auto-resume/reject as
+  // soon as both fetchers return (or short-circuits to allow when the
+  // host didn't wire either callback).
   const isQuotePending = Boolean(
-    !demo && usdcAmount && selectedCurrency && !state.priceConfigFailed &&
-    (!preview || state.currency !== selectedCurrency.symbol)
+    !demo && usdcAmount && selectedCurrency && (
+      (!state.priceConfigFailed && (!preview || state.currency !== selectedCurrency.symbol)) ||
+      state.gate === "loading"
+    )
   );
 
   // Post-order breakdown — derived from on-chain `actualFiatAmount` (already
