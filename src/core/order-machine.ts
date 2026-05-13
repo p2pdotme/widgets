@@ -27,6 +27,7 @@ import { DEMO_FIAT_RATE } from "./config";
 import { processB2BBuyOrder } from "./b2b-fraud-engine";
 import { getActiveOrder, setActiveOrder, removeActiveOrder, keyFor, type ActiveOrderKey } from "./active-orders-store";
 import { computeGateDecision, type GateDecision } from "./credit-math";
+import { logPlacementError } from "./place-error";
 
 interface OrderState {
   phase: CheckoutPhase;
@@ -619,6 +620,15 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
       if (storeKey) setActiveOrder(storeKey, { orderId: result.orderId, txHash: result.txHash });
       opts.onOrderPlaced?.(result.orderId, result.txHash);
     } catch (err: any) {
+      logPlacementError(err, {
+        flow: "buy",
+        chainId: opts.chainId,
+        user: opts.signer?.address,
+        diamondAddress: opts.diamondAddress,
+        currency: opts.selectedCurrency?.symbol,
+        circleId: opts.selectedCurrency?.circleId?.toString(),
+        amountUsdc: opts.usdcAmount?.toString(),
+      });
       dispatch({ type: "ERROR", message: err?.shortMessage || err?.message || "Failed to place order" });
       opts.onError?.(err);
     }
