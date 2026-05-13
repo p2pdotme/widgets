@@ -29,14 +29,6 @@ export interface P2POrderHistoryProps {
    * screen automatically.
    */
   onResume?: (orderId: string) => void;
-  /**
-   * Optional render slot for an additional action per row. Receives the full
-   * Order so the host can branch on status, currency, age, etc. Renders to the
-   * right of the Resume button (when both are present). Use cases include
-   * surfacing per-order support, escalation, or marketplace-specific actions
-   * without forking the widget.
-   */
-  renderRowAction?: (order: Order) => React.ReactNode;
   /** Optional title override. */
   title?: string;
   /**
@@ -86,7 +78,7 @@ export function P2POrderHistory(props: P2POrderHistoryProps) {
   const {
     signer, subgraphUrl, usdcAddress,
     chainId = 84532, diamondAddress = DEFAULT_DIAMOND_ADDRESS, rpcUrl,
-    limit = 20, onResume, renderRowAction,
+    limit = 20, onResume,
     filter = "all",
     refreshKey,
     optimisticUpdates,
@@ -261,7 +253,7 @@ export function P2POrderHistory(props: P2POrderHistoryProps) {
           {past.length > 0 && <p style={{ ...S.label, marginBottom: 8 }}>Pending</p>}
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {pending.map((o) => (
-              <OrderRow key={o.orderId.toString()} order={o} onResume={onResume} renderRowAction={renderRowAction} highlight config={currencyConfigs[o.currency]} />
+              <OrderRow key={o.orderId.toString()} order={o} onResume={onResume} highlight config={currencyConfigs[o.currency]} />
             ))}
           </div>
         </div>
@@ -272,7 +264,7 @@ export function P2POrderHistory(props: P2POrderHistoryProps) {
           {pending.length > 0 && <p style={{ ...S.label, marginBottom: 8 }}>Past</p>}
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {past.map((o) => (
-              <OrderRow key={o.orderId.toString()} order={o} onResume={onResume} renderRowAction={renderRowAction} config={currencyConfigs[o.currency]} />
+              <OrderRow key={o.orderId.toString()} order={o} onResume={onResume} config={currencyConfigs[o.currency]} />
             ))}
           </div>
         </div>
@@ -281,10 +273,9 @@ export function P2POrderHistory(props: P2POrderHistoryProps) {
   );
 }
 
-function OrderRow({ order, onResume, renderRowAction, highlight, config }: {
+function OrderRow({ order, onResume, highlight, config }: {
   order: Order;
   onResume?: (orderId: string) => void;
-  renderRowAction?: (order: Order) => React.ReactNode;
   highlight?: boolean;
   config?: { buyPrice: bigint; smallOrderThreshold: bigint; smallOrderFixedFee: bigint };
 }) {
@@ -326,9 +317,6 @@ function OrderRow({ order, onResume, renderRowAction, highlight, config }: {
       <div style={{ minWidth: 0, flex: 1 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
           <StatusBadge status={order.status} />
-          {order.disputeStatus && order.disputeStatus !== "none" ? (
-            <DisputeBadge status={order.disputeStatus} />
-          ) : null}
           <span style={{ ...S.faint, ...S.mono }}>#{order.orderId.toString()}</span>
         </div>
         <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
@@ -337,18 +325,15 @@ function OrderRow({ order, onResume, renderRowAction, highlight, config }: {
         </div>
         <div style={{ ...S.faint, marginTop: 2 }}>{when}</div>
       </div>
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        {isPending && onResume && (
-          <button
-            type="button"
-            style={{ ...S.primaryBtn, width: "auto", height: 36, padding: "0 14px", fontSize: font.md }}
-            onClick={() => onResume(order.orderId.toString())}
-          >
-            Resume
-          </button>
-        )}
-        {renderRowAction ? renderRowAction(order) : null}
-      </div>
+      {isPending && onResume && (
+        <button
+          type="button"
+          style={{ ...S.primaryBtn, width: "auto", height: 36, padding: "0 14px", fontSize: font.md }}
+          onClick={() => onResume(order.orderId.toString())}
+        >
+          Resume
+        </button>
+      )}
     </div>
   );
 }
@@ -363,22 +348,6 @@ function StatusBadge({ status }: { status: Order["status"] }) {
       case "cancelled": return { bg: color.dangerSoft, fg: color.danger, label: "Cancelled" };
     }
   })();
-  return (
-    <span style={{
-      padding: "2px 8px", borderRadius: radius.pill,
-      background: bg, color: fg,
-      fontSize: font.xs, fontWeight: weight.semibold,
-    }}>
-      {label}
-    </span>
-  );
-}
-
-function DisputeBadge({ status }: { status: "open" | "resolved" }) {
-  const { bg, fg, label } =
-    status === "open"
-      ? { bg: color.dangerSoft, fg: color.danger, label: "In support" }
-      : { bg: color.successSoft, fg: color.success, label: "Support resolved" };
   return (
     <span style={{
       padding: "2px 8px", borderRadius: radius.pill,
