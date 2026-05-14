@@ -8,8 +8,8 @@ import {
   type OrdersClient,
 } from "@p2pdotme/sdk/orders";
 import type {
-  CheckoutSigner, CurrencyOption, OfframpPhase,
-  PlaceOfframpContext, PlaceOfframpResult,
+  CheckoutSigner, CurrencyOption, CashoutPhase,
+  PlaceCashoutContext, PlaceCashoutResult,
   DeliverUpiContext, ReconcileContext,
 } from "../types";
 import { DIAMOND_ABI } from "./contracts";
@@ -32,7 +32,7 @@ import {
  *   - Drive the visual state machine
  *
  * Host-side responsibilities (via callbacks):
- *   - `placeOfframp`   — approve USDC, submit the integrator-specific
+ *   - `placeCashout`   — approve USDC, submit the integrator-specific
  *                        userInitiateOfframp / equivalent tx, parse the
  *                        receipt for an orderId.
  *   - `deliverUpi`     — submit the integrator's deliverOfframpUpi (the
@@ -42,7 +42,7 @@ import {
  *                        the Diamond. Skip if your integrator doesn't need it.
  */
 interface OfframpState {
-  phase: OfframpPhase;
+  phase: CashoutPhase;
   orderId: string | null;
   txHash: string | null;
   currency: CurrencyOption | null;
@@ -96,7 +96,7 @@ export interface UseOfframpMachineOpts {
   fiatAmountLimit?: bigint;
 
   // ─── Host callbacks (integrator-specific) ────────────────────────────
-  placeOfframp: (ctx: PlaceOfframpContext) => Promise<PlaceOfframpResult>;
+  placeCashout: (ctx: PlaceCashoutContext) => Promise<PlaceCashoutResult>;
   deliverUpi:   (ctx: DeliverUpiContext)   => Promise<{ txHash: string }>;
   reconcile?:   (ctx: ReconcileContext)    => Promise<{ txHash: string }>;
 
@@ -201,7 +201,7 @@ export function useOfframpMachine(opts: UseOfframpMachineOpts) {
         // `feeUsdc` is the small-order fee the Diamond will pull on top of
         // `usdcAmount` (= principal) at setSellOrderUpi — host should
         // approve `usdcAmount + feeUsdc` so the user's balance covers both.
-        const result = await opts.placeOfframp({
+        const result = await opts.placeCashout({
           currency: { ...currency, circleId: resolvedCircleId },
           paymentAddress,
           usdcAmount,

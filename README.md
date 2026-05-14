@@ -1,18 +1,24 @@
-# @p2pdotme/checkout-widget
+# @p2pdotme/widgets
+
+[![npm version](https://img.shields.io/npm/v/@p2pdotme/widgets.svg)](https://www.npmjs.com/package/@p2pdotme/widgets)
+[![npm downloads](https://img.shields.io/npm/dm/@p2pdotme/widgets.svg)](https://www.npmjs.com/package/@p2pdotme/widgets)
+[![bundle size](https://img.shields.io/bundlephobia/minzip/@p2pdotme/widgets)](https://bundlephobia.com/package/@p2pdotme/widgets)
+[![CI](https://github.com/p2pdotme/widgets/actions/workflows/ci.yml/badge.svg)](https://github.com/p2pdotme/widgets/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 
 Drop-in React widgets for the [P2P.me](https://p2p.me) checkout flow.
 Users pay you in **local fiat** (UPI, PIX, SPEI, QRIS, …) — your contract
 receives **USDC on Base**. Three widgets in one package:
 
-- **`<P2PCheckout>`** — the buy flow. User picks currency → pays merchant
+- **`<Checkout>`** — the buy flow. User picks currency → pays merchant
   off-chain → your contract is paid USDC.
-- **`<P2POfframp>`** — the sell / withdraw flow. User converts USDC they
+- **`<Cashout>`** — the sell / withdraw flow. User converts USDC they
   already hold on Base into local fiat. Integrator-agnostic — host
-  supplies three callbacks (`placeOfframp`, `deliverUpi`, optional
+  supplies three callbacks (`placeCashout`, `deliverUpi`, optional
   `reconcile`); widget orchestrates the Diamond lifecycle.
-- **`<P2POrderHistory>`** — a subgraph-backed list of the connected user's
+- **`<PaymentHistory>`** — a subgraph-backed list of the connected user's
   orders. Auto-hides when there's nothing pending. Click "Resume" on a
-  pending row to re-open `<P2PCheckout>` in tracking-only mode.
+  pending row to re-open `<Checkout>` in tracking-only mode.
 
 The widgets handle: order placement, **SDK circle routing** (optional —
 no per-currency `circleId` plumbing required), status polling, encrypted
@@ -48,14 +54,41 @@ may add props or events. Pin to a minor (`^0.1.0`) until 1.0.
 ## Install
 
 ```bash
-npm i @p2pdotme/checkout-widget
+npm i @p2pdotme/widgets
 # or
-pnpm add @p2pdotme/checkout-widget
+pnpm add @p2pdotme/widgets
 # or
-yarn add @p2pdotme/checkout-widget
+yarn add @p2pdotme/widgets
 ```
 
 Peer deps your app must have: `react@>=18`, `react-dom@>=18`, `viem@>=2`.
+
+## Subpath exports
+
+Each widget lives behind its own subpath so a host that only renders one
+pays for one widget's bytes:
+
+| Import path | Exports |
+|---|---|
+| `@p2pdotme/widgets` | Shared types + helpers — `CheckoutSigner`, `CurrencyOption`, `P2PError`, `P2PTheme`, `OrderStatus`, `parseOrderIdFromReceipt`, `useUserTxLimit`, `registerRevertSelectors`, validators, ABIs. **No widget components.** |
+| `@p2pdotme/widgets/checkout` | `Checkout` + `CheckoutProps`, `CheckoutPhase`, `PlaceOrderContext`, `PlaceOrderResult`, `PendingOrderSummary`. |
+| `@p2pdotme/widgets/cashout` | `Cashout` + `CashoutProps`, `CashoutPhase`, `PlaceCashoutContext`, `PlaceCashoutResult`, `DeliverUpiContext`, `ReconcileContext`. |
+| `@p2pdotme/widgets/payment-history` | `PaymentHistory` + `PaymentHistoryProps`. |
+
+```ts
+// Buy flow only
+import { Checkout } from "@p2pdotme/widgets/checkout";
+import type { CheckoutSigner } from "@p2pdotme/widgets";
+
+// Cashout-only host
+import { Cashout } from "@p2pdotme/widgets/cashout";
+
+// History widget anywhere
+import { PaymentHistory } from "@p2pdotme/widgets/payment-history";
+```
+
+Tree-shakers (Vite/Next/Webpack/esbuild) all honor the `exports` map, so
+unused subpaths never ship in your bundle.
 
 ---
 
@@ -70,7 +103,7 @@ the user-side UX of an existing integrator.
 | **Integrator contract** | Your business logic on Base. Templates: `CheckoutIntegratorV2` (consumer purchases of an `ICheckoutClient`), `MarketplaceCheckoutIntegrator` (third-party clients identified by `msg.sender`, with optional sell-back), `LotPotCheckoutIntegrator`, etc. |
 | **Diamond registration** | A super-admin call: `B2BGatewayFacet.registerIntegrator(integrator, usdcThroughIntegrator, proxyImpl)`. Talk to P2P to get this done. |
 | **Currency / circle mapping** | Each currency is backed by a merchant *circle* on the Diamond. With SDK routing (pass `subgraphUrl` + `usdcAddress` + `usdcAmount`) you can leave `circleId` off — the widget picks one for you at place-order time. Hardcode `circleId` per currency only when you want to pin a specific merchant. |
-| **Subgraph URL** (optional) | Read endpoint for SDK routing + `<P2POrderHistory>`. Skip if you're using explicit `circleId` everywhere and don't need a history widget. |
+| **Subgraph URL** (optional) | Read endpoint for SDK routing + `<PaymentHistory>`. Skip if you're using explicit `circleId` everywhere and don't need a history widget. |
 | **Wallet signer** | Anything that can produce `{ to, data, gasLimit }` → signed tx hash. Privy embedded wallets and viem-native accounts are both supported via the `CheckoutSigner` adapter (see [Signer adapter](#signer-adapter)). |
 
 > **Where to read more:** the contracts repo (under
@@ -79,7 +112,7 @@ the user-side UX of an existing integrator.
 
 ---
 
-## Quick start — Buy flow (`<P2PCheckout>`)
+## Quick start — Buy flow (`<Checkout>`)
 
 The widget is **integrator-agnostic for buys**: you give it a `placeOrder`
 callback that produces an `orderId`, and the widget takes over from there.
@@ -88,13 +121,15 @@ Pass `subgraphUrl` + `usdcAddress` + `usdcAmount` and you can omit
 
 ```tsx
 import {
-  P2PCheckout,
   parseOrderIdFromReceipt,
   type CheckoutSigner,
   type CurrencyOption,
+} from "@p2pdotme/widgets";
+import {
+  Checkout,
   type PlaceOrderContext,
   type PlaceOrderResult,
-} from "@p2pdotme/checkout-widget";
+} from "@p2pdotme/widgets/checkout";
 import { encodeFunctionData, stringToHex, createPublicClient, http } from "viem";
 import { baseSepolia } from "viem/chains";
 import {
@@ -179,7 +214,7 @@ export function CheckoutDemo({ signer }: { signer: CheckoutSigner }) {
   };
 
   return (
-    <P2PCheckout
+    <Checkout
       placeOrder={placeOrder}
       currencies={CURRENCIES}
       amount="5 USDC"
@@ -250,10 +285,10 @@ The host returns `{ ..., creditOnly: true }` and the widget snaps to a
 
 ### Plumbing it in
 
-Two optional callbacks on `<P2PCheckout>` — both must be set together:
+Two optional callbacks on `<Checkout>` — both must be set together:
 
 ```tsx
-import { P2PCheckout, type PendingOrderSummary } from "@p2pdotme/checkout-widget";
+import { Checkout, type PendingOrderSummary } from "@p2pdotme/widgets/checkout";
 import { createPublicClient, http, parseAbi } from "viem";
 import { baseSepolia } from "viem/chains";
 
@@ -284,7 +319,7 @@ async function fetchPendingOrders(user: `0x${string}`): Promise<PendingOrderSumm
     .map((r) => ({ orderId: r.orderId.toString(), usdcAmount: BigInt(r.totalUsdcAmount) }));
 }
 
-<P2PCheckout
+<Checkout
   signer={signer}
   placeOrder={placeOrder}        // unchanged — host submits the integrator tx
   currencies={CURRENCIES}
@@ -296,7 +331,7 @@ async function fetchPendingOrders(user: `0x${string}`): Promise<PendingOrderSumm
     // widget in tracking-only mode by passing `orderId={orderId}` next time.
     setResumeOrderId(orderId);
   }}
-  // … the rest of P2PCheckoutProps
+  // … the rest of CheckoutProps
 />
 ```
 
@@ -315,28 +350,28 @@ order placed).
 
 ---
 
-## Offramp flow (`<P2POfframp>`)
+## Offramp flow (`<Cashout>`)
 
 Convert USDC the user already holds on Base into local fiat (UPI, PIX,
-SPEI, …). Same callback-shaped API as `<P2PCheckout>` — the widget is
+SPEI, …). Same callback-shaped API as `<Checkout>` — the widget is
 integrator-agnostic. It orchestrates the **Diamond-level** lifecycle
 (auto-route circleId, poll status, encrypt the user's payment address)
 and delegates the integrator-specific tx encoding to host callbacks.
 
 ```tsx
+import { type CurrencyOption } from "@p2pdotme/widgets";
 import {
-  P2POfframp,
-  type CurrencyOption,
-  type PlaceOfframpContext, type PlaceOfframpResult,
+  Cashout,
+  type PlaceCashoutContext, type PlaceCashoutResult,
   type DeliverUpiContext, type ReconcileContext,
-} from "@p2pdotme/checkout-widget";
+} from "@p2pdotme/widgets/cashout";
 
 const CURRENCIES: CurrencyOption[] = [
   { symbol: "INR", flag: "🇮🇳", paymentMethod: "UPI" /* circleId optional */ },
   { symbol: "BRL", flag: "🇧🇷", paymentMethod: "PIX" },
 ];
 
-<P2POfframp
+<Cashout
   signer={signer}
   usdcAddress="0x4095fE4f1E636f11A95820BA2bB87F335Bd1040d"
   diamondAddress="0xeb0BB8E3c014D915D9B2df03aBB130a1Fb44beb9"
@@ -346,7 +381,7 @@ const CURRENCIES: CurrencyOption[] = [
   defaultAmountUsdc={2_000_000n} // optional — pre-fills the amount input
 
   // Three host callbacks — see "Offramp callback contract" below.
-  placeOfframp={hostPlaceOfframp}
+  placeCashout={hostPlaceCashout}
   deliverUpi={hostDeliverUpi}
   reconcile={hostReconcile}
 
@@ -373,7 +408,7 @@ What the widget does, in order:
 3. On submit, if the selected currency has no `circleId`, calls
    `@p2pdotme/sdk` `placeOrder.prepare({ orderType: 1, … })` and harvests
    `prepared.meta.circleId`. Diamond-level operation — no integrator code.
-4. Calls **`placeOfframp`** — the host approves USDC + submits the
+4. Calls **`placeCashout`** — the host approves USDC + submits the
    integrator's place-offramp tx + parses the receipt for an `orderId`.
 5. Polls `getOrdersById(orderId)`. On `ACCEPTED` (1) encrypts the user's
    payment address against the merchant's pubkey via the SDK, then calls
@@ -411,16 +446,16 @@ the three callbacks described next.
 > + fee) at `setSellOrderUpi`. `userInitiateOfframp` only pulls the
 > principal from the user. The fee comes from the integrator's USDC
 > balance (the "pool"). On a fresh deploy, top up the integrator's USDC
-> by at least a few hundred small-order fees, or `placeOfframp` will
+> by at least a few hundred small-order fees, or `placeCashout` will
 > revert with `OfframpInsufficientPool` on the first user.
 
 ### Offramp callback contract
 
-Three callbacks. Required: `placeOfframp`, `deliverUpi`. Optional:
+Three callbacks. Required: `placeCashout`, `deliverUpi`. Optional:
 `reconcile` (skip if your integrator doesn't expose it).
 
 ```ts
-type PlaceOfframpContext = {
+type PlaceCashoutContext = {
   /** Currency the user picked. `circleId` is guaranteed populated —
    *  either the value the host pinned, or one the SDK routed. */
   currency: CurrencyOption;
@@ -440,7 +475,7 @@ type PlaceOfframpContext = {
   userPubKey: string;
 };
 
-type PlaceOfframpResult = { orderId: string; txHash: string };
+type PlaceCashoutResult = { orderId: string; txHash: string };
 type DeliverUpiContext  = { orderId: string; encryptedUpi: string };
 type ReconcileContext   = { orderId: string; status: number /* 3=COMPLETED, 4=CANCELLED */ };
 ```
@@ -475,7 +510,7 @@ const LOTPOT_INTEGRATOR_ABI = [
     ] },
 ] as const;
 
-const placeOfframp = async (ctx: PlaceOfframpContext): Promise<PlaceOfframpResult> => {
+const placeCashout = async (ctx: PlaceCashoutContext): Promise<PlaceCashoutResult> => {
   // 1. Approve USDC to the integrator if allowance is short. Approve the
   //    TOTAL (`principal + fee`) — Diamond pulls that much at setSellOrderUpi.
   const totalCharge = ctx.usdcAmount + ctx.feeUsdc;
@@ -533,12 +568,12 @@ shape), the contract above is the same — only the ABI fragments and event
 parser change. The widget never knows the difference.
 
 > **Tip:** `userPubKey` is auto-generated from the SDK's relay identity
-> (lazily persisted in localStorage). Hosts that already use `<P2PCheckout>`
+> (lazily persisted in localStorage). Hosts that already use `<Checkout>`
 > share the same identity — no extra wiring required.
 
 ---
 
-## Order history & resume (`<P2POrderHistory>`)
+## Order history & resume (`<PaymentHistory>`)
 
 A read-only widget that lists the connected user's orders from the
 subgraph. Two common patterns:
@@ -548,14 +583,16 @@ subgraph. Two common patterns:
 - **Full history page or drawer** (`filter="all"`) — shows everything,
   grouped into Pending / Past.
 
-Click "Resume" on a pending row → host opens `<P2PCheckout>` in
+Click "Resume" on a pending row → host opens `<Checkout>` in
 **tracking-only mode** with that orderId. The checkout widget polls the
 chain and snaps directly to whichever screen the order is currently on
 (no "Finding merchant" flash for already-accepted orders).
 
 ```tsx
 import { useCallback, useState } from "react";
-import { P2PCheckout, P2POrderHistory, type CheckoutSigner } from "@p2pdotme/checkout-widget";
+import { type CheckoutSigner } from "@p2pdotme/widgets";
+import { Checkout } from "@p2pdotme/widgets/checkout";
+import { PaymentHistory } from "@p2pdotme/widgets/payment-history";
 
 export function HomePage({ signer }: { signer: CheckoutSigner }) {
   const [resumeOrderId, setResumeOrderId] = useState<string | null>(null);
@@ -575,7 +612,7 @@ export function HomePage({ signer }: { signer: CheckoutSigner }) {
 
   return (
     <>
-      <P2POrderHistory
+      <PaymentHistory
         signer={signer}
         subgraphUrl={SUBGRAPH_URL}
         usdcAddress={USDC_ADDRESS}
@@ -587,7 +624,7 @@ export function HomePage({ signer }: { signer: CheckoutSigner }) {
       />
 
       {resumeOrderId && (
-        <P2PCheckout
+        <Checkout
           orderId={resumeOrderId}      // tracking-only — no placeOrder needed
           signer={signer}
           chainId={84532}
@@ -611,7 +648,7 @@ disable with `pollIntervalMs` (set `0` to disable).
 ### Optimistic terminal updates
 
 The subgraph has ~10–20s indexing latency. When `onComplete` /
-`onCancel` fires from `<P2PCheckout>`, pass that orderId into
+`onCancel` fires from `<Checkout>`, pass that orderId into
 `optimisticUpdates` — the history widget overlays the terminal status
 immediately. The overlay is harmlessly redundant once the subgraph
 catches up.
@@ -620,7 +657,7 @@ catches up.
 an immediate refetch (useful from the same `onComplete` / `onCancel`
 handlers).
 
-### `<P2POrderHistory>` props
+### `<PaymentHistory>` props
 
 | Prop | Type | Required | Notes |
 |---|---|---|---|
@@ -786,7 +823,8 @@ CSS-in-JS apps, sandboxed iframes, or hosts where editing global CSS isn't
 practical. All three widgets accept the same prop shape:
 
 ```tsx
-import { P2PCheckout, type P2PTheme } from "@p2pdotme/checkout-widget";
+import { type P2PTheme } from "@p2pdotme/widgets";
+import { Checkout } from "@p2pdotme/widgets/checkout";
 
 const theme: P2PTheme = {
   colors: {
@@ -803,9 +841,9 @@ const theme: P2PTheme = {
   font:  "Lato, system-ui, sans-serif",
 };
 
-<P2PCheckout theme={theme} {/* ...other props... */} />
-<P2POrderHistory theme={theme} {/* ... */} />
-<P2POfframp theme={theme} {/* ... */} />
+<Checkout theme={theme} {/* ...other props... */} />
+<PaymentHistory theme={theme} {/* ... */} />
+<Cashout theme={theme} {/* ... */} />
 ```
 
 Internally the prop is written to inline `style="--p2p-color-accent: …"`
@@ -834,7 +872,7 @@ later without breaking callers.
 You decide which currencies your integrator accepts by passing a
 `CurrencyOption[]`. `circleId` is **optional** — leave it off and the
 widget routes via the SDK (requires `subgraphUrl` + `usdcAddress` +
-`usdcAmount` on `<P2PCheckout>`); set it to pin a specific merchant
+`usdcAmount` on `<Checkout>`); set it to pin a specific merchant
 circle for that currency. Mix-and-match is fine:
 
 ```ts
@@ -845,8 +883,8 @@ const CURRENCIES: CurrencyOption[] = [
 ];
 ```
 
-> **`<P2POfframp>` requires explicit `circleId` on every currency** — only
-> `<P2PCheckout>` calls the SDK's routing path.
+> **`<Cashout>` requires explicit `circleId` on every currency** — only
+> `<Checkout>` calls the SDK's routing path.
 
 The widget ships built-in defaults for these symbols (label, validator,
 placeholder for the offramp address input). You can override per currency:
@@ -926,7 +964,7 @@ in your product UI without rolling your own viem client.
 ### `useUserTxLimit` (React hook)
 
 ```tsx
-import { useUserTxLimit } from "@p2pdotme/checkout-widget";
+import { useUserTxLimit } from "@p2pdotme/widgets";
 
 function TxLimitBadge({ integrator }: { integrator: `0x${string}` }) {
   const { data, error, isLoading, refetch } = useUserTxLimit(integrator, {
@@ -958,7 +996,7 @@ the address to short-circuit until it's ready.
 For non-React contexts (server components, scripts, Node tooling):
 
 ```ts
-import { fetchUserTxLimit } from "@p2pdotme/checkout-widget";
+import { fetchUserTxLimit } from "@p2pdotme/widgets";
 
 const { raw, formatted } = await fetchUserTxLimit(INTEGRATOR_ADDRESS, {
   chainId: 84532,
@@ -975,7 +1013,7 @@ wire the read into your own wagmi/viem setup (`useReadContract`, etc.).
 
 ## Order lifecycle (what the widget shows)
 
-### Buy (`<P2PCheckout>`)
+### Buy (`<Checkout>`)
 
 | `phase` | When it's set | What's on screen |
 |---|---|---|
@@ -988,12 +1026,12 @@ wire the read into your own wagmi/viem setup (`useReadContract`, etc.).
 | `cancelled` | order = `CANCELLED` | "Order cancelled / refunded" with **Done** button → fires `onCancel` |
 | `error` | Pre-order placement failure | Error message + retry/close → fires `onError`. Failures during `accepted`/`paid` actions (cancel, mark-paid) stay on-screen with an inline error — they don't reset the phase. |
 
-### Offramp (`<P2POfframp>`)
+### Offramp (`<Cashout>`)
 
 | `phase` | When it's set | What's on screen |
 |---|---|---|
 | `form` | Initial render | Amount input (with balance + Max), currency picker, **"You receive X" preview**, payment-address input, "Withdraw {amount}" button |
-| `placing` | `placeOfframp` running (incl. SDK routing + preflight) | "Submitting withdrawal…" with spinner |
+| `placing` | `placeCashout` running (incl. SDK routing + preflight) | "Submitting withdrawal…" with spinner |
 | `placed` | place-offramp tx confirmed; order = `PLACED` | "Finding a merchant" — polls every 3 s |
 | `accepted` | order = `ACCEPTED` | "Sending payment details" — widget encrypts the payment address against the merchant's on-chain pubkey, then immediately calls `deliverUpi` |
 | `encrypting` | encrypt + `deliverUpi` running | Same screen as `accepted`, spinner |
@@ -1017,7 +1055,7 @@ wire the read into your own wagmi/viem setup (`useReadContract`, etc.).
                               ┌──────────┐
                               │ placing  │
                               └────┬─────┘
-                                   │ placeOfframp returns
+                                   │ placeCashout returns
                                    ▼
                               ┌──────────┐  poll every 3 s
                               │  placed  │  ← merchant pool considers
@@ -1050,7 +1088,7 @@ wire the read into your own wagmi/viem setup (`useReadContract`, etc.).
 
 ### What lives where
 
-| | Widget (`@p2pdotme/checkout-widget`) | Host (your app) |
+| | Widget (`@p2pdotme/widgets`) | Host (your app) |
 |---|---|---|
 | Diamond reads (status, price config, additional details) | ✅ | — |
 | SDK circle routing via `placeOrder.prepare` | ✅ | — |
@@ -1070,7 +1108,7 @@ flows through the three host callbacks. That's the bright line.
 
 ## API reference
 
-### `<P2PCheckout>` props
+### `<Checkout>` props
 
 | Prop | Type | Required | Notes |
 |---|---|---|---|
@@ -1099,7 +1137,7 @@ flows through the three host callbacks. That's the bright line.
 | `onError` | `(err) => void` | — | Any error during the flow. |
 | `onClose` | `() => void` | — | User dismissed the modal. |
 
-### `<P2POfframp>` props
+### `<Cashout>` props
 
 | Prop | Type | Required | Notes |
 |---|---|---|---|
@@ -1107,7 +1145,7 @@ flows through the three host callbacks. That's the bright line.
 | `usdcAddress` | `0x…` | ✅ | For the "you have X USDC available" affordance + balance check. Standard ERC20 read — no integrator dependency. |
 | `diamondAddress` | `0x…` | ✅ | Status polling + on-chain price-config reads + SDK setup. |
 | `currencies` | `CurrencyOption[]` | ✅ | Currency picker. `circleId` optional — left off → SDK auto-routes (orderType=1). |
-| `placeOfframp` | `(ctx) => Promise<{ orderId, txHash }>` | ✅ | Host callback — approves USDC + submits the integrator's place-offramp tx + parses receipt. See [Offramp callback contract](#offramp-callback-contract). |
+| `placeCashout` | `(ctx) => Promise<{ orderId, txHash }>` | ✅ | Host callback — approves USDC + submits the integrator's place-offramp tx + parses receipt. See [Offramp callback contract](#offramp-callback-contract). |
 | `deliverUpi` | `(ctx) => Promise<{ txHash }>` | ✅ | Host callback — submits the integrator's `deliverOfframpUpi` (widget supplies the already-encrypted blob). |
 | `reconcile` | `(ctx) => Promise<{ txHash }>` | — | Host callback — submits the integrator's `reconcile` once the Diamond hits a terminal status. Skip if your integrator doesn't expose it. Called best-effort (errors swallowed). |
 | `chainId` | `number` | — | Default `84532`. |
@@ -1116,9 +1154,9 @@ flows through the three host callbacks. That's the bright line.
 | `fiatAmountLimit` | `bigint` | — | Slippage floor (6 decimals). `0` = no check. |
 | `defaultAmountUsdc` | `bigint` | — | Pre-fills the amount input (6-dec). User can still edit. |
 | `theme` | `P2PTheme` | — | Optional visual overrides. See [Theming](#theming). |
-| `mode` / `open` / events | — | — | Same shape as `<P2PCheckout>`. |
+| `mode` / `open` / events | — | — | Same shape as `<Checkout>`. |
 
-> Looking for `<P2POrderHistory>` props? See its dedicated section
+> Looking for `<PaymentHistory>` props? See its dedicated section
 > [above](#order-history--resume-p2porderhistory).
 
 ### Helper exports
@@ -1126,9 +1164,9 @@ flows through the three host callbacks. That's the bright line.
 ```ts
 import {
   // widgets
-  P2PCheckout,
-  P2POfframp,
-  P2POrderHistory,
+  Checkout,
+  Cashout,
+  PaymentHistory,
   // event-decoding helper (for V2-shaped integrator buy receipts)
   parseOrderIdFromReceipt,
   // integrator reads (see "Reading integrator limits")
@@ -1150,7 +1188,7 @@ import {
   getPaymentLabelFor,
   // enum
   OrderStatus,
-} from "@p2pdotme/checkout-widget";
+} from "@p2pdotme/widgets";
 ```
 
 **The package ships no integrator-specific ABIs.** `MarketplaceCheckoutIntegrator`,
@@ -1158,10 +1196,10 @@ import {
 imports them. See the [Offramp callback contract](#offramp-callback-contract)
 for what the host has to provide.
 
-Type-only exports include `P2PCheckoutProps`, `P2POfframpProps`,
-`P2POrderHistoryProps`, `P2PTheme`, `CheckoutSigner`, `CheckoutPhase`, `OfframpPhase`,
-`PlaceOrderResult`, `PlaceOrderContext`, `PlaceOfframpContext`,
-`PlaceOfframpResult`, `DeliverUpiContext`, `ReconcileContext`,
+Type-only exports include `CheckoutProps`, `CashoutProps`,
+`PaymentHistoryProps`, `P2PTheme`, `CheckoutSigner`, `CheckoutPhase`, `CashoutPhase`,
+`PlaceOrderResult`, `PlaceOrderContext`, `PlaceCashoutContext`,
+`PlaceCashoutResult`, `DeliverUpiContext`, `ReconcileContext`,
 `CurrencyOption`, `PaymentAddressValidator`, `ScreeningConfig`,
 `ScreeningOrderDetails`, and `ScreeningUserDetails`.
 
@@ -1193,10 +1231,10 @@ exists so merchant-app's existing `/order-statuses` lookup uniformly answers
    };
    ```
 
-2. **Pass `screening`** to `<P2PCheckout>`. Source the values from your env.
+2. **Pass `screening`** to `<Checkout>`. Source the values from your env.
 
    ```tsx
-   <P2PCheckout
+   <Checkout
      signer={signer}
      placeOrder={placeOrder}
      screening={{
@@ -1235,7 +1273,7 @@ I've paid → 10s → COMPLETED → onComplete). Useful for design reviews and
 local UX iteration without spending real testnet USDC.
 
 ```tsx
-<P2PCheckout demo placeOrder={async () => ({ orderId: "demo", txHash: "0x" })} signer={signer} />
+<Checkout demo placeOrder={async () => ({ orderId: "demo", txHash: "0x" })} signer={signer} />
 ```
 
 ---
@@ -1284,9 +1322,10 @@ context so it shows up in Sentry / DataDog without extra wiring.
 ### Branching on the code
 
 ```tsx
-import { P2PCheckout, P2PError } from "@p2pdotme/checkout-widget";
+import { P2PError } from "@p2pdotme/widgets";
+import { Checkout } from "@p2pdotme/widgets/checkout";
 
-<P2PCheckout
+<Checkout
   /* … */
   onError={(err) => {
     if (err instanceof P2PError) {
@@ -1320,7 +1359,7 @@ message instead of "The transaction reverted on-chain for an unrecognized
 reason":
 
 ```ts
-import { registerRevertSelectors } from "@p2pdotme/checkout-widget";
+import { registerRevertSelectors } from "@p2pdotme/widgets";
 
 // One-time, at app boot.
 registerRevertSelectors({
@@ -1385,16 +1424,16 @@ The `signer` prop is read on each render, so a parent re-render with the new
 signer flushes the state. If you cache the signer in a memo, make sure the
 deps include the wallet address.
 
-**`<P2POrderHistory>` still shows a just-completed order as "Awaiting payment"**
+**`<PaymentHistory>` still shows a just-completed order as "Awaiting payment"**
 The subgraph has ~10–20s indexing latency. Forward the orderId from
-`<P2PCheckout>`'s `onComplete` / `onCancel` into the history widget's
+`<Checkout>`'s `onComplete` / `onCancel` into the history widget's
 `optimisticUpdates` prop and bump `refreshKey` — the row flips status
 immediately and reconciles with the subgraph on the next fetch. See
 [Optimistic terminal updates](#optimistic-terminal-updates).
 
 **SDK routing throws "Routing requires subgraphUrl, usdcAddress, and usdcAmount"**
 You left `circleId` off some `CurrencyOption` but didn't pass the routing
-inputs to `<P2PCheckout>`. Either add `circleId` to that currency or pass
+inputs to `<Checkout>`. Either add `circleId` to that currency or pass
 all three routing props. `fiatAmount` is optional — when missing the widget
 derives it from on-chain `getPriceConfig`.
 
@@ -1403,10 +1442,10 @@ derives it from on-chain `getPriceConfig`.
 ## Local development against a private fork
 
 ```bash
-git clone https://github.com/p2pdotme/p2pdotme-checkout-widget
-cd p2pdotme-checkout-widget
+git clone https://github.com/p2pdotme/widgets
+cd widgets
 npm install
-npm run build       # tsup → dist/{index.js,index.cjs,index.d.ts}
+npm run build       # tsup → dist/{index,checkout,cashout,payment-history}.{js,cjs,d.ts}
 npm pack --dry-run  # preview what will be published
 ```
 
@@ -1416,7 +1455,7 @@ To consume the local build from another app:
 # in the widget repo
 npm pack
 # copy the .tgz path, then in your app:
-npm i /path/to/p2pdotme-checkout-widget-0.1.0.tgz
+npm i /path/to/p2pdotme-widgets-0.1.0.tgz
 ```
 
 ---
