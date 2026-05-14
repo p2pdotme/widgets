@@ -95,6 +95,14 @@ export interface CurrencyOption {
   symbol: string;
   flag: string;
   paymentMethod: string;
+  /** Native currency symbol shown in the selector's circular badge (e.g. "R$", "₹", "Mx").
+   *  Optional — when omitted, the widget resolves it from `@p2pdotme/sdk/country` by `symbol`. */
+  symbolNative?: string;
+  /** Display name of the country (e.g. "Brazil"). Optional — resolved from SDK when omitted. */
+  country?: string;
+  /** When true, the selector tags the currency with an "Alpha" pill.
+   *  Optional — resolved from SDK's `isAlpha` flag when omitted. */
+  isAlpha?: boolean;
   circleId?: bigint;
   /** Optional preferred payment-channel config id forwarded to the router. */
   paymentChannelConfigId?: bigint;
