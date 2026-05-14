@@ -389,3 +389,59 @@ export interface CashoutProps {
   onError?: (error: Error) => void;
   onClose?: () => void;
 }
+
+// ─── Support widget types ──────────────────────────────────────────────
+// The support surface (Support, PaymentHistoryWithSupport) lives in the
+// same package as Checkout/Cashout/PaymentHistory and reuses CheckoutSigner.
+// Only the bits that don't already exist on the checkout surface live here.
+
+import type { SupportTheme as _SupportTheme } from "./ui/support-theme";
+export type { SupportTheme } from "./ui/support-theme";
+
+export type SupportRole = "user" | "merchant" | "circle_admin" | "ops";
+export type SupportStatus = "none" | "open" | "resolved";
+
+/**
+ * Minimal wallet abstraction the support widget accepts. Structurally
+ * narrower than `CheckoutSigner` — only `address` + `signMessage`. A
+ * `CheckoutSigner` is a valid `SupportSigner` (its `signMessage` is
+ * optional but only required for the support handshake).
+ */
+export interface SupportSigner {
+  address: `0x${string}`;
+  signMessage?: (message: string) => Promise<string>;
+}
+
+export interface SupportProps {
+  orderId?: string;
+  originApp: string;
+  signer: SupportSigner;
+  bridgeUrl: string;
+  /**
+   * Current on-chain dispute state for the order, if known. Drives the
+   * launcher label and styling: "Support" (none), "View support" (open),
+   * "View resolution" (resolved). Defaults to "none" when omitted.
+   */
+  disputeStatus?: SupportStatus;
+  chatwootBaseUrl?: string;
+  chatwootInboxIdentifier?: string;
+  theme?: _SupportTheme;
+  onOpen?: () => void;
+  onClose?: () => void;
+}
+
+export interface SupportSessionChatwoot {
+  baseUrl: string;
+  websiteToken: string;
+  identifier: string;
+  identifierHash: string;
+}
+
+export interface SupportSession {
+  address: `0x${string}`;
+  role: SupportRole;
+  chatwoot: SupportSessionChatwoot | null;
+  /** Persistent bearer token issued by the bridge after sign-in. */
+  sessionToken: string;
+  expiresAt: number;
+}

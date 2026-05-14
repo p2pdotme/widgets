@@ -53,6 +53,11 @@
       "import": "./dist/payment-history.js",
       "require": "./dist/payment-history.cjs"
     },
+    "./support": {
+      "types": "./dist/support.d.ts",
+      "import": "./dist/support.js",
+      "require": "./dist/support.cjs"
+    },
     "./package.json": "./package.json"
   },
   "files": [
@@ -66,7 +71,7 @@
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
     "typecheck:examples": "tsc --noEmit --project tsconfig.examples.json",
-    "test": "node --experimental-strip-types --test 'src/core/*.test.ts'",
+    "test": "node --experimental-strip-types --test 'src/core/*.test.ts' && vitest run",
     "verify": "npm run typecheck && npm run typecheck:examples && npm run test && npm run build",
     "clean": "rm -rf dist",
     "prepublishOnly": "npm run clean && npm run build"
@@ -80,13 +85,17 @@
     "@p2pdotme/sdk": "^1.1.6"
   },
   "devDependencies": {
+    "@testing-library/jest-dom": "^6.6.0",
+    "@testing-library/react": "^16.1.0",
     "@types/react": "^18.3.0",
     "@types/react-dom": "^18.3.0",
+    "jsdom": "^26.0.0",
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
     "tsup": "^8.3.0",
     "typescript": "^5.5.0",
-    "viem": "^2.21.0"
+    "viem": "^2.21.0",
+    "vitest": "^2.0.0"
   },
   "publishConfig": {
     "access": "public"
