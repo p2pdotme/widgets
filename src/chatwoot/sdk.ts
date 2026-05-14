@@ -11,6 +11,17 @@ export interface ChatwootSession {
   websiteToken: string;
   identifier: string;
   identifierHash: string;
+  /**
+   * Optional `cw_conversation` JWT minted by the bridge for a specific
+   * per-order conversation. When present, the widget sets it as a
+   * cookie before `chatwootSDK.run()` so the embedded iframe opens
+   * that exact thread instead of Chatwoot's auto-created default
+   * thread for the contact. Per D-006-v2 the listener creates
+   * conversations with the deterministic source_id `order:<id>:<role>`;
+   * the bridge mints the JWT against that source_id + the inbox HMAC
+   * secret.
+   */
+  cwConversation?: string;
 }
 
 declare global {
@@ -36,6 +47,7 @@ const loadedFor = new Map<string, Promise<void>>();
 interface ActiveInbox {
   baseUrl: string;
   websiteToken: string;
+  cwConversation?: string;
   identifier: string;
 }
 let active: ActiveInbox | null = null;
@@ -82,10 +94,28 @@ export async function bootChatwoot(session: ChatwootSession): Promise<void> {
     active?.baseUrl === session.baseUrl &&
     active?.websiteToken === session.websiteToken;
   const sameUser = sameInbox && active?.identifier === session.identifier;
-  if (sameUser) return;
+  const sameConversation =
+    sameUser && active?.cwConversation === session.cwConversation;
+  if (sameConversation) return;
 
-  if (!sameInbox) {
+  // Conversation changed even though inbox+user did not — reload the
+  // iframe so it reads the new `cw_conversation` cookie. The Chatwoot
+  // SDK builds the iframe URL once at run() time, so swapping cookies
+  // mid-session requires a teardown.
+  if (!sameInbox || !sameConversation) {
     resetChatwootInstance();
+    // Set the `cw_conversation` cookie BEFORE `chatwootSDK.run()` —
+    // Chatwoot's SDK reads `document.cookie` while constructing the
+    // embedded iframe URL, so the cookie must already exist when run()
+    // fires. When `session.cwConversation` is empty, clear any stale
+    // cookie so the contact falls back to Chatwoot's default thread.
+    if (typeof document !== "undefined") {
+      if (session.cwConversation) {
+        document.cookie = `cw_conversation=${session.cwConversation}; path=/; SameSite=Lax`;
+      } else {
+        document.cookie = "cw_conversation=; path=/; SameSite=Lax; max-age=0";
+      }
+    }
     window.chatwootSDK.run({
       websiteToken: session.websiteToken,
       baseUrl: session.baseUrl,
@@ -105,6 +135,7 @@ export async function bootChatwoot(session: ChatwootSession): Promise<void> {
     baseUrl: session.baseUrl,
     websiteToken: session.websiteToken,
     identifier: session.identifier,
+    cwConversation: session.cwConversation,
   };
 }
 

@@ -99,3 +99,54 @@ describe("bootChatwoot", () => {
     expect(reset).toHaveBeenCalled();
   });
 });
+
+describe("bootChatwoot cw_conversation cookie", () => {
+  function clearCookie() {
+    document.cookie = "cw_conversation=; path=/; max-age=0";
+  }
+
+  beforeEach(() => clearCookie());
+  afterEach(() => clearCookie());
+
+  it("sets cw_conversation cookie before run() when the session carries one", async () => {
+    const run = vi.fn((_opts: { websiteToken: string; baseUrl: string }) => {
+      // Assert cookie is already present when run() executes, matching the
+      // real SDK behaviour of building the iframe URL inside run().
+      expect(document.cookie).toContain("cw_conversation=jwt_alpha");
+      (window as any).$chatwoot = {
+        setUser: vi.fn(),
+        toggle: vi.fn(),
+        reset: vi.fn(),
+      };
+    });
+    (window as any).chatwootSDK = { run };
+    await bootChatwoot(makeSession({ cwConversation: "jwt_alpha" }));
+    expect(run).toHaveBeenCalledOnce();
+  });
+
+  it("reboots the SDK and swaps cookie when only cwConversation changes", async () => {
+    const run = stubSDK();
+    await bootChatwoot(makeSession({ cwConversation: "jwt_order_180" }));
+    expect(document.cookie).toContain("cw_conversation=jwt_order_180");
+    await bootChatwoot(makeSession({ cwConversation: "jwt_order_169" }));
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(document.cookie).toContain("cw_conversation=jwt_order_169");
+  });
+
+  it("clears stale cookie when the new session has no cwConversation", async () => {
+    const run = stubSDK();
+    await bootChatwoot(makeSession({ cwConversation: "jwt_order_180" }));
+    expect(document.cookie).toContain("cw_conversation=jwt_order_180");
+    await bootChatwoot(makeSession({ cwConversation: undefined }));
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(document.cookie).not.toContain("jwt_order_180");
+  });
+
+  it("is a no-op when cwConversation matches the active boot", async () => {
+    const run = stubSDK();
+    const session = makeSession({ cwConversation: "jwt_order_180" });
+    await bootChatwoot(session);
+    await bootChatwoot(session);
+    expect(run).toHaveBeenCalledOnce();
+  });
+});
