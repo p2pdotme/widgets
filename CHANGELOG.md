@@ -61,6 +61,37 @@ prefix on error/theme distinguishes them from native `Error` / generic
 - `npm run verify` script chains all of the above locally.
 
 ### Changed
+- **Support widget — production-ready UX pass.**
+  - **Theming unified with `P2PTheme`.** `SupportTheme` is now a type
+    alias of `P2PTheme`; the modal honors the same `--p2p-*` tokens as
+    `<Checkout>` / `<Cashout>` / `<PaymentHistory>`. The old
+    `SupportTheme` shape (`colorPrimary` / `colorBg` / `colorText` /
+    `colorMuted` / `radius` / `font`) and `--support-*` CSS variables
+    are removed. Hosts that already pass a `P2PTheme` (e.g.
+    `theme={CHECKOUT_THEME}`) now actually see the support modal pick
+    up dark mode / accent / radii without any change on their end.
+  - **No more silent close on `chatwoot: null`.** When the bridge returns
+    a session without an inbox binding (order pre-acceptance, or a
+    circle whose inbox hasn't been provisioned in
+    `CHATWOOT_INBOX_BY_CIRCLE`), the modal now renders an actionable
+    "Support not available yet" state with a Retry button instead of
+    silently closing. Same wallet-lane silent refresh is preserved on
+    `<PaymentHistoryWithSupport>` (used for the "Active support" pip).
+  - **Error classification + Retry on every failure.** Errors are
+    bucketed into `userRejected` (EIP-1193 4001 + "user rejected" /
+    "user denied" / "user cancelled" / wagmi-style names),
+    `auth` (4xx from `/auth/sign-in`), `network` (5xx + `Failed to
+    fetch` / fetch failures), `chatwoot` (SDK boot failure), and
+    `unknown`. Each renders a friendly title + body, the raw cause as
+    monospace muted detail for debugging, and Retry + Close buttons.
+  - **Accessibility.** `role="dialog"` + `aria-modal` now live on the
+    content card (not the backdrop), `aria-busy` is set during the
+    signing / loading-chat phases, focus returns to the launcher on
+    close, and Escape closes (via the shared `<Modal>` portal).
+  - **Launcher polish.** The launcher uses the shared secondary-button
+    style so it sits flush next to `PaymentHistory`'s Resume button,
+    with a small dispute-status dot (red for open, green for resolved)
+    instead of relying on label alone.
 - `@p2pdotme/sdk` bumped from `^1.1.3` to `^1.1.6` (patch).
 - `examples/basic-checkout.tsx` rewritten against the renamed prop shape
   — uses the three host callbacks (`placeCashout` / `deliverUpi` /

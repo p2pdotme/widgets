@@ -1,20 +1,68 @@
-import { useCallback, useEffect, useState } from "react";
-import type { SupportProps } from "../types";
-import { themeToCssVars } from "../ui/support-theme";
+import { forwardRef, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { SupportProps, SupportStatus } from "../types";
+import { color, radius, font, weight, S, themeToCssVars } from "../ui/theme";
+import { Modal } from "../ui/Modal";
+import { Spinner, injectKeyframes } from "../ui/components";
 import { bootChatwoot, openChatwoot } from "../chatwoot/sdk";
 import { signInWithBridge } from "../api/bridge";
 import {
   readCachedSession,
   writeCachedSession,
+  clearCachedSession,
   type SignInResponse,
 } from "../state/sessionCache";
+
+type ErrorKind = "userRejected" | "network" | "auth" | "chatwoot" | "unknown";
 
 type Phase =
   | { kind: "idle" }
   | { kind: "signing" }
   | { kind: "loading-chat" }
-  | { kind: "ready"; session: SignInResponse }
-  | { kind: "error"; reason: string };
+  /** Bridge returned `chatwoot: null` — the order isn't bound to a Chatwoot
+   *  inbox yet. Most often this is pre-acceptance (no merchant has accepted
+   *  the order, so it has no circleId on chain), occasionally a circle
+   *  whose inbox has not been provisioned in the bridge config. Both
+   *  resolve over time once the order moves to ACCEPTED in a configured
+   *  circle. We render an actionable "not available yet" state with Retry
+   *  instead of silently closing. */
+  | { kind: "unavailable" }
+  | { kind: "error"; errorKind: ErrorKind; reason: string };
+
+/** Map any thrown error into a typed bucket the UI knows how to copy for.
+ *  EIP-1193 4001 covers Privy / Thirdweb / wagmi / window.ethereum user
+ *  rejections; the regexes catch wallet providers that throw with messages
+ *  but no numeric code. */
+function classifyError(err: unknown): { kind: ErrorKind; reason: string } {
+  const raw = err instanceof Error ? err : new Error(String(err));
+  const msg = raw.message || String(err);
+  const code = (err as { code?: number } | null | undefined)?.code;
+  if (
+    code === 4001 ||
+    /user (rejected|denied|cancell?ed)/i.test(msg) ||
+    /rejected the request/i.test(msg)
+  ) {
+    return { kind: "userRejected", reason: msg };
+  }
+  // signInWithBridge throws `sign-in failed (NNN): body`. Treat 4xx as
+  // auth (signature didn't verify, replay, etc.) and 5xx as network.
+  const sxx = msg.match(/sign-in failed \((\d{3})\)/i);
+  if (sxx) {
+    const status = Number(sxx[1]);
+    return {
+      kind: status >= 500 ? "network" : "auth",
+      reason: msg,
+    };
+  }
+  if (
+    /Failed to fetch|NetworkError|ECONNREFUSED|ENOTFOUND|fetch failed/i.test(msg)
+  ) {
+    return { kind: "network", reason: msg };
+  }
+  if (/chatwoot/i.test(msg)) {
+    return { kind: "chatwoot", reason: msg };
+  }
+  return { kind: "unknown", reason: msg };
+}
 
 export function Support(props: SupportProps) {
   const {
@@ -29,6 +77,13 @@ export function Support(props: SupportProps) {
   } = props;
   const [open, setOpen] = useState(false);
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
+  // Incrementing this counter retriggers the sign-in / boot effect. Used
+  // both for the initial open and for the Retry button on the unavailable
+  // and error states.
+  const [attempt, setAttempt] = useState(0);
+  const launcherRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(injectKeyframes, []);
 
   const launcherLabel =
     disputeStatus === "open"
@@ -39,206 +94,254 @@ export function Support(props: SupportProps) {
 
   const handleOpen = useCallback(() => {
     setOpen(true);
+    setAttempt((a) => a + 1);
     onOpen?.();
   }, [onOpen]);
 
   const handleClose = useCallback(() => {
     setOpen(false);
+    setPhase({ kind: "idle" });
     onClose?.();
+    // Return focus to the launcher so keyboard users don't lose their place.
+    queueMicrotask(() => launcherRef.current?.focus());
   }, [onClose]);
 
+  const handleRetry = useCallback(() => {
+    // The per-order cache is only ever written when chatwoot was non-null,
+    // so a retry from "unavailable" never has cache to clear. Clearing it
+    // anyway is a no-op defensive guard against future changes that might
+    // start caching the null-chatwoot response.
+    if (orderId) clearCachedSession(bridgeUrl, signer.address, orderId);
+    setAttempt((a) => a + 1);
+  }, [bridgeUrl, signer.address, orderId]);
+
   useEffect(() => {
-    if (!open) {
-      setPhase({ kind: "idle" });
-      return;
-    }
+    if (!open || attempt === 0) return;
     let cancelled = false;
     (async () => {
       try {
-        // Always show the signing loader immediately so the click is
-        // never a flash of nothing. If we skip straight to a cached
-        // chatwoot:null and silently close, the user perceives the
-        // button as broken.
         setPhase({ kind: "signing" });
-        let session = readCachedSession(bridgeUrl, signer.address, orderId);
+        let session: SignInResponse | null = readCachedSession(
+          bridgeUrl,
+          signer.address,
+          orderId,
+        );
         if (!session) {
           session = await signInWithBridge({ signer, bridgeUrl, orderId });
-          // Only cache when chatwoot resolved. A null chatwoot session
-          // means the order isn't bound to a circle yet (pre-acceptance)
-          // — that's transient state we don't want to cache for 7 days.
           if (session.chatwoot) {
             writeCachedSession(bridgeUrl, signer.address, session, orderId);
           }
         }
         if (cancelled) return;
         if (!session.chatwoot) {
-          // Order not yet bound to a circle (pre-acceptance on chain) or
-          // bridge can't resolve an inbox. Nothing to show — silently
-          // close the modal so the click is a no-op rather than a wall
-          // of explainer text. The Support button stays clickable; the
-          // user can retry once the order is accepted.
-          if (typeof console !== "undefined") {
-            console.info(
-              "[support] no chatwoot session for this order; closing modal",
-            );
-          }
-          setOpen(false);
-          onClose?.();
+          setPhase({ kind: "unavailable" });
           return;
         }
         setPhase({ kind: "loading-chat" });
         await bootChatwoot(session.chatwoot);
         if (cancelled) return;
         openChatwoot();
-        // Chatwoot's own widget is now the user-facing surface. Auto-close
-        // our modal so it does not sit on top of the chat. The modal stays
-        // visible only for signing / loading-chat / error phases.
+        // Chatwoot's iframe is now the active UI surface; close our modal
+        // so it doesn't sit on top of the chat. The launcher stays
+        // clickable so the user can re-open this flow later.
         setOpen(false);
+        setPhase({ kind: "idle" });
         onClose?.();
       } catch (err) {
         if (cancelled) return;
-        const message = err instanceof Error ? err.message : String(err);
-        setPhase({ kind: "error", reason: message });
+        const c = classifyError(err);
+        setPhase({ kind: "error", errorKind: c.kind, reason: c.reason });
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [open, signer, bridgeUrl, orderId, onClose]);
+  }, [open, attempt, signer, bridgeUrl, orderId, onClose]);
 
-  const cssVars = themeToCssVars(theme);
+  const themeStyle = useMemo(() => themeToCssVars(theme), [theme]);
 
   return (
-    <div style={cssVars} data-support-root>
-      <button
-        type="button"
+    <div style={themeStyle} data-support-root>
+      <LauncherButton
+        ref={launcherRef}
+        label={launcherLabel}
+        disputeStatus={disputeStatus}
         onClick={handleOpen}
-        data-support-launcher
-        aria-label="Open support"
-        style={{
-          background: "var(--support-color-primary)",
-          color: "var(--support-color-bg)",
-          border: "none",
-          borderRadius: "var(--support-radius)",
-          padding: "8px 14px",
-          fontFamily: "var(--support-font)",
-          fontSize: 14,
-          cursor: "pointer",
-        }}
-      >
-        {launcherLabel}
-      </button>
-
-      {open && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label="Support ticket"
-          data-support-modal
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(0,0,0,0.5)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            zIndex: 9999,
-            fontFamily: "var(--support-font)",
-          }}
-          onClick={handleClose}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              background: "var(--support-color-bg)",
-              color: "var(--support-color-text)",
-              borderRadius: "var(--support-radius)",
-              padding: 24,
-              width: "min(480px, 92vw)",
-              maxHeight: "80vh",
-              overflow: "auto",
-            }}
-          >
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                marginBottom: 16,
-              }}
-            >
-              <h2 style={{ margin: 0, fontSize: 18 }}>
-                Support
-                {orderId ? (
-                  <>
-                    {" "}
-                    <span
-                      style={{
-                        color: "var(--support-color-muted)",
-                        fontWeight: 400,
-                        marginLeft: 8,
-                        fontSize: 14,
-                      }}
-                    >
-                      Order {shortenId(orderId)}
-                    </span>
-                  </>
-                ) : null}
-              </h2>
-              <button
-                type="button"
-                onClick={handleClose}
-                aria-label="Close support"
-                style={{
-                  background: "transparent",
-                  border: "none",
-                  fontSize: 20,
-                  cursor: "pointer",
-                  color: "var(--support-color-muted)",
-                }}
-              >
-                ×
-              </button>
-            </div>
-
-            <p
-              style={{
-                color: "var(--support-color-muted)",
-                fontSize: 13,
-                lineHeight: 1.5,
-                marginTop: 0,
-              }}
-            >
-              Opened from <code>{originApp}</code>. Counterparties are labelled
-              as Order Fulfillment Partner and Fulfillment Partner Manager. No
-              names, wallet addresses, or protocol role names are shown.
-            </p>
-
-            <PhaseView phase={phase} />
-          </div>
-        </div>
-      )}
+      />
+      <Modal open={open} onClose={handleClose}>
+        <DialogContent
+          orderId={orderId}
+          originApp={originApp}
+          phase={phase}
+          onClose={handleClose}
+          onRetry={handleRetry}
+        />
+      </Modal>
     </div>
   );
 }
 
-function PhaseView({ phase }: { phase: Phase }) {
-  const box: React.CSSProperties = {
-    marginTop: 16,
-    padding: 16,
-    borderRadius: "var(--support-radius)",
-    fontSize: 13,
-  };
+interface LauncherButtonProps {
+  label: string;
+  disputeStatus: SupportStatus;
+  onClick: () => void;
+}
 
+const LauncherButton = forwardRef<HTMLButtonElement, LauncherButtonProps>(
+  function LauncherButton({ label, disputeStatus, onClick }, ref) {
+    // Match PaymentHistory's per-row Resume button so the two sit next to
+    // each other without a stylistic clash. The dispute-status indicator
+    // is the small dot to the left of the label.
+    const dotColor =
+      disputeStatus === "open"
+        ? color.danger
+        : disputeStatus === "resolved"
+          ? color.success
+          : null;
+    return (
+      <button
+        ref={ref}
+        type="button"
+        onClick={onClick}
+        data-support-launcher
+        aria-label="Open support"
+        style={{
+          ...S.secondaryBtn,
+          height: 36,
+          padding: "0 12px",
+          fontSize: font.md,
+          fontWeight: weight.medium,
+        }}
+      >
+        {dotColor && (
+          <span
+            aria-hidden
+            style={{
+              display: "inline-block",
+              width: 8,
+              height: 8,
+              borderRadius: "50%",
+              background: dotColor,
+            }}
+          />
+        )}
+        {label}
+      </button>
+    );
+  },
+);
+
+interface DialogContentProps {
+  orderId?: string;
+  originApp: string;
+  phase: Phase;
+  onClose: () => void;
+  onRetry: () => void;
+}
+
+function DialogContent({
+  orderId,
+  originApp,
+  phase,
+  onClose,
+  onRetry,
+}: DialogContentProps) {
+  const busy = phase.kind === "signing" || phase.kind === "loading-chat";
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-busy={busy || undefined}
+      aria-labelledby="p2p-support-title"
+      data-support-modal
+      style={{
+        padding: 24,
+        boxSizing: "border-box",
+        fontFamily: "var(--p2p-font, inherit)",
+        color: color.text,
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          marginBottom: 12,
+          gap: 12,
+        }}
+      >
+        <h2
+          id="p2p-support-title"
+          style={{ ...S.h2, fontSize: font.lg, color: color.text }}
+        >
+          Support
+          {orderId ? (
+            <>
+              {" "}
+              <span
+                style={{
+                  ...S.muted,
+                  fontWeight: weight.regular,
+                  marginLeft: 8,
+                  fontSize: font.base,
+                }}
+              >
+                Order {shortenId(orderId)}
+              </span>
+            </>
+          ) : null}
+        </h2>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close support"
+          style={{
+            ...S.ghostBtn,
+            width: 32,
+            height: 32,
+            padding: 0,
+            fontSize: 20,
+            color: color.textMuted,
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            flexShrink: 0,
+          }}
+        >
+          ×
+        </button>
+      </div>
+
+      <p style={{ ...S.muted, marginTop: 0, marginBottom: 16, lineHeight: 1.5 }}>
+        Opened from{" "}
+        <code style={{ ...S.mono, color: color.text }}>{originApp}</code>.
+        Counterparties are labelled as Order Fulfillment Partner and Fulfillment
+        Partner Manager. No names, wallet addresses, or protocol role names are
+        shown.
+      </p>
+
+      <PhaseView phase={phase} onRetry={onRetry} onClose={onClose} />
+    </div>
+  );
+}
+
+function PhaseView({
+  phase,
+  onRetry,
+  onClose,
+}: {
+  phase: Phase;
+  onRetry: () => void;
+  onClose: () => void;
+}) {
   if (phase.kind === "signing") {
     return (
       <Loader
         title="Signing in"
-        body="Approve the message request to open support for this order."
+        body="Approve the message request in your wallet to open support for this order."
       />
     );
   }
-
   if (phase.kind === "loading-chat") {
     return (
       <Loader
@@ -247,100 +350,187 @@ function PhaseView({ phase }: { phase: Phase }) {
       />
     );
   }
-
-  if (phase.kind === "ready") {
+  if (phase.kind === "unavailable") {
     return (
-      <div
-        style={{
-          ...box,
-          background: "rgba(0,0,0,0.05)",
-          color: "var(--support-color-text)",
-        }}
-      >
-        Support chat opened. Close this dialog to keep chatting with the
-        Payment Support Team.
-      </div>
+      <StatusBlock
+        title="Support not available yet"
+        body="A fulfillment partner needs to accept your order before a support thread can open. Try again in a moment, or come back once your order moves to Accepted."
+        primaryLabel="Retry"
+        onPrimary={onRetry}
+        onSecondary={onClose}
+      />
     );
   }
-
   if (phase.kind === "error") {
+    const copy = errorCopy(phase.errorKind);
     return (
-      <div
-        style={{
-          ...box,
-          border: "1px solid var(--support-color-muted)",
-          color: "var(--support-color-text)",
-        }}
-      >
-        Could not open support: {phase.reason}
-      </div>
+      <StatusBlock
+        title={copy.title}
+        body={copy.body}
+        detail={phase.reason}
+        primaryLabel="Retry"
+        onPrimary={onRetry}
+        onSecondary={onClose}
+        variant="danger"
+      />
     );
   }
-
   return null;
+}
+
+function errorCopy(kind: ErrorKind): { title: string; body: string } {
+  switch (kind) {
+    case "userRejected":
+      return {
+        title: "Authorization cancelled",
+        body: "You declined the sign-in prompt. Tap Retry to sign in and open support.",
+      };
+    case "network":
+      return {
+        title: "Connection issue",
+        body: "We couldn't reach the support service. Check your connection and try again.",
+      };
+    case "auth":
+      return {
+        title: "Sign-in failed",
+        body: "We couldn't verify your wallet. Try again, or reconnect your wallet if the issue persists.",
+      };
+    case "chatwoot":
+      return {
+        title: "Chat couldn't load",
+        body: "The support chat widget didn't load. Refresh the page or try again.",
+      };
+    default:
+      return {
+        title: "Something went wrong",
+        body: "We couldn't open support. Try again in a moment.",
+      };
+  }
 }
 
 function Loader({ title, body }: { title: string; body: string }) {
   return (
     <div
+      role="status"
+      aria-live="polite"
       style={{
-        marginTop: 16,
-        padding: 24,
-        borderRadius: "var(--support-radius)",
-        border: "1px solid var(--support-color-muted)",
+        marginTop: 4,
+        padding: 20,
+        borderRadius: radius.lg,
+        border: `1px solid ${color.border}`,
+        background: color.surfaceAlt,
         display: "flex",
         alignItems: "center",
         gap: 14,
       }}
     >
-      <Spinner />
+      <Spinner size={22} />
       <div style={{ minWidth: 0 }}>
         <div
           style={{
-            fontSize: 14,
-            fontWeight: 500,
-            color: "var(--support-color-text)",
+            fontSize: font.base,
+            fontWeight: weight.medium,
+            color: color.text,
             marginBottom: 2,
           }}
         >
           {title}
         </div>
-        <div
-          style={{
-            fontSize: 12,
-            color: "var(--support-color-muted)",
-            lineHeight: 1.4,
-          }}
-        >
-          {body}
-        </div>
+        <div style={{ ...S.muted, lineHeight: 1.4 }}>{body}</div>
       </div>
     </div>
   );
 }
 
-function Spinner() {
-  const id = "support-spinner-keyframes";
-  if (typeof document !== "undefined" && !document.getElementById(id)) {
-    const style = document.createElement("style");
-    style.id = id;
-    style.textContent =
-      "@keyframes support-spin { to { transform: rotate(360deg); } }";
-    document.head.appendChild(style);
-  }
+function StatusBlock({
+  title,
+  body,
+  detail,
+  primaryLabel,
+  onPrimary,
+  onSecondary,
+  variant,
+}: {
+  title: string;
+  body: string;
+  detail?: string;
+  primaryLabel: string;
+  onPrimary: () => void;
+  onSecondary: () => void;
+  variant?: "danger";
+}) {
+  const titleColor = variant === "danger" ? color.danger : color.text;
   return (
     <div
-      aria-hidden="true"
       style={{
-        width: 18,
-        height: 18,
-        borderRadius: "50%",
-        border: "2px solid var(--support-color-muted)",
-        borderTopColor: "transparent",
-        animation: "support-spin 0.8s linear infinite",
-        flexShrink: 0,
+        marginTop: 4,
+        padding: 20,
+        borderRadius: radius.lg,
+        border: `1px solid ${color.border}`,
+        background: color.surfaceAlt,
       }}
-    />
+    >
+      <div
+        style={{
+          fontSize: font.lg,
+          fontWeight: weight.semibold,
+          color: titleColor,
+          marginBottom: 6,
+        }}
+      >
+        {title}
+      </div>
+      <div style={{ ...S.body, color: color.textMuted, lineHeight: 1.5 }}>
+        {body}
+      </div>
+      {detail && (
+        <div
+          style={{
+            ...S.faint,
+            marginTop: 10,
+            fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+            wordBreak: "break-word",
+          }}
+        >
+          {detail}
+        </div>
+      )}
+      <div
+        style={{
+          display: "flex",
+          gap: 8,
+          marginTop: 16,
+          flexWrap: "wrap",
+        }}
+      >
+        <button
+          type="button"
+          onClick={onPrimary}
+          style={{
+            ...S.primaryBtn,
+            width: "auto",
+            flex: "1 1 140px",
+            height: 40,
+            fontSize: font.base,
+          }}
+        >
+          {primaryLabel}
+        </button>
+        <button
+          type="button"
+          onClick={onSecondary}
+          style={{
+            ...S.secondaryBtn,
+            width: "auto",
+            flex: "1 1 140px",
+            height: 40,
+            fontSize: font.base,
+          }}
+        >
+          Close
+        </button>
+      </div>
+    </div>
   );
 }
 
