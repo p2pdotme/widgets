@@ -52,7 +52,7 @@ describe("Support", () => {
     ).toBeInTheDocument();
   });
 
-  it("opens the modal and shows masked order context when launched", async () => {
+  it("opens the modal, shows masked order context, and renders an actionable unavailable state when the bridge has no inbox bound", async () => {
     const onOpen = vi.fn();
     render(
       <Support
@@ -70,13 +70,16 @@ describe("Support", () => {
     expect(
       screen.getByRole("heading", { level: 2 }),
     ).toHaveTextContent(/^Support\s+Order 0xabcd\.\.\.7890$/);
-    // Sign-in returns chatwoot:null (no inbox provisioned for this order's
-    // circle). The widget silently closes the modal — no wall of explainer
-    // text, the click is a no-op. The Support button stays clickable so
-    // the user can retry once the order is accepted.
+    // Sign-in returns chatwoot:null. The widget renders an "unavailable"
+    // state inside the modal with a Retry button — NOT a silent close.
+    // This is the production-ready behavior: pre-acceptance and
+    // missing-inbox are surfaced to the user as a stable, retryable state
+    // rather than a flash of nothing.
     await waitFor(() =>
-      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+      expect(screen.getByText(/support not available yet/i)).toBeInTheDocument(),
     );
+    expect(screen.getByRole("button", { name: /^retry$/i })).toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
 
   it.each([
@@ -128,7 +131,7 @@ describe("Support", () => {
     expect(typeof body.timestamp).toBe("number");
   });
 
-  it("shows an error when sign-in fails", async () => {
+  it("classifies a 4xx sign-in failure as an auth error with a retry CTA", async () => {
     globalThis.fetch = vi.fn(async () => ({
       ok: false,
       status: 401,
@@ -144,13 +147,76 @@ describe("Support", () => {
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: /open support/i }));
+    // Friendly title from the auth bucket.
     await waitFor(() =>
-      expect(screen.getByText(/could not open support/i)).toBeInTheDocument(),
+      expect(screen.getByText(/^Sign-in failed$/)).toBeInTheDocument(),
     );
+    // Raw error preserved as a monospace detail line for debugging.
     expect(screen.getByText(/sign-in failed \(401\)/i)).toBeInTheDocument();
+    // Every error state offers Retry + Close, never just close.
+    expect(screen.getByRole("button", { name: /^retry$/i })).toBeInTheDocument();
   });
 
-  it("reuses a cached session and skips the bridge call when re-opened", async () => {
+  it("classifies an EIP-1193 user rejection (code 4001) as a userRejected error", async () => {
+    const reject = vi.fn(async () => {
+      const err = new Error("User rejected the request");
+      (err as { code?: number }).code = 4001;
+      throw err;
+    });
+    render(
+      <Support
+        originApp="merchant-demo"
+        signer={{ address: stubSigner.address, signMessage: reject }}
+        bridgeUrl="https://bridge.local"
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /open support/i }));
+    await waitFor(() =>
+      expect(screen.getByText(/authorization cancelled/i)).toBeInTheDocument(),
+    );
+    expect(screen.getByRole("button", { name: /^retry$/i })).toBeInTheDocument();
+  });
+
+  it("retry re-triggers sign-in after a failure", async () => {
+    let call = 0;
+    globalThis.fetch = vi.fn(async () => {
+      call += 1;
+      if (call === 1) {
+        return {
+          ok: false,
+          status: 502,
+          json: async () => ({ ok: false }),
+          text: async () => "",
+        } as unknown as Response;
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => stubSession,
+        text: async () => JSON.stringify(stubSession),
+      } as unknown as Response;
+    }) as unknown as typeof fetch;
+
+    render(
+      <Support
+        originApp="merchant-demo"
+        signer={stubSigner}
+        bridgeUrl="https://bridge.local"
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /open support/i }));
+    await waitFor(() =>
+      expect(screen.getByText(/connection issue/i)).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^retry$/i }));
+    // Second attempt resolves to chatwoot:null → unavailable state.
+    await waitFor(() =>
+      expect(screen.getByText(/support not available yet/i)).toBeInTheDocument(),
+    );
+    expect(call).toBe(2);
+  });
+
+  it("reuses a cached session and renders the unavailable state without hitting the bridge", async () => {
     const longLivedSession = {
       ...stubSession,
       expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000,
@@ -168,10 +234,10 @@ describe("Support", () => {
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: /open support/i }));
-    // Cache hits the chatwoot:null branch directly without a fetch.
-    // The widget silently closes the modal instead of showing copy.
+    // Cache hit reuses the chatwoot:null session and renders the
+    // unavailable state — never silent closes.
     await waitFor(() =>
-      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+      expect(screen.getByText(/support not available yet/i)).toBeInTheDocument(),
     );
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });
@@ -195,7 +261,7 @@ describe("Support", () => {
     });
   });
 
-  it("closes the modal on overlay click", () => {
+  it("closes the modal on backdrop click", async () => {
     const onClose = vi.fn();
     render(
       <Support
@@ -206,8 +272,29 @@ describe("Support", () => {
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: /open support/i }));
-    const dialog = screen.getByRole("dialog");
-    fireEvent.click(dialog);
-    expect(onClose).toHaveBeenCalledOnce();
+    const dialog = await screen.findByRole("dialog");
+    // The role="dialog" now lives on the inner content card (correct
+    // a11y). The backdrop is the dialog's grandparent (Modal renders
+    // backdrop > card > children) and is what closes on click.
+    const backdrop = dialog.parentElement?.parentElement;
+    expect(backdrop).toBeTruthy();
+    fireEvent.click(backdrop!);
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+  });
+
+  it("closes the modal on the close button", async () => {
+    const onClose = vi.fn();
+    render(
+      <Support
+        originApp="merchant-demo"
+        signer={stubSigner}
+        bridgeUrl="https://bridge.local"
+        onClose={onClose}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /open support/i }));
+    await screen.findByRole("dialog");
+    fireEvent.click(screen.getByRole("button", { name: /close support/i }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
 });
