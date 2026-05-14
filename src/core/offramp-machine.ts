@@ -13,13 +13,15 @@ import type {
   DeliverUpiContext, ReconcileContext,
 } from "../types";
 import { DIAMOND_ABI } from "./contracts";
-import { logPlacementError } from "./place-error";
-
-/** End-user-facing string for "router couldn't find anyone for this currency".
- *  Avoids leaking "circle" / `circleId` terminology; the SDK error stays on
- *  err.cause for diagnostics. */
-const NO_ELIGIBLE_MERCHANTS =
-  "No eligible P2P merchants were found to fulfill this transaction.";
+import {
+  toP2PError,
+  noEligibleMerchantsError,
+  missingRoutingInputsError,
+  encryptionPreflightError,
+  encryptionFailedError,
+  orderBadStatusError,
+  type P2PErrorContext,
+} from "./errors";
 
 /**
  * Callback-based offramp state machine. Widget-side responsibilities:
@@ -139,18 +141,29 @@ export function useOfframpMachine(opts: UseOfframpMachineOpts) {
       // with no feedback.
       dispatch({ type: "PLACING", currency, paymentAddress, usdcAmount });
 
+      const errorCtx: P2PErrorContext = {
+        flow: "place-sell",
+        chainId: opts.chainId,
+        user: opts.signer?.address,
+        diamondAddress: opts.diamondAddress,
+        currency: currency?.symbol,
+        circleId: currency?.circleId?.toString(),
+        amountUsdc: usdcAmount?.toString(),
+      };
+
       try {
         // Pre-flight: verify the encryption stack works BEFORE the host
         // pulls user funds. Surfaces broken crypto polyfills early.
-        await preflightEncryption(ordersClient);
+        await preflightEncryption(ordersClient, errorCtx);
 
         // Auto-route circleId via the SDK if the host didn't pin one.
         // Diamond-level operation — no integrator code involved.
         let resolvedCircleId = currency.circleId;
         if (resolvedCircleId === undefined) {
           if (!opts.subgraphUrl) {
-            throw new Error(
-              "Offramp routing requires either CurrencyOption.circleId or `subgraphUrl` (so the SDK can pick a merchant)."
+            throw missingRoutingInputsError(
+              "Offramp routing requires either CurrencyOption.circleId or `subgraphUrl` (so the SDK can pick a merchant).",
+              errorCtx,
             );
           }
           const prepared = await ordersClient.placeOrder.prepare({
@@ -169,12 +182,13 @@ export function useOfframpMachine(opts: UseOfframpMachineOpts) {
           });
           if (prepared.isErr()) {
             // SDK throws "No eligible circles" or similar — "circles" is
-            // protocol-internal jargon. Surface a user-friendly message.
-            throw new Error(NO_ELIGIBLE_MERCHANTS);
+            // protocol-internal jargon. Translate to a user-friendly
+            // routing error with the SDK error on err.cause.
+            throw noEligibleMerchantsError(errorCtx, prepared.error);
           }
           resolvedCircleId = prepared.value.meta?.circleId;
           if (resolvedCircleId === undefined) {
-            throw new Error(NO_ELIGIBLE_MERCHANTS);
+            throw noEligibleMerchantsError(errorCtx);
           }
         }
 
@@ -197,19 +211,10 @@ export function useOfframpMachine(opts: UseOfframpMachineOpts) {
 
         dispatch({ type: "PLACED", orderId: result.orderId, txHash: result.txHash });
         opts.onOrderPlaced?.(result.orderId, result.txHash);
-      } catch (err: any) {
-        logPlacementError(err, {
-          flow: "sell",
-          chainId: opts.chainId,
-          user: opts.signer?.address,
-          diamondAddress: opts.diamondAddress,
-          currency: currency?.symbol,
-          circleId: currency?.circleId?.toString(),
-          amountUsdc: usdcAmount?.toString(),
-        });
-        const message = err?.shortMessage || err?.message || "Failed to place offramp order";
-        dispatch({ type: "ERROR", message });
-        opts.onError?.(err);
+      } catch (err: unknown) {
+        const p2p = toP2PError(err, errorCtx);
+        dispatch({ type: "ERROR", message: p2p.userMessage });
+        opts.onError?.(p2p);
       }
     },
     [opts, ordersClient]
@@ -220,8 +225,15 @@ export function useOfframpMachine(opts: UseOfframpMachineOpts) {
   const polling = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const encryptAndDeliver = useCallback(async (merchantPubkey: string) => {
-    if (!state.paymentAddress) throw new Error("No payment address recorded");
-    if (!state.orderId) throw new Error("No orderId recorded");
+    const ctx: P2PErrorContext = {
+      flow: "deliver-upi",
+      chainId: opts.chainId,
+      user: opts.signer?.address,
+      diamondAddress: opts.diamondAddress,
+      orderId: state.orderId ?? undefined,
+    };
+    if (!state.paymentAddress) throw orderBadStatusError("No payment address recorded", ctx);
+    if (!state.orderId) throw orderBadStatusError("No orderId recorded", ctx);
 
     dispatch({ type: "ENCRYPTING" });
 
@@ -231,7 +243,7 @@ export function useOfframpMachine(opts: UseOfframpMachineOpts) {
       paymentAddress: state.paymentAddress,
       recipientPublicKey: merchantPubkey,
     });
-    if (encResult.isErr()) throw new Error(`Encrypt failed: ${encResult.error.message}`);
+    if (encResult.isErr()) throw encryptionFailedError(encResult.error.message, ctx);
 
     // Hand the encrypted blob to the host so they can submit the
     // integrator's deliverOfframpUpi tx.
@@ -258,9 +270,16 @@ export function useOfframpMachine(opts: UseOfframpMachineOpts) {
       if (numStatus === 1 && state.phase === "placed") {
         dispatch({ type: "ACCEPTED" });
         try { await encryptAndDeliver(merchantPubkey); }
-        catch (err: any) {
-          dispatch({ type: "ERROR", message: err?.shortMessage || err?.message || "Encrypt/deliver failed" });
-          opts.onError?.(err);
+        catch (err: unknown) {
+          const p2p = toP2PError(err, {
+            flow: "deliver-upi",
+            chainId: opts.chainId,
+            user: opts.signer?.address,
+            diamondAddress: opts.diamondAddress,
+            orderId: state.orderId ?? undefined,
+          });
+          dispatch({ type: "ERROR", message: p2p.userMessage });
+          opts.onError?.(p2p);
         }
         return;
       }
@@ -299,6 +318,13 @@ export function useOfframpMachine(opts: UseOfframpMachineOpts) {
    */
   const retryDeliver = useCallback(async () => {
     if (!state.orderId) return;
+    const ctx: P2PErrorContext = {
+      flow: "retry-deliver",
+      chainId: opts.chainId,
+      user: opts.signer?.address,
+      diamondAddress: opts.diamondAddress,
+      orderId: state.orderId,
+    };
     try {
       const order = (await publicClient.readContract({
         address: opts.diamondAddress, abi: DIAMOND_ABI,
@@ -306,13 +332,17 @@ export function useOfframpMachine(opts: UseOfframpMachineOpts) {
       })) as any;
       const numStatus = Number(order.status);
       if (numStatus !== 1) {
-        throw new Error(`Order is in status ${numStatus}; can only retry from ACCEPTED (1)`);
+        throw orderBadStatusError(
+          `Order is in status ${numStatus}; can only retry from ACCEPTED (1)`,
+          ctx,
+        );
       }
       dispatch({ type: "ACCEPTED" });
       await encryptAndDeliver(order.pubkey);
-    } catch (err: any) {
-      dispatch({ type: "ERROR", message: err?.shortMessage || err?.message || "Retry failed" });
-      opts.onError?.(err);
+    } catch (err: unknown) {
+      const p2p = toP2PError(err, ctx);
+      dispatch({ type: "ERROR", message: p2p.userMessage });
+      opts.onError?.(p2p);
     }
   }, [state.orderId, publicClient, opts, encryptAndDeliver]);
 
@@ -327,17 +357,17 @@ export function useOfframpMachine(opts: UseOfframpMachineOpts) {
 
 // ─── helpers ─────────────────────────────────────────────────────────
 
-async function preflightEncryption(ordersClient: OrdersClient): Promise<void> {
+async function preflightEncryption(
+  ordersClient: OrdersClient,
+  ctx: P2PErrorContext,
+): Promise<void> {
   const ephemeral = createRelayIdentity();
   const r = await ordersClient.encryptPaymentAddress({
     paymentAddress: "__preflight__",
     recipientPublicKey: ephemeral.publicKey,
   });
   if (r.isErr()) {
-    throw new Error(
-      `Encryption stack not ready: ${r.error.message}. Reload the page; ` +
-      `if it persists, the bundler is missing crypto polyfills.`
-    );
+    throw encryptionPreflightError(r.error.message, ctx);
   }
 }
 

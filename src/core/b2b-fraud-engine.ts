@@ -8,6 +8,7 @@ import type {
   PlaceOrderResult,
   ScreeningConfig,
 } from "../types";
+import { screeningApiError, classifyError, logP2PError, type P2PErrorContext } from "./errors";
 
 interface ProcessArgs {
   signer: CheckoutSigner;
@@ -18,10 +19,14 @@ interface ProcessArgs {
 export async function processB2BBuyOrder(
   args: ProcessArgs,
 ): Promise<PlaceOrderResult> {
+  const ctx: P2PErrorContext = {
+    flow: "screening",
+    user: args.signer?.address,
+  };
   const fraudSigner = toFraudEngineSigner(args.signer);
   if (!fraudSigner) {
     console.warn(
-      "[p2p-widget] screening configured but signer.signMessage is missing; placing order without fraud-engine logging",
+      "[p2p-widget:screening] screening configured but signer.signMessage is missing; placing order without fraud-engine logging",
     );
     return args.placeOrder();
   }
@@ -30,8 +35,10 @@ export async function processB2BBuyOrder(
   try {
     activityLogId = await postB2BActivityLog(fraudSigner, args.screening);
   } catch (err) {
-    // Fail-open: a fraud-engine outage must not block a buy.
-    console.warn("[p2p-widget] B2B fraud-engine log failed", err);
+    // Fail-open: a fraud-engine outage must not block a buy. Log via the
+    // unified channel so the structured shape (cause chain, context) is
+    // preserved without surfacing a P2PError to the user.
+    logP2PError(classifyError(err, ctx));
   }
 
   const result = await args.placeOrder();
@@ -42,12 +49,7 @@ export async function processB2BBuyOrder(
       args.screening,
       activityLogId,
       result.orderId,
-    ).catch((err) =>
-      console.warn(
-        "[p2p-widget] B2B link-order failed (order is placed regardless)",
-        err,
-      ),
-    );
+    ).catch((err) => logP2PError(classifyError(err, { ...ctx, orderId: result.orderId })));
   }
 
   return result;
@@ -99,7 +101,8 @@ async function postB2BActivityLog(
   const encrypted = await encryptPayload(payload, aad, screening.encryptionKey);
   const headers = await getSignedHeaders(signer, "activity-log");
 
-  const url = `${trimSlash(screening.apiUrl)}/activity-logs/b2b-buy-order`;
+  const endpoint = "/activity-logs/b2b-buy-order";
+  const url = `${trimSlash(screening.apiUrl)}${endpoint}`;
   const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...headers },
@@ -110,11 +113,17 @@ async function postB2BActivityLog(
     }),
   });
   if (!res.ok) {
-    throw new Error(`B2B activity-log returned ${res.status}`);
+    throw screeningApiError(res.status, endpoint, {
+      flow: "screening",
+      user: userAddress,
+    });
   }
   const data = (await res.json()) as { activity_log_id: number | null };
   if (data.activity_log_id == null) {
-    throw new Error("B2B activity-log returned without activity_log_id");
+    throw screeningApiError(200, `${endpoint} (missing activity_log_id)`, {
+      flow: "screening",
+      user: userAddress,
+    });
   }
   return data.activity_log_id;
 }
@@ -126,7 +135,8 @@ async function linkOrder(
   orderId: string,
 ): Promise<void> {
   const headers = await getSignedHeaders(signer, "link-order");
-  const url = `${trimSlash(screening.apiUrl)}/activity-logs/link-order`;
+  const endpoint = "/activity-logs/link-order";
+  const url = `${trimSlash(screening.apiUrl)}${endpoint}`;
   const res = await fetch(url, {
     method: "PATCH",
     headers: { "Content-Type": "application/json", ...headers },
@@ -137,7 +147,11 @@ async function linkOrder(
     }),
   });
   if (!res.ok) {
-    throw new Error(`link-order returned ${res.status}`);
+    throw screeningApiError(res.status, endpoint, {
+      flow: "screening",
+      user: signer.address,
+      orderId,
+    });
   }
 }
 
