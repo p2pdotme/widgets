@@ -68,22 +68,32 @@ export function PaymentHistoryWithSupport(
   return (
     <PaymentHistory
       {...orderHistoryProps}
-      renderRowAction={(order: { orderId: { toString(): string }; disputeStatus?: string }) => {
-        const id = order.orderId.toString();
+      renderRowBadge={(order: { orderId: { toString(): string }; status?: string }) =>
+        // Pre-acceptance orders can't have a Chatwoot conversation because
+        // the order's circleId is still 0 on chain (D-029). Don't show
+        // the pip even if a synthetic conversation exists for the same
+        // orderId — the user would click and get nothing.
+        order.status !== "placed" &&
+        activeOrderIds.has(order.orderId.toString()) ? (
+          <ActiveSupportPip />
+        ) : null
+      }
+      renderRowAction={(order: { orderId: { toString(): string }; status?: string; disputeStatus?: string }) => {
+        // Hide the Support button entirely until a merchant has accepted
+        // the order. Until then there is no circle binding and no inbox,
+        // so a click cannot open a chat (D-029).
+        if (order.status === "placed") return null;
         return (
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-            {activeOrderIds.has(id) ? <ActiveSupportPip /> : null}
-            <Support
-              orderId={id}
-              originApp={support.originApp}
-              signer={support.signer}
-              bridgeUrl={support.bridgeUrl}
-              disputeStatus={(order.disputeStatus ?? "none") as SupportStatus}
-              chatwootBaseUrl={support.chatwootBaseUrl}
-              chatwootInboxIdentifier={support.chatwootInboxIdentifier}
-              theme={support.theme}
-            />
-          </span>
+          <Support
+            orderId={order.orderId.toString()}
+            originApp={support.originApp}
+            signer={support.signer}
+            bridgeUrl={support.bridgeUrl}
+            disputeStatus={(order.disputeStatus ?? "none") as SupportStatus}
+            chatwootBaseUrl={support.chatwootBaseUrl}
+            chatwootInboxIdentifier={support.chatwootInboxIdentifier}
+            theme={support.theme}
+          />
         );
       }}
     />
