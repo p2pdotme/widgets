@@ -1,24 +1,10 @@
-export interface CurrencyConfig {
-  symbol: string;
-  name: string;
-  flag: string;
-  paymentMethod: string;
-  hasQR: boolean;
-  circleId: number;
-  compoundFields?: readonly string[];
-}
-
-export const CURRENCIES: CurrencyConfig[] = [
-  { symbol: "INR", name: "Indian Rupee", flag: "🇮🇳", paymentMethod: "UPI", hasQR: true, circleId: 1 },
-  { symbol: "IDR", name: "Indonesian Rupiah", flag: "🇮🇩", paymentMethod: "QRIS", hasQR: false, circleId: 1 },
-  { symbol: "BRL", name: "Brazilian Real", flag: "🇧🇷", paymentMethod: "PIX", hasQR: false, circleId: 2 },
-  { symbol: "ARS", name: "Argentine Peso", flag: "🇦🇷", paymentMethod: "Alias", hasQR: false, circleId: 1 },
-  { symbol: "MEX", name: "Mexican Peso", flag: "🇲🇽", paymentMethod: "SPEI", hasQR: false, circleId: 1 },
-  { symbol: "VEN", name: "Venezuelan Bolivar", flag: "🇻🇪", paymentMethod: "Pago Movil", hasQR: false, circleId: 1,
-    compoundFields: ["Phone", "RIF", "Bank"] },
-  { symbol: "NGN", name: "Nigerian Naira", flag: "🇳🇬", paymentMethod: "NIP", hasQR: false, circleId: 1,
-    compoundFields: ["Account Number", "Bank Name"] },
-];
+// CURRENCIES + CurrencyConfig were removed. The widget now resolves all
+// per-currency UI metadata from `@p2pdotme/sdk/country` via
+// `src/core/currency-meta.ts` — single source of truth shared with the
+// p2p.me consumer user-app, so payment-method strings, country names,
+// and Alpha flags stay in lockstep across products. Hosts that need
+// custom metadata pass it through CurrencyOption (which wins over the
+// SDK defaults).
 
 export const DEMO_FIAT_RATE: Record<string, number> = {
   INR: 83, IDR: 15800, BRL: 5, ARS: 900, MEX: 17, VEN: 36, NGN: 1500,

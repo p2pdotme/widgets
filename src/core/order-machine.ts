@@ -29,6 +29,12 @@ import { getActiveOrder, setActiveOrder, removeActiveOrder, keyFor, type ActiveO
 import { computeGateDecision, type GateDecision } from "./credit-math";
 import { logPlacementError } from "./place-error";
 
+/** End-user-facing message for routing failures. SDK uses "circles"
+ *  internally; the widget translates to a generic merchant-availability
+ *  message before reaching the UI. */
+const NO_ELIGIBLE_MERCHANTS =
+  "No eligible P2P merchants were found to fulfill this transaction.";
+
 interface OrderState {
   phase: CheckoutPhase;
   orderId: string | null;
@@ -585,10 +591,14 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
           recipientAddr: opts.signer.address,
           preferredPaymentChannelConfigId: resolvedCurrency.paymentChannelConfigId ?? 0n,
         });
-        if (prepared.isErr()) throw prepared.error;
+        if (prepared.isErr()) {
+          // SDK error (e.g. "No eligible circles") is protocol jargon —
+          // show a user-friendly message instead.
+          throw new Error(NO_ELIGIBLE_MERCHANTS);
+        }
         const routedCircleId = prepared.value.meta?.circleId;
         if (routedCircleId === undefined) {
-          throw new Error("SDK routing returned no circleId");
+          throw new Error(NO_ELIGIBLE_MERCHANTS);
         }
         resolvedCurrency = { ...resolvedCurrency, circleId: routedCircleId };
       }
