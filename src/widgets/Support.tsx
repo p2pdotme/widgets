@@ -12,6 +12,7 @@ import {
 type Phase =
   | { kind: "idle" }
   | { kind: "signing" }
+  | { kind: "loading-chat" }
   | { kind: "ready"; session: SignInResponse }
   | { kind: "error"; reason: string };
 
@@ -54,12 +55,20 @@ export function Support(props: SupportProps) {
     let cancelled = false;
     (async () => {
       try {
-        const cached = readCachedSession(bridgeUrl, signer.address, orderId);
-        let session = cached;
+        // Always show the signing loader immediately so the click is
+        // never a flash of nothing. If we skip straight to a cached
+        // chatwoot:null and silently close, the user perceives the
+        // button as broken.
+        setPhase({ kind: "signing" });
+        let session = readCachedSession(bridgeUrl, signer.address, orderId);
         if (!session) {
-          setPhase({ kind: "signing" });
           session = await signInWithBridge({ signer, bridgeUrl, orderId });
-          writeCachedSession(bridgeUrl, signer.address, session, orderId);
+          // Only cache when chatwoot resolved. A null chatwoot session
+          // means the order isn't bound to a circle yet (pre-acceptance)
+          // — that's transient state we don't want to cache for 7 days.
+          if (session.chatwoot) {
+            writeCachedSession(bridgeUrl, signer.address, session, orderId);
+          }
         }
         if (cancelled) return;
         if (!session.chatwoot) {
@@ -77,12 +86,13 @@ export function Support(props: SupportProps) {
           onClose?.();
           return;
         }
+        setPhase({ kind: "loading-chat" });
         await bootChatwoot(session.chatwoot);
         if (cancelled) return;
         openChatwoot();
         // Chatwoot's own widget is now the user-facing surface. Auto-close
         // our modal so it does not sit on top of the chat. The modal stays
-        // visible only for signing / error phases.
+        // visible only for signing / loading-chat / error phases.
         setOpen(false);
         onClose?.();
       } catch (err) {
@@ -222,15 +232,19 @@ function PhaseView({ phase }: { phase: Phase }) {
 
   if (phase.kind === "signing") {
     return (
-      <div
-        style={{
-          ...box,
-          border: "1px dashed var(--support-color-muted)",
-          color: "var(--support-color-muted)",
-        }}
-      >
-        Signing in with your wallet. Approve the message request to continue.
-      </div>
+      <Loader
+        title="Signing in"
+        body="Approve the message request to open support for this order."
+      />
+    );
+  }
+
+  if (phase.kind === "loading-chat") {
+    return (
+      <Loader
+        title="Loading chat"
+        body="Connecting to the Payment Support Team..."
+      />
     );
   }
 
@@ -264,6 +278,70 @@ function PhaseView({ phase }: { phase: Phase }) {
   }
 
   return null;
+}
+
+function Loader({ title, body }: { title: string; body: string }) {
+  return (
+    <div
+      style={{
+        marginTop: 16,
+        padding: 24,
+        borderRadius: "var(--support-radius)",
+        border: "1px solid var(--support-color-muted)",
+        display: "flex",
+        alignItems: "center",
+        gap: 14,
+      }}
+    >
+      <Spinner />
+      <div style={{ minWidth: 0 }}>
+        <div
+          style={{
+            fontSize: 14,
+            fontWeight: 500,
+            color: "var(--support-color-text)",
+            marginBottom: 2,
+          }}
+        >
+          {title}
+        </div>
+        <div
+          style={{
+            fontSize: 12,
+            color: "var(--support-color-muted)",
+            lineHeight: 1.4,
+          }}
+        >
+          {body}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Spinner() {
+  const id = "support-spinner-keyframes";
+  if (typeof document !== "undefined" && !document.getElementById(id)) {
+    const style = document.createElement("style");
+    style.id = id;
+    style.textContent =
+      "@keyframes support-spin { to { transform: rotate(360deg); } }";
+    document.head.appendChild(style);
+  }
+  return (
+    <div
+      aria-hidden="true"
+      style={{
+        width: 18,
+        height: 18,
+        borderRadius: "50%",
+        border: "2px solid var(--support-color-muted)",
+        borderTopColor: "transparent",
+        animation: "support-spin 0.8s linear infinite",
+        flexShrink: 0,
+      }}
+    />
+  );
 }
 
 function shortenId(id: string): string {

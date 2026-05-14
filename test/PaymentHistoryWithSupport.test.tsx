@@ -137,20 +137,11 @@ describe("PaymentHistoryWithSupport", () => {
     expect(row7?.querySelector("[data-support-active-pip]")).toBeNull();
   });
 
-  it("hides Support button and pip on pre-acceptance orders (status: placed)", async () => {
+  it("renders Support button on all rows regardless of on-chain status — gating is server-side", async () => {
     mockFetch((input) => {
       const url = String(input);
       if (url.endsWith("/auth/me")) return { sub: stubSigner.address };
-      if (url.endsWith("/tickets/me")) {
-        return {
-          items: [
-            // Even when a synthetic conversation exists for the placed
-            // order, the pip should NOT appear — there is no on-chain
-            // circle binding yet so a click would be a no-op.
-            { conversationId: 9, orderId: "999", status: "open", updatedAt: 1 },
-          ],
-        };
-      }
+      if (url.endsWith("/tickets/me")) return { items: [] };
       return {};
     });
 
@@ -168,18 +159,17 @@ describe("PaymentHistoryWithSupport", () => {
     );
 
     render(<PaymentHistoryWithSupport {...baseProps} />);
-
     await waitFor(() => {
-      // Wait for /tickets/me to land so the indicator state has settled.
       expect((globalThis.fetch as any).mock.calls.length).toBeGreaterThan(0);
     });
 
+    // Even the placed row gets a Support button — the bridge's chain
+    // resolver is the source of truth for "can this open a chat", not
+    // the SDK's `status` field. The bridge returns `chatwoot: null`
+    // when nothing is bound and the widget closes silently from there.
     const row999 = document.querySelector('[data-row="999"]');
-    expect(row999?.querySelector("[data-support-active-pip]")).toBeNull();
-    expect(row999?.querySelector("[data-support-launcher]")).toBeNull();
-    // The row itself + Resume action stay visible so the user can still
-    // resume a pre-acceptance order. Only the Support surfaces are gated.
     expect(row999?.querySelector("[data-row-resume]")).not.toBeNull();
+    expect(row999?.querySelector("[data-support-launcher]")).not.toBeNull();
   });
 
   it("silently signs in when there is no cached session and the signer can sign", async () => {

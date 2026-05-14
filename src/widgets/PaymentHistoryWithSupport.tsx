@@ -68,34 +68,26 @@ export function PaymentHistoryWithSupport(
   return (
     <PaymentHistory
       {...orderHistoryProps}
-      renderRowBadge={(order: { orderId: { toString(): string }; status?: string }) =>
-        // Pre-acceptance orders can't have a Chatwoot conversation because
-        // the order's circleId is still 0 on chain (D-029). Don't show
-        // the pip even if a synthetic conversation exists for the same
-        // orderId — the user would click and get nothing.
-        order.status !== "placed" &&
-        activeOrderIds.has(order.orderId.toString()) ? (
-          <ActiveSupportPip />
-        ) : null
+      renderRowBadge={(order: { orderId: { toString(): string } }) =>
+        activeOrderIds.has(order.orderId.toString()) ? <ActiveSupportPip /> : null
       }
-      renderRowAction={(order: { orderId: { toString(): string }; status?: string; disputeStatus?: string }) => {
-        // Hide the Support button entirely until a merchant has accepted
-        // the order. Until then there is no circle binding and no inbox,
-        // so a click cannot open a chat (D-029).
-        if (order.status === "placed") return null;
-        return (
-          <Support
-            orderId={order.orderId.toString()}
-            originApp={support.originApp}
-            signer={support.signer}
-            bridgeUrl={support.bridgeUrl}
-            disputeStatus={(order.disputeStatus ?? "none") as SupportStatus}
-            chatwootBaseUrl={support.chatwootBaseUrl}
-            chatwootInboxIdentifier={support.chatwootInboxIdentifier}
-            theme={support.theme}
-          />
-        );
-      }}
+      renderRowAction={(order: { orderId: { toString(): string }; disputeStatus?: string }) => (
+        // The bridge's sign-in handler is the source of truth for "can
+        // this order open a chat" — it resolves the order's on-chain
+        // circleId → inbox, and returns `chatwoot: null` when nothing
+        // is bound. The widget silently closes on that path. So the
+        // Support button is always rendered; gating is server-side.
+        <Support
+          orderId={order.orderId.toString()}
+          originApp={support.originApp}
+          signer={support.signer}
+          bridgeUrl={support.bridgeUrl}
+          disputeStatus={(order.disputeStatus ?? "none") as SupportStatus}
+          chatwootBaseUrl={support.chatwootBaseUrl}
+          chatwootInboxIdentifier={support.chatwootInboxIdentifier}
+          theme={support.theme}
+        />
+      )}
     />
   );
 }
