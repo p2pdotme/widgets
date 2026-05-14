@@ -8,7 +8,7 @@
 
 Drop-in React widgets for the [P2P.me](https://p2p.me) checkout flow.
 Users pay you in **local fiat** (UPI, PIX, SPEI, QRIS, …) — your contract
-receives **USDC on Base**. Three widgets in one package:
+receives **USDC on Base**. Four widgets in one package:
 
 - **`<Checkout>`** — the buy flow. User picks currency → pays merchant
   off-chain → your contract is paid USDC.
@@ -19,6 +19,10 @@ receives **USDC on Base**. Three widgets in one package:
 - **`<PaymentHistory>`** — a subgraph-backed list of the connected user's
   orders. Auto-hides when there's nothing pending. Click "Resume" on a
   pending row to re-open `<Checkout>` in tracking-only mode.
+- **`<Support>`** / **`<PaymentHistoryWithSupport>`** — per-order chat for
+  disputes, wired against a self-hosted Chatwoot via the `p2pdotme/support`
+  bridge. Wallet-signed sign-in, neutral identity labels between parties,
+  one-line drop-in on history rows.
 
 The widgets handle: order placement, **SDK circle routing** (optional —
 no per-currency `circleId` plumbing required), status polling, encrypted
@@ -74,6 +78,7 @@ pays for one widget's bytes:
 | `@p2pdotme/widgets/checkout` | `Checkout` + `CheckoutProps`, `CheckoutPhase`, `PlaceOrderContext`, `PlaceOrderResult`, `PendingOrderSummary`. |
 | `@p2pdotme/widgets/cashout` | `Cashout` + `CashoutProps`, `CashoutPhase`, `PlaceCashoutContext`, `PlaceCashoutResult`, `DeliverUpiContext`, `ReconcileContext`. |
 | `@p2pdotme/widgets/payment-history` | `PaymentHistory` + `PaymentHistoryProps`. |
+| `@p2pdotme/widgets/support` | `Support`, `PaymentHistoryWithSupport` + `SupportProps`, `SupportSigner`, `SupportRole`, `SupportStatus`, `SupportSession`, Privy / Thirdweb signer adapters. |
 
 ```ts
 // Buy flow only
@@ -85,6 +90,9 @@ import { Cashout } from "@p2pdotme/widgets/cashout";
 
 // History widget anywhere
 import { PaymentHistory } from "@p2pdotme/widgets/payment-history";
+
+// Per-order support chat (drops into a history row, or stands alone)
+import { Support, PaymentHistoryWithSupport } from "@p2pdotme/widgets/support";
 ```
 
 Tree-shakers (Vite/Next/Webpack/esbuild) all honor the `exports` map, so
@@ -677,6 +685,138 @@ handlers).
 | `optimisticUpdates` | `Record<string, "completed" \| "cancelled">` | — | Local terminal-status overlay. Pass a stable reference. |
 | `pollIntervalMs` | `number` | — | Auto-poll cadence while pending exists. Default `15000`. `0` disables. |
 | `theme` | `P2PTheme` | — | Optional visual overrides. See [Theming](#theming). |
+
+---
+
+## Per-order support (`<Support>` / `<PaymentHistoryWithSupport>`)
+
+A wallet-authed chat thread per order, wired against a self-hosted
+Chatwoot via the `p2pdotme/support` bridge service. Use it when a user
+hits "raise dispute" or needs help on an in-flight order — both sides
+land in the same thread with neutral, identity-masked labels
+("Customer" ↔ "Order Fulfillment Partner") instead of swapping wallet
+addresses or handles on Telegram.
+
+Two surfaces ship from `@p2pdotme/widgets/support`:
+
+- **`<Support>`** — a standalone launcher button + modal you drop next to
+  any order surface.
+- **`<PaymentHistoryWithSupport>`** — `PaymentHistory` with the launcher
+  composed into every row. Also silently refreshes a bridge session on
+  mount and decorates rows that have an open Chatwoot conversation with
+  an "Active support" pip.
+
+### Quick start
+
+```tsx
+import { PaymentHistoryWithSupport } from "@p2pdotme/widgets/support";
+import type { CheckoutSigner } from "@p2pdotme/widgets";
+
+export function OrdersDrawer({ signer }: { signer: CheckoutSigner }) {
+  return (
+    <PaymentHistoryWithSupport
+      signer={signer}
+      subgraphUrl={SUBGRAPH_URL}
+      usdcAddress={USDC_ADDRESS}
+      chainId={84532}
+      filter="all"
+      support={{
+        signer,                                  // any CheckoutSigner works
+        originApp: "merchant-demo",              // your app's slug
+        bridgeUrl: "https://support-bridge.example.com",
+        theme: CHECKOUT_THEME,                   // same P2PTheme as the rest
+      }}
+    />
+  );
+}
+```
+
+Or, standalone, alongside an existing tracker:
+
+```tsx
+import { Support } from "@p2pdotme/widgets/support";
+
+<Support
+  orderId={order.id}
+  originApp="merchant-demo"
+  signer={signer}
+  bridgeUrl="https://support-bridge.example.com"
+  disputeStatus={order.disputeStatus /* "none" | "open" | "resolved" */}
+/>
+```
+
+### What happens on click
+
+1. **Sign-in** — widget asks the signer for a personal_sign over
+   `support.p2p.me:sign-in:<addr>:<ts>`, POSTs `{ address, timestamp,
+   signature, orderId }` to `<bridgeUrl>/auth/sign-in`. The 7-day session
+   token is cached in `localStorage` (per `(bridgeUrl, address, orderId)`)
+   so subsequent clicks are silent.
+2. **Inbox resolution** — the bridge reads the order's on-chain
+   `circleId`, looks up the per-circle Chatwoot inbox, and returns the
+   widget's `chatwoot` session block (`websiteToken`, identifier HMAC,
+   …) or `chatwoot: null` if no inbox is bound to that circle (e.g.
+   pre-acceptance, or a circle that hasn't been provisioned).
+3. **Chat** — widget boots the Chatwoot Web SDK against the resolved
+   inbox, calls `setUser` with the identity HMAC, and hands the user off
+   to Chatwoot's own iframe. The widget's modal auto-closes.
+
+### States the modal can render
+
+| State | When | UX |
+|---|---|---|
+| **Signing in** | First click, or after cache eviction | Spinner + "Approve the message request in your wallet" |
+| **Loading chat** | Sign-in OK, booting Chatwoot SDK | Spinner + "Connecting to the Payment Support Team..." |
+| **Support not available yet** | Bridge returned `chatwoot: null` (pre-acceptance, or circle has no inbox) | Explainer + **Retry** + **Close** — never silently closes |
+| **Error** | Sign-in 4xx/5xx, network failure, user-rejected signature, or Chatwoot boot failure | Bucketed copy (`Authorization cancelled` / `Sign-in failed` / `Connection issue` / `Chat couldn't load` / `Something went wrong`) with raw cause as muted monospace detail + **Retry** + **Close** |
+
+### Signer
+
+`<Support>` accepts a `SupportSigner` — narrower than `CheckoutSigner`,
+just `{ address, signMessage }`. Any `CheckoutSigner` with a working
+`signMessage` is a valid `SupportSigner`, so the same wallet you pass to
+`<Checkout>` works here. Convenience adapters ship from the same subpath:
+
+```ts
+import { fromPrivyWallet, fromThirdwebAccount } from "@p2pdotme/widgets/support";
+```
+
+### Bridge
+
+The bridge service ([`p2pdotme/support`](https://github.com/p2pdotme/support))
+is a thin Fastify server that does five things: wallet sign-in, on-chain
+role lookup (`user` / `merchant` / `circle_admin` / `ops`), per-order
+circle → inbox resolution, HMAC issuance for Chatwoot, and ticket sync.
+It exposes:
+
+- `POST /auth/sign-in` — wallet authentication; returns session token +
+  Chatwoot binding for an order.
+- `GET  /auth/me` — validates a cached session token (silent refresh).
+- `GET  /tickets/me` — open conversations for the signed-in wallet
+  (drives the "Active support" pip).
+
+Self-host the bridge alongside your Chatwoot instance, then point
+`bridgeUrl` at it. The widget bundle does **not** include the bridge.
+
+### `<Support>` props
+
+| Prop | Type | Required | Notes |
+|---|---|---|---|
+| `originApp` | `string` | ✅ | Free-form slug shown in the modal header — your app name. |
+| `signer` | `SupportSigner` | ✅ | `{ address, signMessage }`. A `CheckoutSigner` works. |
+| `bridgeUrl` | `string` | ✅ | Base URL of your bridge service. Trailing slash optional. |
+| `orderId` | `string` | — | When present, the bridge resolves the per-order inbox + conversation. Omit for general support. |
+| `disputeStatus` | `"none" \| "open" \| "resolved"` | — | Drives the launcher label (`Support` / `View support` / `View resolution`) and a colored status dot. Default `"none"`. |
+| `theme` | `P2PTheme` | — | Same theming surface as the rest of the widgets. |
+| `onOpen` / `onClose` | `() => void` | — | Lifecycle hooks. |
+
+### `<PaymentHistoryWithSupport>` props
+
+Inherits every `<PaymentHistory>` prop, plus:
+
+| Prop | Type | Required | Notes |
+|---|---|---|---|
+| `support` | `{ signer, originApp, bridgeUrl, theme? }` | — | When present, every row renders a Support launcher and the widget silently refreshes a bridge session on mount for the "Active support" pip. When omitted, behaves identically to `<PaymentHistory>`. |
 
 ---
 

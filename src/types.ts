@@ -395,8 +395,10 @@ export interface CashoutProps {
 // same package as Checkout/Cashout/PaymentHistory and reuses CheckoutSigner.
 // Only the bits that don't already exist on the checkout surface live here.
 
-import type { SupportTheme as _SupportTheme } from "./ui/support-theme";
-export type { SupportTheme } from "./ui/support-theme";
+// `SupportTheme` is an alias of `P2PTheme` — the support surface honors
+// the same `--p2p-*` tokens as the rest of the widgets. The alias is kept
+// so hosts that imported `SupportTheme` by name don't break.
+export type SupportTheme = P2PTheme;
 
 export type SupportRole = "user" | "merchant" | "circle_admin" | "ops";
 export type SupportStatus = "none" | "open" | "resolved";
@@ -425,7 +427,7 @@ export interface SupportProps {
   disputeStatus?: SupportStatus;
   chatwootBaseUrl?: string;
   chatwootInboxIdentifier?: string;
-  theme?: _SupportTheme;
+  theme?: SupportTheme;
   onOpen?: () => void;
   onClose?: () => void;
 }
