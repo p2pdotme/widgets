@@ -7,7 +7,7 @@ and the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format. While
 the package is `0.x`, minor releases may introduce additive prop changes;
 patch releases stay backward-compatible.
 
-## [Unreleased]
+## [1.0.0] — 2026-05-14
 
 ### Changed — BREAKING
 
