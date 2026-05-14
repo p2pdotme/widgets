@@ -16,7 +16,9 @@ import {
   injectKeyframes,
 } from "../ui/components";
 import { PaymentAddressInput } from "../ui/PaymentAddressInput";
+import { CurrencyRow } from "../ui/CurrencyRow";
 import { ERC20_READ_ABI, DIAMOND_ABI, readSmallOrderFixedFee } from "../core/contracts";
+import { resolveCurrencyMeta } from "../core/currency-meta";
 
 const USDC_DECIMALS = 6;
 
@@ -289,18 +291,12 @@ export function P2POfframp(props: P2POfframpProps) {
                     style={{
                       width: "100%", boxSizing: "border-box",
                       display: "flex", alignItems: "center", justifyContent: "space-between",
-                      gap: 10, padding: "12px 14px", borderRadius: radius.md,
+                      gap: 10, padding: "10px 14px", borderRadius: radius.md,
                       border: `1px solid ${color.border}`, background: color.surface,
-                      color: color.text, fontSize: font.base, fontWeight: weight.medium, cursor: "pointer",
+                      color: color.text, cursor: "pointer",
                     }}
                   >
-                    <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                      <span style={{ fontSize: 18 }}>{selectedCurrency.flag}</span>
-                      <span>{selectedCurrency.paymentMethod}</span>
-                      <span style={{ fontSize: font.sm, color: color.textMuted, fontWeight: weight.medium }}>
-                        {selectedCurrency.symbol}
-                      </span>
-                    </span>
+                    <CurrencyRow meta={resolveCurrencyMeta(selectedCurrency)} />
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                       strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
                       style={{ color: color.textMuted, transform: dropdownOpen ? "rotate(180deg)" : "none", transition: "transform 0.15s" }}>
@@ -315,26 +311,20 @@ export function P2POfframp(props: P2POfframpProps) {
                     }}>
                       {currencies.map((c) => {
                         const active = selectedCurrency.symbol === c.symbol;
+                        const meta = resolveCurrencyMeta(c);
                         return (
                           <button key={c.symbol} type="button"
                             onClick={() => { setSelectedCurrency(c); setDropdownOpen(false); }}
                             style={{
                               width: "100%", boxSizing: "border-box",
                               display: "flex", alignItems: "center", justifyContent: "space-between",
-                              gap: 10, padding: "12px 14px", border: "none",
+                              gap: 10, padding: "10px 14px", border: "none",
                               background: active ? color.accentSoft : "transparent",
-                              color: color.text, fontSize: font.base, fontWeight: weight.medium,
-                              cursor: "pointer", textAlign: "left",
+                              color: color.text, cursor: "pointer", textAlign: "left",
                             }}>
-                            <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                              <span style={{ fontSize: 18 }}>{c.flag}</span>
-                              <span>{c.paymentMethod}</span>
-                              <span style={{ fontSize: font.sm, color: color.textMuted, fontWeight: weight.medium }}>
-                                {c.symbol}
-                              </span>
-                            </span>
+                            <CurrencyRow meta={meta} />
                             {active && (
-                              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={color.accent}
+                              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={color.accent}
                                 strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                                 <polyline points="20 6 9 17 4 12" />
                               </svg>

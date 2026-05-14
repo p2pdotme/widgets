@@ -15,6 +15,12 @@ import type {
 import { DIAMOND_ABI } from "./contracts";
 import { logPlacementError } from "./place-error";
 
+/** End-user-facing string for "router couldn't find anyone for this currency".
+ *  Avoids leaking "circle" / `circleId` terminology; the SDK error stays on
+ *  err.cause for diagnostics. */
+const NO_ELIGIBLE_MERCHANTS =
+  "No eligible P2P merchants were found to fulfill this transaction.";
+
 /**
  * Callback-based offramp state machine. Widget-side responsibilities:
  *   - Auto-route circleId via SDK (Diamond-level; uses subgraph)
@@ -162,22 +168,13 @@ export function useOfframpMachine(opts: UseOfframpMachineOpts) {
             preferredPaymentChannelConfigId: currency.paymentChannelConfigId ?? 0n,
           });
           if (prepared.isErr()) {
-            // Wrap the SDK's terse "No eligible circles" with actionable
-            // guidance — pin a known good circleId, or check that a
-            // merchant bot is live for this currency.
-            const msg = prepared.error.message || String(prepared.error);
-            throw new Error(
-              `Can't find a merchant for ${currency.symbol} right now (${msg}). ` +
-              `Either no merchant is online, or this currency hasn't been routed yet. ` +
-              `Try a different currency, or pin CurrencyOption.circleId if you know one.`
-            );
+            // SDK throws "No eligible circles" or similar — "circles" is
+            // protocol-internal jargon. Surface a user-friendly message.
+            throw new Error(NO_ELIGIBLE_MERCHANTS);
           }
           resolvedCircleId = prepared.value.meta?.circleId;
           if (resolvedCircleId === undefined) {
-            throw new Error(
-              `SDK routing returned no circleId for ${currency.symbol}. ` +
-              `Pin CurrencyOption.circleId or contact the protocol team.`
-            );
+            throw new Error(NO_ELIGIBLE_MERCHANTS);
           }
         }
 

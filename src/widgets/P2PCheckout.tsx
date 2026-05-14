@@ -2,7 +2,8 @@ import React, { useState, useEffect } from "react";
 import { formatUnits } from "viem";
 import type { P2PCheckoutProps } from "../types";
 import { useOrderMachine } from "../core/order-machine";
-import { CURRENCIES } from "../core/config";
+import { resolveCurrencyMeta } from "../core/currency-meta";
+import { CurrencyRow } from "../ui/CurrencyRow";
 import { DEFAULT_DIAMOND_ADDRESS, USDC_DECIMALS } from "../core/contracts";
 import { color, radius, font, weight, shadow, S, themeToCssVars } from "../ui/theme";
 import { Modal } from "../ui/Modal";
@@ -92,7 +93,12 @@ export function P2PCheckout(props: P2PCheckoutProps) {
 
   const usdcDisplay = state.usdcAmount ? formatUnits(state.usdcAmount, USDC_DECIMALS) : null;
   const fiatDisplay = state.fiatAmount ? (Number(state.fiatAmount) / 1e6).toFixed(2) : null;
-  const currencyConfig = CURRENCIES.find((c) => c.symbol === state.currency);
+  // Per-currency UI metadata resolved against the SDK (symbol-native badge,
+  // country name, payment-method label, address-field label, compound
+  // fields for NGN/VEN). Host's CurrencyOption fields win when present.
+  const acceptedMeta = state.currency
+    ? resolveCurrencyMeta({ symbol: state.currency })
+    : null;
 
   // Threshold display ("10 USDC", "12.5 USDC", etc.) — used in the fee-waiver
   // hint. Sourced from on-chain config so it tracks any protocol changes.
@@ -215,8 +221,8 @@ export function P2PCheckout(props: P2PCheckoutProps) {
       gross: creditUsed > 0n ? (Number(grossFiat) / 1e6).toFixed(2) : null,
     };
   })();
-  const isCompound = currencyConfig && currencyConfig.compoundFields;
-  const compoundParts = state.decryptedUpi && isCompound ? state.decryptedUpi.split("|") : [];
+  const compoundFields = acceptedMeta?.compoundFields ?? null;
+  const compoundParts = state.decryptedUpi && compoundFields ? state.decryptedUpi.split("|") : [];
 
   const stepIndex = state.phase === "completed" ? 3 : state.phase === "paid" ? 2 : state.phase === "accepted" ? 1 : 0;
   const hasPlaceOrder = Boolean(placeOrder);
@@ -316,7 +322,9 @@ export function P2PCheckout(props: P2PCheckoutProps) {
               </div>
             )}
             {(amount || productName) && <div style={S.divider} />}
-            {currencies && currencies.length > 0 && selectedCurrency && (
+            {currencies && currencies.length > 0 && selectedCurrency && (() => {
+              const selectedMeta = resolveCurrencyMeta(selectedCurrency);
+              return (
               <div style={{ marginBottom: 16 }}>
                 <p style={{ ...S.label, marginBottom: 8 }}>Pay with</p>
                 <div ref={dropdownRef} style={{ position: "relative" }}>
@@ -326,17 +334,11 @@ export function P2PCheckout(props: P2PCheckoutProps) {
                     style={{
                       width: "100%", boxSizing: "border-box",
                       display: "flex", alignItems: "center", justifyContent: "space-between",
-                      gap: 10, padding: "12px 14px", borderRadius: radius.md,
+                      gap: 10, padding: "10px 14px", borderRadius: radius.md,
                       border: `1px solid ${color.border}`, background: color.surface,
                       color: color.text, fontSize: font.base, fontWeight: weight.medium, cursor: "pointer",
                     }}>
-                    <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                      <span style={{ fontSize: 18 }}>{selectedCurrency.flag}</span>
-                      <span>{selectedCurrency.paymentMethod}</span>
-                      <span style={{ fontSize: font.sm, color: color.textMuted, fontWeight: weight.medium }}>
-                        {selectedCurrency.symbol}
-                      </span>
-                    </span>
+                    <CurrencyRow meta={selectedMeta} />
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                       strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
                       style={{ color: color.textMuted, transform: dropdownOpen ? "rotate(180deg)" : "none", transition: "transform 0.15s" }}>
@@ -351,26 +353,20 @@ export function P2PCheckout(props: P2PCheckoutProps) {
                     }}>
                       {currencies.map((c) => {
                         const active = selectedCurrency.symbol === c.symbol;
+                        const meta = resolveCurrencyMeta(c);
                         return (
                           <button key={c.symbol} type="button"
                             onClick={() => { setSelectedCurrency(c); setDropdownOpen(false); }}
                             style={{
                               width: "100%", boxSizing: "border-box",
-                      display: "flex", alignItems: "center", justifyContent: "space-between",
-                              gap: 10, padding: "12px 14px", border: "none",
+                              display: "flex", alignItems: "center", justifyContent: "space-between",
+                              gap: 10, padding: "10px 14px", border: "none",
                               background: active ? color.accentSoft : "transparent",
-                              color: color.text, fontSize: font.base, fontWeight: weight.medium,
-                              cursor: "pointer", textAlign: "left",
+                              color: color.text, cursor: "pointer", textAlign: "left",
                             }}>
-                            <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                              <span style={{ fontSize: 18 }}>{c.flag}</span>
-                              <span>{c.paymentMethod}</span>
-                              <span style={{ fontSize: font.sm, color: color.textMuted, fontWeight: weight.medium }}>
-                                {c.symbol}
-                              </span>
-                            </span>
+                            <CurrencyRow meta={meta} />
                             {active && (
-                              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={color.accent}
+                              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={color.accent}
                                 strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                                 <polyline points="20 6 9 17 4 12" />
                               </svg>
@@ -382,7 +378,8 @@ export function P2PCheckout(props: P2PCheckoutProps) {
                   )}
                 </div>
               </div>
-            )}
+              );
+            })()}
             {/* Pre-order breakdown. Renders when there's a fee, when credit
                 is being applied, or while the quote is still loading. The
                 credit row replaces the subtotal display ("Order: gross —
@@ -577,18 +574,38 @@ export function P2PCheckout(props: P2PCheckoutProps) {
                     </div>
                   )}
 
+                  {/* Action pill + body — pill matches user-app's
+                      "Pay via PIX and confirm" language; the body
+                      explains the action. A separate heading saying
+                      "Complete your payment & confirm" would just
+                      restate the pill. */}
+                  {acceptedMeta && (
+                    <div style={{ marginBottom: 8 }}>
+                      <span style={{
+                        display: "inline-block", padding: "4px 10px", borderRadius: radius.pill,
+                        background: color.accentSoft, color: color.accent,
+                        fontSize: font.sm, fontWeight: weight.semibold, letterSpacing: "0.02em",
+                      }}>
+                        Pay via {acceptedMeta.paymentMethod} and confirm
+                      </span>
+                    </div>
+                  )}
+                  <p style={{ ...S.muted, marginBottom: 14, lineHeight: 1.45 }}>
+                    Transfer the amount to the {acceptedMeta?.paymentAddressLabel ?? "payment address"} below and click <strong>I have paid</strong> to continue.
+                  </p>
+
                   <div style={{ ...S.cardFlat, padding: "20px", background: color.surfaceAlt }}>
                     <div style={S.rowBetween}>
-                      <span style={S.label}>{currencyConfig?.paymentMethod ?? "Payment"}</span>
+                      <span style={S.label}>{acceptedMeta?.paymentMethod ?? "Payment"}</span>
                       <span style={S.faint}>Order #{state.orderId}</span>
                     </div>
                     <div style={{ marginTop: 12 }}>
-                      {isCompound && currencyConfig?.compoundFields ? (
+                      {compoundFields ? (
                         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                          {currencyConfig.compoundFields.map((field: string, i: number) => (
-                            <div key={field}>
-                              <p style={{ ...S.label, marginBottom: 4 }}>{field}</p>
-                              <CopyRow value={compoundParts[i] ?? "…"} copied={copied === field} onCopy={() => copy(compoundParts[i], field)} />
+                          {compoundFields.map((field, i) => (
+                            <div key={field.key}>
+                              <p style={{ ...S.label, marginBottom: 4 }}>{field.label}</p>
+                              <CopyRow value={compoundParts[i] ?? "…"} copied={copied === field.key} onCopy={() => copy(compoundParts[i], field.key)} />
                             </div>
                           ))}
                         </div>
@@ -598,7 +615,10 @@ export function P2PCheckout(props: P2PCheckoutProps) {
                         <p style={S.muted}>Decrypting payment details…</p>
                       )}
                     </div>
-                    {state.decryptedUpi && currencyConfig?.hasQR && state.currency === "INR" && (
+                    {/* QR is INR-only — mirrors user-app behavior. Mercado
+                        Pago / PIX QRs require PSP-generated payloads that
+                        the widget can't synthesize from the bare address. */}
+                    {state.decryptedUpi && state.currency === "INR" && (
                       <div style={{ display: "flex", justifyContent: "center", marginTop: 16 }}>
                         <div style={{ padding: 12, background: "#fff", borderRadius: radius.md, border: `1px solid ${color.border}` }}>
                           <img src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&margin=0&data=${encodeURIComponent(
