@@ -27,13 +27,12 @@ import { DEMO_FIAT_RATE } from "./config";
 import { processB2BBuyOrder } from "./b2b-fraud-engine";
 import { getActiveOrder, setActiveOrder, removeActiveOrder, keyFor, type ActiveOrderKey } from "./active-orders-store";
 import { computeGateDecision, type GateDecision } from "./credit-math";
-import { logPlacementError } from "./place-error";
-
-/** End-user-facing message for routing failures. SDK uses "circles"
- *  internally; the widget translates to a generic merchant-availability
- *  message before reaching the UI. */
-const NO_ELIGIBLE_MERCHANTS =
-  "No eligible P2P merchants were found to fulfill this transaction.";
+import {
+  toP2PError,
+  noEligibleMerchantsError,
+  missingRoutingInputsError,
+  type P2PErrorContext,
+} from "./errors";
 
 interface OrderState {
   phase: CheckoutPhase;
@@ -546,12 +545,42 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
       return;
     }
 
+    const errorCtx: P2PErrorContext = {
+      flow: "place-buy",
+      chainId: opts.chainId,
+      user: opts.signer?.address,
+      diamondAddress: opts.diamondAddress,
+      currency: opts.selectedCurrency?.symbol,
+      circleId: opts.selectedCurrency?.circleId?.toString(),
+      amountUsdc: opts.usdcAmount?.toString(),
+    };
     try {
       let resolvedCurrency = opts.selectedCurrency;
+      // Credit-only short-circuit: when credit fully covers the order, no
+      // Diamond order is placed (the integrator redeems credit directly into
+      // upstream goods), so the resolved circleId is unused on-chain.
+      // Skip SDK routing — otherwise the SDK would probe `checkAssignable`
+      // against the FULL `usdcAmount`, which can fail for unrelated reasons
+      // (sole merchant has an ongoing order, daily cap, etc.) and block a
+      // redemption that doesn't actually need a merchant. The host's
+      // `placeOrder` callback is expected to return `creditOnly: true` here.
+      const creditCoversFully =
+        state.credit !== null &&
+        opts.usdcAmount !== undefined &&
+        opts.usdcAmount > 0n &&
+        state.credit >= opts.usdcAmount;
+      if (resolvedCurrency && resolvedCurrency.circleId === undefined && creditCoversFully) {
+        // 0n is a sentinel — integrators that take the credit-only path
+        // (e.g. LotPot's `userPlaceOrder` when `credit >= total`) ignore
+        // the circleId argument entirely; we just need *something* to
+        // pass through to the host callback.
+        resolvedCurrency = { ...resolvedCurrency, circleId: 0n };
+      }
       if (resolvedCurrency && resolvedCurrency.circleId === undefined) {
         if (!opts.subgraphUrl || !opts.usdcAddress || opts.usdcAmount === undefined) {
-          throw new Error(
+          throw missingRoutingInputsError(
             "Routing requires subgraphUrl, usdcAddress, and usdcAmount when circleId is omitted on CurrencyOption.",
+            errorCtx,
           );
         }
         // Prefer an explicit fiatAmount from the host; otherwise derive from
@@ -593,12 +622,13 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
         });
         if (prepared.isErr()) {
           // SDK error (e.g. "No eligible circles") is protocol jargon —
-          // show a user-friendly message instead.
-          throw new Error(NO_ELIGIBLE_MERCHANTS);
+          // surface as a user-friendly routing error with the SDK error
+          // preserved on err.cause for diagnostics.
+          throw noEligibleMerchantsError(errorCtx, prepared.error);
         }
         const routedCircleId = prepared.value.meta?.circleId;
         if (routedCircleId === undefined) {
-          throw new Error(NO_ELIGIBLE_MERCHANTS);
+          throw noEligibleMerchantsError(errorCtx);
         }
         resolvedCurrency = { ...resolvedCurrency, circleId: routedCircleId };
       }
@@ -629,18 +659,10 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
       dispatch({ type: "PLACED", orderId: result.orderId, txHash: result.txHash });
       if (storeKey) setActiveOrder(storeKey, { orderId: result.orderId, txHash: result.txHash });
       opts.onOrderPlaced?.(result.orderId, result.txHash);
-    } catch (err: any) {
-      logPlacementError(err, {
-        flow: "buy",
-        chainId: opts.chainId,
-        user: opts.signer?.address,
-        diamondAddress: opts.diamondAddress,
-        currency: opts.selectedCurrency?.symbol,
-        circleId: opts.selectedCurrency?.circleId?.toString(),
-        amountUsdc: opts.usdcAmount?.toString(),
-      });
-      dispatch({ type: "ERROR", message: err?.shortMessage || err?.message || "Failed to place order" });
-      opts.onError?.(err);
+    } catch (err: unknown) {
+      const p2p = toP2PError(err, errorCtx);
+      dispatch({ type: "ERROR", message: p2p.userMessage });
+      opts.onError?.(p2p);
     }
   }, [opts]);
 
@@ -657,10 +679,17 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
       const { hash } = await opts.signer.sendTransaction({ to: opts.diamondAddress, data, gasLimit: 300000 });
       await publicClient.waitForTransactionReceipt({ hash });
       dispatch({ type: "PAID" });
-    } catch (err: any) {
+    } catch (err: unknown) {
       // Keep the user on the accepted screen so they can retry. Dumping to a
       // dedicated error phase would erase the payment-details + order context.
-      dispatch({ type: "INLINE_ERROR", message: err?.shortMessage || err?.message || "Failed to mark paid" });
+      const p2p = toP2PError(err, {
+        flow: "mark-paid",
+        chainId: opts.chainId,
+        user: opts.signer?.address,
+        diamondAddress: opts.diamondAddress,
+        orderId: state.orderId ?? undefined,
+      });
+      dispatch({ type: "INLINE_ERROR", message: p2p.userMessage });
     }
   }, [state.orderId, opts]);
 
@@ -677,11 +706,18 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
       await publicClient.waitForTransactionReceipt({ hash });
       if (storeKey) removeActiveOrder(storeKey);
       dispatch({ type: "CANCELLED" }); opts.onCancel?.(state.orderId);
-    } catch (err: any) {
+    } catch (err: unknown) {
       // Inline-only: keep the accepted-screen context so the user sees what
       // went wrong and can retry / sign in again. The old behavior flipped
       // phase to "error" and blanked the modal.
-      dispatch({ type: "INLINE_ERROR", message: err?.shortMessage || err?.message || "Failed to cancel" });
+      const p2p = toP2PError(err, {
+        flow: "cancel",
+        chainId: opts.chainId,
+        user: opts.signer?.address,
+        diamondAddress: opts.diamondAddress,
+        orderId: state.orderId ?? undefined,
+      });
+      dispatch({ type: "INLINE_ERROR", message: p2p.userMessage });
     }
   }, [state.orderId, opts]);
 

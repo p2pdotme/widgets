@@ -1240,15 +1240,128 @@ local UX iteration without spending real testnet USDC.
 
 ---
 
+## Error handling
+
+Every failure inside the widget — placement, screening, encrypt-and-deliver,
+mark-paid, cancel — is classified into a single `P2PError` (a subclass of
+`Error`) and passed to your `onError` callback. The error carries:
+
+```ts
+class P2PError extends Error {
+  readonly code: P2PErrorCode;       // stable identifier — branch on this
+  readonly category: P2PErrorCategory; // "wallet" | "revert" | "network" | …
+  readonly userMessage: string;       // safe to render in UI (jargon-free)
+  readonly retryable: boolean;        // UI hint
+  readonly context: P2PErrorContext;  // flow, chainId, user, orderId, currency, …
+  readonly revertSelector?: string;   // 0x-4-byte, when category === "revert"
+  readonly revertName?: string;       // decoded Solidity name (when registered)
+  readonly revertData?: string;       // full 0x-prefixed revert blob
+  readonly hint?: string;             // dev-facing actionable hint (in logs)
+  readonly cause?: unknown;           // original thrown value
+}
+```
+
+The widget surfaces `err.userMessage` to end users and logs a structured
+`[p2p-widget:<flow>] <CODE>` entry at `console.error` with selector / hint /
+context so it shows up in Sentry / DataDog without extra wiring.
+
+### Recognized codes
+
+| code | category | when |
+|---|---|---|
+| `WALLET_USER_REJECTED` | wallet | User dismissed the wallet prompt (EIP-1193 `4001`, viem `UserRejectedRequestError`). |
+| `WALLET_INSUFFICIENT_FUNDS` | wallet | Wallet balance < tx value + gas. |
+| `REVERT_KNOWN` | revert | On-chain revert whose 4-byte selector is in the registry (decoded name on `err.revertName`). |
+| `REVERT_UNKNOWN` | revert | On-chain revert with an unrecognized selector — register it to get a friendly message next time. |
+| `NETWORK_RPC_UNREACHABLE` / `NETWORK_TIMEOUT` | network | RPC fetch failed / timed out. |
+| `ROUTING_NO_MERCHANTS` | routing | SDK couldn't pick a circle (replaces internal "No eligible circles" jargon). |
+| `ROUTING_MISSING_INPUTS` | validation | You omitted `circleId` but also didn't pass `subgraphUrl` + `usdcAddress` + `usdcAmount`. |
+| `SCREENING_API_ERROR` | screening | Fraud-engine returned non-2xx. **Fail-open** — the order still proceeds. |
+| `ENCRYPTION_PREFLIGHT_FAILED` / `ENCRYPTION_FAILED` | encryption | Crypto polyfills missing, or encrypt step failed at ACCEPTED handoff. |
+| `ORDER_BAD_STATUS` | order | You tried to retry-deliver an order that's no longer in `ACCEPTED`. |
+| `UNKNOWN` | unknown | Fall-through. The original message is still in `err.userMessage`. |
+
+### Branching on the code
+
+```tsx
+import { P2PCheckout, P2PError } from "@p2pdotme/checkout-widget";
+
+<P2PCheckout
+  /* … */
+  onError={(err) => {
+    if (err instanceof P2PError) {
+      switch (err.code) {
+        case "WALLET_USER_REJECTED":
+          // User cancelled — don't show a scary toast.
+          return;
+        case "REVERT_KNOWN":
+          analytics.track("checkout_revert", { name: err.revertName });
+          break;
+        case "ROUTING_NO_MERCHANTS":
+          analytics.track("checkout_no_liquidity", err.context);
+          break;
+      }
+      toast.error(err.userMessage);
+    } else {
+      toast.error("Something went wrong");
+    }
+  }}
+/>;
+```
+
+### Decoding integrator-specific reverts
+
+The widget ships a default registry covering the **P2P Diamond order-flow
+selectors** and the **B2B Gateway custom errors** (`B2BProxyAddressMismatch`,
+`B2BIntegratorInactive`, `B2BIntegratorRejectedOrder`, …). When the host
+integrator defines its own custom errors, register them once at app startup
+so the widget can decode them by name in logs and show a friendly user
+message instead of "The transaction reverted on-chain for an unrecognized
+reason":
+
+```ts
+import { registerRevertSelectors } from "@p2pdotme/checkout-widget";
+
+// One-time, at app boot.
+registerRevertSelectors({
+  // selector is the first 4 bytes of keccak256("ErrorName(arg1,arg2)").
+  // `cast sig "ErrorName(uint256)"` will print it for you.
+  "0xabcd1234": {
+    name: "MyIntegratorRejected",
+    userMessage: "Your account hasn't been onboarded for this merchant yet.",
+    hint: "Check the integrator's allowlist / KYC flag for this address.",
+    retryable: false,
+  },
+});
+```
+
+If a revert comes through with an unrecognized selector, the structured log
+line includes the decoded selector + an `https://openchain.xyz/signatures`
+lookup URL so you can identify it and add it to the registry in the next
+release.
+
+### Debugging tools
+
+- `classifyError(err, ctx?)` — pure function, returns a `P2PError`. Useful
+  when you have your own catch sites (the host `placeOrder` body) and want
+  the same classification.
+- `logP2PError(err)` — emits the same structured `console.error` shape the
+  widget uses internally.
+- `lookupRevertSelector("0x...")` — read-only lookup against the registry.
+
+---
+
 ## Troubleshooting
 
-**Tx estimation reverts immediately**
-The new P2P Diamond is **proxy-only** — it rejects direct integrator calls.
-Make sure your integrator is registered on the Diamond *with a non-zero
-`proxyImpl`* and that `userPlaceOrder` routes `placeB2BOrder` through your
-per-user `UserProxy` clone. (See the contracts repo's
-`MarketplaceCheckoutIntegrator.sol` / `CheckoutIntegratorV2.sol` for the
-canonical pattern.)
+**"Execution reverted for an unknown reason" / tx reverts immediately**
+Check the browser console — the widget logs a `[p2p-widget:place-buy] REVERT_*`
+entry with the decoded selector, name, and a hint. For B2B Gateway custom
+errors the most common cause is the integrator was deactivated, was
+registered with the wrong `proxyImpl`, or its `validateOrder` rejected the
+amount (`B2BIntegratorRejectedOrder` ⇒ per-user / daily tx limit hit). See
+`docs/lotpot-credit-integrator-revert.md` for the full proxy-impl-mismatch
+runbook. For an unrecognized selector, decode it with `cast 4byte 0x…` and
+add it to the registry via `registerRevertSelectors`.
 
 **Order stays in `PLACED` forever**
 No merchant accepted within the Diamond's order-expiry window (typically 30

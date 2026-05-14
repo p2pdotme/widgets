@@ -135,12 +135,15 @@ cast 4byte 0x<selector>
 # Expected: "B2BProxyAddressMismatch()"  (or B2BIntegratorInactive())
 ```
 
-The widget now logs this selector automatically — see
-`src/core/place-error.ts`. On any `placeOrder` / `placeOfframp` revert,
-the console gets a structured `[p2p-widget:place:buy|sell]` entry with
-`selector`, `revertData`, attempt context, and a hint listing common B2B
-gateway custom errors. Decode the selector from the log without having
-to spin up `cast run`.
+The widget logs this selector automatically — see `src/core/errors.ts`.
+On any `placeOrder` / `placeOfframp` / `markPaid` / `cancel` revert, the
+console gets a structured `[p2p-widget:<flow>] REVERT_KNOWN` (or
+`REVERT_UNKNOWN`) entry with `selector`, `revertName`, `revertData`,
+attempt context, and an actionable hint. The default registry covers the
+eight B2B Gateway custom errors and the common Diamond order-flow
+selectors; the host's `onError` receives a `P2PError` with the same shape
+so app-side branching by code works directly. Decode the selector from
+the log without having to spin up `cast run`.
 
 ---
 
@@ -241,9 +244,17 @@ coverage in the host:
 
 ## Adding the missing selectors to the host ABI
 
-So this never reads as "unknown reason" again on the host side, append
-these to the host's integrator ABI fragment (the one passed to
-`encodeFunctionData` in `placeOrder`):
+The widget's `P2PError` classifier (`src/core/errors.ts`) decodes the eight
+B2B Gateway custom errors by default — no host changes required. The host's
+`onError` already receives a `P2PError` with `code: "REVERT_KNOWN"`,
+`revertName: "B2BProxyAddressMismatch"`, a friendly `userMessage`, and a
+runbook hint pointing to this doc.
+
+If you also want viem itself to decode the revert at the
+`encodeFunctionData` / `simulateContract` layer (so its `shortMessage` says
+`The contract function "placeOrder" reverted with the following reason:
+B2BProxyAddressMismatch()` instead of "Execution reverted for an unknown
+reason"), append the selectors to your integrator's ABI fragment as well:
 
 ```ts
 const B2B_GATEWAY_ERRORS = [
@@ -263,20 +274,22 @@ const LOTPOT_INTEGRATOR_ABI = [
 ] as const;
 ```
 
-With these in the ABI, viem decodes the revert reason directly and the
-host's `onError` surfaces "B2BProxyAddressMismatch" instead of
-"Execution reverted for an unknown reason."
+For integrator-specific custom errors that aren't in the widget's default
+registry, use `registerRevertSelectors` at app boot to teach the widget
+about them. See README §"Error handling" for the API.
 
 ---
 
 ## Source references
 
-- `p2pdotme-checkout-widget/src/core/order-machine.ts:595-602` — where the
+- `p2pdotme-checkout-widget/src/core/order-machine.ts` — where the
   widget calls the host's `placeOrder`. The widget itself never
   submits the failing tx.
-- `p2pdotme-checkout-widget/src/core/place-error.ts` — diagnostic logger
-  that surfaces the raw revert data + selector to the console on any
-  `placeOrder` / `placeOfframp` failure.
+- `p2pdotme-checkout-widget/src/core/errors.ts` — unified classifier,
+  selector registry, and structured logger. Walks the cause chain on
+  any thrown value, decodes known selectors by name, emits a
+  `[p2p-widget:<flow>] REVERT_*` log line, and produces a `P2PError`
+  with `code`, `userMessage`, `revertName`, `hint`, and `cause`.
 - `p2p-checkout/contracts/LotPotCheckoutIntegrator.sol:316` —
   `proxyImpl = address(new UserProxy())` in the integrator constructor.
 - `p2p-checkout/contracts/LotPotCheckoutIntegrator.sol:1014-1025` —

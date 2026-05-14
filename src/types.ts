@@ -224,6 +224,9 @@ export interface P2PCheckoutProps {
   // Events
   onOrderPlaced?: (orderId: string, txHash: string) => void;
   onComplete?: (orderId: string) => void;
+  /** Fires on placement / screening / wallet failure during checkout.
+   *  Always a `P2PError` (subclass of `Error`) — narrow on `err.code` for
+   *  branching, or read `err.userMessage` for jargon-free copy. */
   onError?: (error: Error) => void;
   onCancel?: (orderId: string) => void;
   onClose?: () => void;
@@ -379,6 +382,9 @@ export interface P2POfframpProps {
   onOrderPlaced?: (orderId: string, txHash: string) => void;
   onComplete?: (orderId: string) => void;
   onCancelled?: (orderId: string) => void;
+  /** Fires on placement / encrypt / deliver / retry failures. Always a
+   *  `P2PError` (subclass of `Error`) — narrow on `err.code` for branching,
+   *  or read `err.userMessage` for jargon-free copy. */
   onError?: (error: Error) => void;
   onClose?: () => void;
 }
