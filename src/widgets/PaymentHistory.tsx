@@ -38,6 +38,13 @@ export interface PaymentHistoryProps {
    * subpath's `PaymentHistoryWithSupport` is the canonical consumer.
    */
   renderRowAction?: (order: Order) => React.ReactNode;
+  /**
+   * Optional render slot at the top-right corner of each row. Useful for
+   * status overlays — e.g. the support subpath uses it to render an
+   * "Active support" pip alongside the on-chain dispute badge. Rendered
+   * absolutely positioned so it never shifts the row's primary layout.
+   */
+  renderRowBadge?: (order: Order) => React.ReactNode;
   /** Optional title override. */
   title?: string;
   /**
@@ -87,7 +94,7 @@ export function PaymentHistory(props: PaymentHistoryProps) {
   const {
     signer, subgraphUrl, usdcAddress,
     chainId = 84532, diamondAddress = DEFAULT_DIAMOND_ADDRESS, rpcUrl,
-    limit = 20, onResume, renderRowAction,
+    limit = 20, onResume, renderRowAction, renderRowBadge,
     filter = "all",
     refreshKey,
     optimisticUpdates,
@@ -262,7 +269,7 @@ export function PaymentHistory(props: PaymentHistoryProps) {
           {past.length > 0 && <p style={{ ...S.label, marginBottom: 8 }}>Pending</p>}
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {pending.map((o) => (
-              <OrderRow key={o.orderId.toString()} order={o} onResume={onResume} renderRowAction={renderRowAction} highlight config={currencyConfigs[o.currency]} />
+              <OrderRow key={o.orderId.toString()} order={o} onResume={onResume} renderRowAction={renderRowAction} renderRowBadge={renderRowBadge} highlight config={currencyConfigs[o.currency]} />
             ))}
           </div>
         </div>
@@ -273,7 +280,7 @@ export function PaymentHistory(props: PaymentHistoryProps) {
           {pending.length > 0 && <p style={{ ...S.label, marginBottom: 8 }}>Past</p>}
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {past.map((o) => (
-              <OrderRow key={o.orderId.toString()} order={o} onResume={onResume} renderRowAction={renderRowAction} config={currencyConfigs[o.currency]} />
+              <OrderRow key={o.orderId.toString()} order={o} onResume={onResume} renderRowAction={renderRowAction} renderRowBadge={renderRowBadge} config={currencyConfigs[o.currency]} />
             ))}
           </div>
         </div>
@@ -282,10 +289,11 @@ export function PaymentHistory(props: PaymentHistoryProps) {
   );
 }
 
-function OrderRow({ order, onResume, renderRowAction, highlight, config }: {
+function OrderRow({ order, onResume, renderRowAction, renderRowBadge, highlight, config }: {
   order: Order;
   onResume?: (orderId: string) => void;
   renderRowAction?: (order: Order) => React.ReactNode;
+  renderRowBadge?: (order: Order) => React.ReactNode;
   highlight?: boolean;
   config?: { buyPrice: bigint; smallOrderThreshold: bigint; smallOrderFixedFee: bigint };
 }) {
@@ -322,8 +330,23 @@ function OrderRow({ order, onResume, renderRowAction, highlight, config }: {
         alignItems: "center",
         justifyContent: "space-between",
         gap: 12,
+        position: "relative",
       }}
     >
+      {renderRowBadge ? (
+        <div
+          style={{
+            position: "absolute",
+            top: 6,
+            right: 10,
+            display: "inline-flex",
+            alignItems: "center",
+            pointerEvents: "none",
+          }}
+        >
+          <div style={{ pointerEvents: "auto" }}>{renderRowBadge(order)}</div>
+        </div>
+      ) : null}
       <div style={{ minWidth: 0, flex: 1 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
           <StatusBadge status={order.status} />

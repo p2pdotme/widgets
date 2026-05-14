@@ -70,10 +70,12 @@ describe("Support", () => {
     expect(
       screen.getByRole("heading", { level: 2 }),
     ).toHaveTextContent(/^Support\s+Order 0xabcd\.\.\.7890$/);
+    // Sign-in returns chatwoot:null (no inbox provisioned for this order's
+    // circle). The widget silently closes the modal — no wall of explainer
+    // text, the click is a no-op. The Support button stays clickable so
+    // the user can retry once the order is accepted.
     await waitFor(() =>
-      expect(
-        screen.getByText(/no support inbox is provisioned/i),
-      ).toBeInTheDocument(),
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
     );
   });
 
@@ -167,10 +169,9 @@ describe("Support", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: /open support/i }));
     // Cache hits the chatwoot:null branch directly without a fetch.
+    // The widget silently closes the modal instead of showing copy.
     await waitFor(() =>
-      expect(
-        screen.getByText(/no support inbox is provisioned/i),
-      ).toBeInTheDocument(),
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
     );
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });
