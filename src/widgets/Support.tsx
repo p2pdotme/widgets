@@ -13,7 +13,6 @@ type Phase =
   | { kind: "idle" }
   | { kind: "signing" }
   | { kind: "ready"; session: SignInResponse }
-  | { kind: "no-chatwoot"; session: SignInResponse }
   | { kind: "error"; reason: string };
 
 export function Support(props: SupportProps) {
@@ -64,7 +63,18 @@ export function Support(props: SupportProps) {
         }
         if (cancelled) return;
         if (!session.chatwoot) {
-          setPhase({ kind: "no-chatwoot", session });
+          // Order not yet bound to a circle (pre-acceptance on chain) or
+          // bridge can't resolve an inbox. Nothing to show — silently
+          // close the modal so the click is a no-op rather than a wall
+          // of explainer text. The Support button stays clickable; the
+          // user can retry once the order is accepted.
+          if (typeof console !== "undefined") {
+            console.info(
+              "[support] no chatwoot session for this order; closing modal",
+            );
+          }
+          setOpen(false);
+          onClose?.();
           return;
         }
         await bootChatwoot(session.chatwoot);
@@ -72,7 +82,7 @@ export function Support(props: SupportProps) {
         openChatwoot();
         // Chatwoot's own widget is now the user-facing surface. Auto-close
         // our modal so it does not sit on top of the chat. The modal stays
-        // visible only for signing / no-chatwoot / error phases.
+        // visible only for signing / error phases.
         setOpen(false);
         onClose?.();
       } catch (err) {
@@ -235,23 +245,6 @@ function PhaseView({ phase }: { phase: Phase }) {
       >
         Support chat opened. Close this dialog to keep chatting with the
         Payment Support Team.
-      </div>
-    );
-  }
-
-  if (phase.kind === "no-chatwoot") {
-    return (
-      <div
-        style={{
-          ...box,
-          border: "1px dashed var(--support-color-muted)",
-          color: "var(--support-color-muted)",
-        }}
-      >
-        Bridge sign-in succeeded. No support inbox is provisioned for this
-        order's circle yet, so the chat surface is not available. Once the
-        first dispute fires the inbox is auto-created and Support opens
-        directly.
       </div>
     );
   }
