@@ -68,24 +68,26 @@ export function PaymentHistoryWithSupport(
   return (
     <PaymentHistory
       {...orderHistoryProps}
-      renderRowAction={(order: { orderId: { toString(): string }; disputeStatus?: string }) => {
-        const id = order.orderId.toString();
-        return (
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-            {activeOrderIds.has(id) ? <ActiveSupportPip /> : null}
-            <Support
-              orderId={id}
-              originApp={support.originApp}
-              signer={support.signer}
-              bridgeUrl={support.bridgeUrl}
-              disputeStatus={(order.disputeStatus ?? "none") as SupportStatus}
-              chatwootBaseUrl={support.chatwootBaseUrl}
-              chatwootInboxIdentifier={support.chatwootInboxIdentifier}
-              theme={support.theme}
-            />
-          </span>
-        );
-      }}
+      renderRowBadge={(order: { orderId: { toString(): string } }) =>
+        activeOrderIds.has(order.orderId.toString()) ? <ActiveSupportPip /> : null
+      }
+      renderRowAction={(order: { orderId: { toString(): string }; disputeStatus?: string }) => (
+        // The bridge's sign-in handler is the source of truth for "can
+        // this order open a chat" — it resolves the order's on-chain
+        // circleId → inbox, and returns `chatwoot: null` when nothing
+        // is bound. The widget silently closes on that path. So the
+        // Support button is always rendered; gating is server-side.
+        <Support
+          orderId={order.orderId.toString()}
+          originApp={support.originApp}
+          signer={support.signer}
+          bridgeUrl={support.bridgeUrl}
+          disputeStatus={(order.disputeStatus ?? "none") as SupportStatus}
+          chatwootBaseUrl={support.chatwootBaseUrl}
+          chatwootInboxIdentifier={support.chatwootInboxIdentifier}
+          theme={support.theme}
+        />
+      )}
     />
   );
 }

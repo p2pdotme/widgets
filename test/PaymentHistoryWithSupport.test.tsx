@@ -7,40 +7,41 @@ let renderRowAction:
   | ((order: { orderId: bigint; disputeStatus?: string }) => unknown)
   | undefined;
 
+interface RowOrder {
+  orderId: bigint;
+  status?: string;
+  disputeStatus?: string;
+}
+
 vi.mock("../src/widgets/PaymentHistory", () => ({
   PaymentHistory: (props: {
-    renderRowAction?: (order: {
-      orderId: bigint;
-      disputeStatus?: string;
-    }) => unknown;
+    renderRowAction?: (order: RowOrder) => unknown;
+    renderRowBadge?: (order: RowOrder) => unknown;
   }) => {
     renderRowAction = props.renderRowAction;
+    const rows: RowOrder[] = [
+      { orderId: 169n, status: "accepted", disputeStatus: "open" },
+      { orderId: 42n, status: "accepted", disputeStatus: "none" },
+      { orderId: 7n, status: "accepted", disputeStatus: "resolved" },
+      { orderId: 999n, status: "placed", disputeStatus: "none" },
+    ];
     return (
       <div data-testid="p2p-payment-history">
-        <div data-row="169">
-          {props.renderRowAction
-            ? (props.renderRowAction({
-                orderId: 169n,
-                disputeStatus: "open",
-              }) as React.ReactNode)
-            : null}
-        </div>
-        <div data-row="42">
-          {props.renderRowAction
-            ? (props.renderRowAction({
-                orderId: 42n,
-                disputeStatus: "none",
-              }) as React.ReactNode)
-            : null}
-        </div>
-        <div data-row="7">
-          {props.renderRowAction
-            ? (props.renderRowAction({
-                orderId: 7n,
-                disputeStatus: "resolved",
-              }) as React.ReactNode)
-            : null}
-        </div>
+        {rows.map((order) => (
+          <div data-row={order.orderId.toString()} key={order.orderId.toString()}>
+            {/* PaymentHistory always renders the order metadata + a Resume
+                button on pending rows. The mock stands in for that
+                always-rendered surface so tests can verify the Support
+                slots compose, not replace, the underlying row. */}
+            <span data-row-resume>Resume</span>
+            {props.renderRowBadge
+              ? (props.renderRowBadge(order) as React.ReactNode)
+              : null}
+            {props.renderRowAction
+              ? (props.renderRowAction(order) as React.ReactNode)
+              : null}
+          </div>
+        ))}
       </div>
     );
   },
@@ -134,6 +135,41 @@ describe("PaymentHistoryWithSupport", () => {
     expect(row169?.querySelector("[data-support-active-pip]")).not.toBeNull();
     expect(row42?.querySelector("[data-support-active-pip]")).toBeNull();
     expect(row7?.querySelector("[data-support-active-pip]")).toBeNull();
+  });
+
+  it("renders Support button on all rows regardless of on-chain status — gating is server-side", async () => {
+    mockFetch((input) => {
+      const url = String(input);
+      if (url.endsWith("/auth/me")) return { sub: stubSigner.address };
+      if (url.endsWith("/tickets/me")) return { items: [] };
+      return {};
+    });
+
+    const fresh = {
+      ok: true,
+      address: stubSigner.address,
+      role: "user",
+      chatwoot: null,
+      sessionToken: "stub.jwt.token",
+      expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000,
+    };
+    window.localStorage.setItem(
+      `support.p2p.me:session:https://bridge.local:${stubSigner.address.toLowerCase()}`,
+      JSON.stringify(fresh),
+    );
+
+    render(<PaymentHistoryWithSupport {...baseProps} />);
+    await waitFor(() => {
+      expect((globalThis.fetch as any).mock.calls.length).toBeGreaterThan(0);
+    });
+
+    // Even the placed row gets a Support button — the bridge's chain
+    // resolver is the source of truth for "can this open a chat", not
+    // the SDK's `status` field. The bridge returns `chatwoot: null`
+    // when nothing is bound and the widget closes silently from there.
+    const row999 = document.querySelector('[data-row="999"]');
+    expect(row999?.querySelector("[data-row-resume]")).not.toBeNull();
+    expect(row999?.querySelector("[data-support-launcher]")).not.toBeNull();
   });
 
   it("silently signs in when there is no cached session and the signer can sign", async () => {
