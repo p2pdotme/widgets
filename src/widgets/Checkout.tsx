@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { formatUnits } from "viem";
-import type { P2PCheckoutProps } from "../types";
+import type { CheckoutProps } from "../types";
 import { useOrderMachine } from "../core/order-machine";
 import { resolveCurrencyMeta } from "../core/currency-meta";
 import { CurrencyRow } from "../ui/CurrencyRow";
@@ -16,7 +16,7 @@ import {
 // Mirrors user-app's 5-minute window.
 const AUTO_CANCEL_WINDOW_MS = 5 * 60 * 1000;
 
-export function P2PCheckout(props: P2PCheckoutProps) {
+export function Checkout(props: CheckoutProps) {
   const {
     orderId: initialOrderId, placeOrder,
     amount, productName, signer, paymentNotice,

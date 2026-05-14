@@ -1,7 +1,7 @@
 # Credit-aware checkout — manual browser smoke
 
 Step-by-step browser smoke for the credit display + concurrency gate that
-ships with `<P2PCheckout>`. Run this on Base Sepolia against a deployed
+ships with `<Checkout>`. Run this on Base Sepolia against a deployed
 credit-redemption LotPot integrator (PR
 `lotpot/credit-redemption-and-fraud-guard` or later — needs the
 `availableCredit(user)` view and the `LotPotFulfillmentSkipped` event).
@@ -92,7 +92,7 @@ so subsequent orders fulfill normally.
   - [ ] No "Credit applied" row in the breakdown.
   - [ ] **You pay** equals the gross order total.
   - [ ] CTA reads `Pay <currency> <total>`.
-  - [ ] Existing `<P2POrderHistory>` resume flow still works for pending
+  - [ ] Existing `<PaymentHistory>` resume flow still works for pending
         orders (no auto-snap, no rejection — host-driven resume).
 
 ## Edge cases
