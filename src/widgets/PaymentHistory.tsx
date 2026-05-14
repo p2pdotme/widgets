@@ -11,7 +11,7 @@ import { color, radius, font, weight, S, themeToCssVars, type P2PTheme } from ".
 import { Spinner, CenterStatus, injectKeyframes } from "../ui/components";
 import type { CheckoutSigner } from "../types";
 
-export interface P2POrderHistoryProps {
+export interface PaymentHistoryProps {
   signer: CheckoutSigner;
   /** Subgraph URL — required, this is a read-only widget that runs purely off the subgraph. */
   subgraphUrl: string;
@@ -24,7 +24,7 @@ export interface P2POrderHistoryProps {
   limit?: number;
   /**
    * Called when the user clicks the "Resume" button on a pending order
-   * (placed/accepted/paid). The host should open `P2PCheckout` with this
+   * (placed/accepted/paid). The host should open `Checkout` with this
    * orderId; the checkout widget polls chain state and lands on the right
    * screen automatically.
    */
@@ -47,7 +47,7 @@ export interface P2POrderHistoryProps {
    * (`marginBottom`, etc.) that should disappear when the widget auto-hides. */
   style?: React.CSSProperties;
   /**
-   * Bump this value to force an immediate refetch. Useful after a P2PCheckout
+   * Bump this value to force an immediate refetch. Useful after a Checkout
    * `onComplete` / `onCancel` callback fires — the host knows the state
    * changed before the subgraph has indexed it.
    */
@@ -74,7 +74,7 @@ export interface P2POrderHistoryProps {
 
 const PENDING_STATUSES: ReadonlyArray<Order["status"]> = ["placed", "accepted", "paid"];
 
-export function P2POrderHistory(props: P2POrderHistoryProps) {
+export function PaymentHistory(props: PaymentHistoryProps) {
   const {
     signer, subgraphUrl, usdcAddress,
     chainId = 84532, diamondAddress = DEFAULT_DIAMOND_ADDRESS, rpcUrl,

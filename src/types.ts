@@ -90,7 +90,7 @@ export type PaymentAddressValidator = (input: string) => string | null;
 // invoking the host's `placeOrder` callback. When provided, the widget passes
 // it through unchanged — explicit values are honored as an override / escape
 // hatch. Routing requires `subgraphUrl`, `usdcAddress`, `usdcAmount`, and
-// `fiatAmount` on `P2PCheckoutProps`.
+// `fiatAmount` on `CheckoutProps`.
 export interface CurrencyOption {
   symbol: string;
   flag: string;
@@ -106,9 +106,9 @@ export interface CurrencyOption {
   circleId?: bigint;
   /** Optional preferred payment-channel config id forwarded to the router. */
   paymentChannelConfigId?: bigint;
-  /** Optional override for offramp payment-address validation. */
+  /** Optional override for cashout payment-address validation. */
   validatePaymentAddress?: PaymentAddressValidator;
-  /** Optional placeholder for the offramp address input. */
+  /** Optional placeholder for the cashout address input. */
   paymentAddressPlaceholder?: string;
 }
 
@@ -116,7 +116,7 @@ export interface PlaceOrderContext {
   currency?: CurrencyOption;
 }
 
-export interface P2PCheckoutProps {
+export interface CheckoutProps {
   // --- Order source (pick one) ---
   // A: tracking only — client already placed the order
   orderId?: string;
@@ -203,7 +203,7 @@ export interface P2PCheckoutProps {
    *  ACCEPTED / PAID). `usdcAmount` must be the full purchase intent (not
    *  the Diamond delta on a credit-applied order). When both this and
    *  `fetchCredit` are provided, the widget enforces:
-   *   - credit == 0                → no gate (existing `<P2POrderHistory>`
+   *   - credit == 0                → no gate (existing `<PaymentHistory>`
    *                                  resume flow applies separately).
    *   - credit > 0, no pending      → no gate.
    *   - credit > 0, amount match   → auto-resume that order in tracking
@@ -215,7 +215,7 @@ export interface P2PCheckoutProps {
   fetchPendingOrders?: (user: `0x${string}`) => Promise<PendingOrderSummary[]>;
 
   /** Fired when the rejection screen's "Resume that order" button is
-   *  clicked. The host should navigate the user (or re-open `<P2PCheckout>`)
+   *  clicked. The host should navigate the user (or re-open `<Checkout>`)
    *  with `orderId={pendingOrderId}` so the widget enters tracking-only
    *  mode against that order. Omit to hide the resume button on the
    *  rejection screen. */
@@ -250,18 +250,19 @@ export type CheckoutPhase =
   | "cancelled"
   | "error";
 
-// ─── Offramp (USDC balance → fiat) ──────────────────────────────────
+// ─── Cashout (USDC balance → fiat) ──────────────────────────────────
 //
-// The widget orchestrates the Diamond-level offramp lifecycle and delegates
-// integrator-specific work (USDC approve, integrator tx encoding, receipt
-// parsing) to host callbacks. The widget itself never imports an integrator
-// ABI — see README §"Offramp callback contract" for the host-side recipe
-// against any specific integrator (LotPotCheckoutIntegrator, etc.).
+// The widget orchestrates the Diamond-level offramp lifecycle (the protocol
+// term for "USDC-to-fiat") and delegates integrator-specific work — USDC
+// approve, integrator tx encoding, receipt parsing — to host callbacks. The
+// widget itself never imports an integrator ABI. See README §"Cashout
+// callback contract" for the host-side recipe against any specific
+// integrator (LotPotCheckoutIntegrator, etc.).
 
-export type OfframpPhase =
+export type CashoutPhase =
   /** Pre-order screen: collect currency + amount + payment address. */
   | "form"
-  /** Host's `placeOfframp` callback is running (approve + integrator tx). */
+  /** Host's `placeCashout` callback is running (approve + integrator tx). */
   | "placing"
   /** Sell order placed; waiting for a merchant to accept. */
   | "placed"
@@ -278,7 +279,7 @@ export type OfframpPhase =
   | "error";
 
 /**
- * Passed to the host's `placeOfframp` callback. The host is responsible for
+ * Passed to the host's `placeCashout` callback. The host is responsible for
  * approving USDC to its integrator and submitting whatever integrator-specific
  * tx places the SELL on the Diamond.
  *
@@ -286,15 +287,15 @@ export type OfframpPhase =
  * pinned on `CurrencyOption.circleId`, or the value the widget routed via
  * the SDK when the host left `circleId` undefined.
  */
-export interface PlaceOfframpContext {
+export interface PlaceCashoutContext {
   currency: CurrencyOption;
   /** Raw fiat payment address the user entered. NOT yet encrypted — host
    *  must NOT submit this on-chain. The widget encrypts it at the ACCEPTED
    *  handoff and calls `deliverUpi` separately. */
   paymentAddress: string;
-  /** USDC principal the user is offramping (6-decimal bigint). This is the
-   *  `amount` you pass to the integrator's `userInitiateOfframp` / Diamond
-   *  SELL — NOT what the user's wallet is debited (see `feeUsdc`). */
+  /** USDC principal the user is cashing out (6-decimal bigint). This is the
+   *  `amount` you pass to the integrator's place-offramp tx / Diamond SELL —
+   *  NOT what the user's wallet is debited (see `feeUsdc`). */
   usdcAmount: bigint;
   /** Small-order fixed fee (6-decimal bigint), read from
    *  `getSmallOrderFixedFee(currency)`. `0n` when the principal exceeds
@@ -310,7 +311,7 @@ export interface PlaceOfframpContext {
   userPubKey: string;
 }
 
-export interface PlaceOfframpResult {
+export interface PlaceCashoutResult {
   /** Diamond order id parsed from the tx receipt. */
   orderId: string;
   /** Hash of the placement tx. */
@@ -333,7 +334,7 @@ export interface ReconcileContext {
   status: number;
 }
 
-export interface P2POfframpProps {
+export interface CashoutProps {
   // ─── Required ────────────────────────────────────────────────────
   /** USDC token address (used for the "you have X available" affordance). */
   usdcAddress: `0x${string}`;
@@ -352,8 +353,8 @@ export interface P2POfframpProps {
    *  routed; any with one is honored as-is. */
   currencies: CurrencyOption[];
   /** Host callback — submits the integrator-specific tx that places the
-   *  SELL on the Diamond. See `PlaceOfframpContext`. */
-  placeOfframp: (ctx: PlaceOfframpContext) => Promise<PlaceOfframpResult>;
+   *  SELL on the Diamond. See `PlaceCashoutContext`. */
+  placeCashout: (ctx: PlaceCashoutContext) => Promise<PlaceCashoutResult>;
   /** Host callback — submits the integrator's `deliverOfframpUpi` (the
    *  widget passes in the already-encrypted blob). */
   deliverUpi: (ctx: DeliverUpiContext) => Promise<{ txHash: string }>;

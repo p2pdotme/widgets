@@ -136,7 +136,7 @@ cast 4byte 0x<selector>
 ```
 
 The widget logs this selector automatically — see `src/core/errors.ts`.
-On any `placeOrder` / `placeOfframp` / `markPaid` / `cancel` revert, the
+On any `placeOrder` / `placeCashout` / `markPaid` / `cancel` revert, the
 console gets a structured `[p2p-widget:<flow>] REVERT_KNOWN` (or
 `REVERT_UNKNOWN`) entry with `selector`, `revertName`, `revertData`,
 attempt context, and an actionable hint. The default registry covers the
@@ -282,10 +282,10 @@ about them. See README §"Error handling" for the API.
 
 ## Source references
 
-- `p2pdotme-checkout-widget/src/core/order-machine.ts` — where the
+- `widgets/src/core/order-machine.ts` — where the
   widget calls the host's `placeOrder`. The widget itself never
   submits the failing tx.
-- `p2pdotme-checkout-widget/src/core/errors.ts` — unified classifier,
+- `widgets/src/core/errors.ts` — unified classifier,
   selector registry, and structured logger. Walks the cause chain on
   any thrown value, decodes known selectors by name, emits a
   `[p2p-widget:<flow>] REVERT_*` log line, and produces a `P2PError`

@@ -1,30 +1,48 @@
 /**
- * Canonical buy + sell-back integration. Uses Privy for the wallet, a
- * V2-style integrator for buys, and a MarketplaceCheckoutIntegrator for
- * sell-back. Adapt the addresses and ABIs to your deployment.
+ * Canonical buy + offramp integration. Uses a viem private-key signer for
+ * brevity — see README §"Signer adapter" for Privy / wagmi recipes that drop
+ * straight into this `CheckoutSigner` shape.
  *
- * Drop this file into a Vite + React + Privy app, plug your env vars in,
- * and you have a working storefront.
+ * The widget itself is integrator-agnostic. This file shows the *host* side:
+ *   • a V2-style integrator for buys (BUY_INTEGRATOR_ABI),
+ *   • a LotPot-shaped integrator for offramps (OFFRAMP_INTEGRATOR_ABI),
+ *   • the four host callbacks the widgets need.
+ *
+ * Adapt the addresses, ABIs, and event parsers to your deployment.
  */
 
 import { useCallback, useMemo, useState } from "react";
-import { usePrivy, useSendTransaction, useWallets } from "@privy-io/react-auth";
 import {
   createPublicClient,
+  createWalletClient,
+  decodeEventLog,
   encodeFunctionData,
   http,
   stringToHex,
+  type Log,
 } from "viem";
+import { privateKeyToAccount } from "viem/accounts";
 import { baseSepolia } from "viem/chains";
+// Shared types + helpers come from the bare entry; each widget is imported
+// from its own subpath so unused widgets are tree-shaken out.
 import {
-  P2PCheckout,
-  P2POfframp,
+  P2PError,
   parseOrderIdFromReceipt,
   type CheckoutSigner,
   type CurrencyOption,
+} from "@p2pdotme/widgets";
+import {
+  Checkout,
   type PlaceOrderContext,
   type PlaceOrderResult,
-} from "@p2pdotme/checkout-widget";
+} from "@p2pdotme/widgets/checkout";
+import {
+  Cashout,
+  type DeliverUpiContext,
+  type PlaceCashoutContext,
+  type PlaceCashoutResult,
+  type ReconcileContext,
+} from "@p2pdotme/widgets/cashout";
 import {
   createLocalStorageRelayStore,
   createRelayIdentity,
@@ -33,24 +51,27 @@ import {
 // ─── Configuration ────────────────────────────────────────────────────
 
 const CHAIN = baseSepolia;
-const RPC_URL = undefined; // pass to override viem's default
+const RPC_URL: string | undefined = undefined; // pass to override viem's default
 const DIAMOND_ADDRESS = "0xeb0BB8E3c014D915D9B2df03aBB130a1Fb44beb9" as `0x${string}`;
 const USDC_ADDRESS = "0x4095fE4f1E636f11A95820BA2bB87F335Bd1040d" as `0x${string}`;
 
-// V2 stack (store flow)
-const INTEGRATOR_ADDRESS = "0x4eEe0701b53A031B510468fe4b9C6523Aa21613a" as `0x${string}`;
+// V2 stack (buy flow)
+const BUY_INTEGRATOR_ADDRESS = "0x4eEe0701b53A031B510468fe4b9C6523Aa21613a" as `0x${string}`;
 const CLIENT_ADDRESS = "0xF99216e437f04270D815563c548A0E4599207973" as `0x${string}`;
 
-// Marketplace stack (sell-back capable)
-const MARKETPLACE_INTEGRATOR_ADDRESS = "0x59422CFb0b1951F98eCD5C720bC3F4ec4E00Bb64" as `0x${string}`;
-const MARKETPLACE_ADDRESS = "0xFCd89B3022b4C13F57bB97aCd040F2e4C458290F" as `0x${string}`;
+// Offramp integrator (LotPot-style — any contract exposing the three
+// selectors below works). The widget never imports the ABI; this file does.
+const OFFRAMP_INTEGRATOR_ADDRESS =
+  "0x59422CFb0b1951F98eCD5C720bC3F4ec4E00Bb64" as `0x${string}`;
 
 const CURRENCIES: CurrencyOption[] = [
   { symbol: "INR", flag: "🇮🇳", paymentMethod: "UPI", circleId: 1n },
   { symbol: "BRL", flag: "🇧🇷", paymentMethod: "PIX", circleId: 2n },
 ];
 
-const INTEGRATOR_ABI = [
+// ─── ABIs (host-side — the widget never sees these) ───────────────────
+
+const BUY_INTEGRATOR_ABI = [
   {
     name: "userPlaceOrder",
     type: "function",
@@ -69,60 +90,143 @@ const INTEGRATOR_ABI = [
   },
 ] as const;
 
+const ERC20_ABI = [
+  {
+    name: "allowance",
+    type: "function",
+    stateMutability: "view",
+    inputs: [
+      { name: "owner", type: "address" },
+      { name: "spender", type: "address" },
+    ],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    name: "approve",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "spender", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [{ name: "", type: "bool" }],
+  },
+] as const;
+
+const OFFRAMP_INTEGRATOR_ABI = [
+  {
+    name: "userInitiateOfframp",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "amount", type: "uint256" },
+      { name: "currency", type: "bytes32" },
+      { name: "fiatAmount", type: "uint256" },
+      { name: "circleId", type: "uint256" },
+      { name: "preferredPaymentChannelConfigId", type: "uint256" },
+      { name: "userPubKey", type: "string" },
+    ],
+    outputs: [{ name: "orderId", type: "uint256" }],
+  },
+  {
+    name: "deliverOfframpUpi",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "orderId", type: "uint256" },
+      { name: "encUpi", type: "string" },
+    ],
+    outputs: [],
+  },
+  {
+    name: "reconcile",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "orderId", type: "uint256" },
+      { name: "currentStatus", type: "uint8" },
+    ],
+    outputs: [],
+  },
+  {
+    type: "event",
+    name: "OfframpInitiated",
+    inputs: [
+      { name: "orderId", type: "uint256", indexed: true },
+      { name: "user", type: "address", indexed: true },
+      { name: "usdcAmount", type: "uint256", indexed: false },
+    ],
+  },
+] as const;
+
 const publicClient = createPublicClient({ chain: CHAIN, transport: http(RPC_URL) });
 
-// ─── Signer adapter (Privy) ──────────────────────────────────────────
+// ─── Signer adapter (viem private key) ───────────────────────────────
+//
+// In production you'd source this from a wallet provider (Privy, wagmi,
+// thirdweb, …). See README §"Signer adapter" for those recipes — they
+// produce the same `CheckoutSigner` shape this hook returns.
 
-function useCheckoutSigner(): CheckoutSigner | null {
-  const { wallets } = useWallets();
-  const { sendTransaction } = useSendTransaction();
-  const wallet = wallets[0];
+function useCheckoutSigner(privateKey: `0x${string}`): CheckoutSigner {
   return useMemo(() => {
-    if (!wallet) return null;
-    const isEmbedded = wallet.walletClientType === "privy";
+    const account = privateKeyToAccount(privateKey);
+    const wallet = createWalletClient({
+      account,
+      chain: CHAIN,
+      transport: http(RPC_URL),
+    });
     return {
-      address: wallet.address as `0x${string}`,
+      address: account.address,
       sendTransaction: async (tx) => {
-        const result = await sendTransaction(
-          {
-            to: tx.to,
-            data: tx.data,
-            gasLimit: tx.gasLimit ? BigInt(tx.gasLimit) : undefined,
-          },
-          { address: wallet.address, ...(isEmbedded ? { sponsor: true } : {}) },
-        );
-        return { hash: result.hash as `0x${string}` };
+        const hash = await wallet.sendTransaction({
+          to: tx.to,
+          data: tx.data,
+          gas: tx.gasLimit ? BigInt(tx.gasLimit) : undefined,
+        });
+        return { hash };
       },
-      // Required when `screening` is configured on <P2PCheckout>.
-      signMessage: async (message) => {
-        const provider = await wallet.getEthereumProvider();
-        return provider.request({
-          method: "personal_sign",
-          params: [message, wallet.address],
-        }) as Promise<string>;
-      },
+      // Required when `screening` is configured on <Checkout>.
+      signMessage: (message) => wallet.signMessage({ message }),
     };
-  }, [wallet, sendTransaction]);
+  }, [privateKey]);
 }
 
-// Optional: enable B2B fraud-engine screening. Source these from your env.
-const SCREENING = {
-  apiUrl: import.meta.env.VITE_FRAUD_ENGINE_API_URL as string | undefined,
-  encryptionKey: import.meta.env.VITE_FRAUD_ENGINE_ENCRYPTION_KEY as string | undefined,
-  orderSource: import.meta.env.VITE_FRAUD_ENGINE_ORDER_SOURCE as string | undefined,
-};
+// ─── Receipt parser for the offramp event ─────────────────────────────
+
+function parseOfframpOrderId(receipt: { logs: readonly Log[] }): string | null {
+  for (const log of receipt.logs) {
+    try {
+      const decoded = decodeEventLog({
+        abi: OFFRAMP_INTEGRATOR_ABI,
+        data: log.data,
+        topics: log.topics as [`0x${string}`, ...`0x${string}`[]],
+      });
+      if (decoded.eventName === "OfframpInitiated") {
+        return (decoded.args as { orderId: bigint }).orderId.toString();
+      }
+    } catch {
+      // Not our event — keep scanning.
+    }
+  }
+  return null;
+}
 
 // ─── App ──────────────────────────────────────────────────────────────
 
-export default function App() {
-  const { ready, authenticated, login } = usePrivy();
-  const signer = useCheckoutSigner();
-  const [showBuy, setShowBuy] = useState(false);
-  const [sellTokenId, setSellTokenId] = useState<bigint | null>(null);
+interface AppProps {
+  /** Hex-encoded private key. In production, replace this prop with whatever
+   *  signer source you use (Privy embedded wallet, wagmi connector, …). */
+  privateKey: `0x${string}`;
+}
 
+export default function App({ privateKey }: AppProps) {
+  const signer = useCheckoutSigner(privateKey);
+  const [showBuy, setShowBuy] = useState(false);
+  const [showSell, setShowSell] = useState(false);
+
+  // ─── Buy callback ──────────────────────────────────────────────────
   const placeBuy = useCallback(
     async (ctx: PlaceOrderContext): Promise<PlaceOrderResult> => {
-      if (!signer) throw new Error("No signer");
       if (!ctx.currency) throw new Error("Pick a currency");
 
       // The merchant uses this pubkey to encrypt their UPI/PIX details.
@@ -135,43 +239,144 @@ export default function App() {
       }
 
       const data = encodeFunctionData({
-        abi: INTEGRATOR_ABI,
+        abi: BUY_INTEGRATOR_ABI,
         functionName: "userPlaceOrder",
         args: [
           CLIENT_ADDRESS,
-          1n,                              // productId
-          1n,                              // quantity
+          1n, // productId
+          1n, // quantity
           stringToHex(ctx.currency.symbol, { size: 32 }),
-          ctx.currency.circleId,
+          ctx.currency.circleId!,
           identity.publicKey,
-          0n, 0n,                          // ppcId + fiatAmountLimit
+          0n, // preferredPaymentChannelConfigId
+          0n, // fiatAmountLimit
         ],
       });
 
       const { hash } = await signer.sendTransaction({
-        to: INTEGRATOR_ADDRESS,
+        to: BUY_INTEGRATOR_ADDRESS,
         data,
         gasLimit: 1_500_000,
       });
       const receipt = await publicClient.waitForTransactionReceipt({ hash });
       if (receipt.status === "reverted") throw new Error("Tx reverted on chain");
-      const orderId = parseOrderIdFromReceipt(receipt as any);
+      const orderId = parseOrderIdFromReceipt(receipt);
       if (!orderId) throw new Error("orderId missing from receipt");
       return { orderId, txHash: hash };
     },
     [signer],
   );
 
-  if (!ready) return null;
-  if (!authenticated) return <button onClick={() => login()}>Sign in</button>;
+  // ─── Offramp callbacks ─────────────────────────────────────────────
+  //
+  // The widget owns the Diamond-level orchestration; the host owns the
+  // integrator-specific txs. Three callbacks: place, deliver, reconcile.
+
+  const placeCashout = useCallback(
+    async (ctx: PlaceCashoutContext): Promise<PlaceCashoutResult> => {
+      // 1) Approve USDC to the integrator if allowance is short. Approve
+      //    the TOTAL (principal + fee) — the Diamond pulls that much from
+      //    the user at `setSellOrderUpi`.
+      const totalCharge = ctx.usdcAmount + ctx.feeUsdc;
+      const allowance = (await publicClient.readContract({
+        address: USDC_ADDRESS,
+        abi: ERC20_ABI,
+        functionName: "allowance",
+        args: [signer.address, OFFRAMP_INTEGRATOR_ADDRESS],
+      })) as bigint;
+      if (allowance < totalCharge) {
+        const { hash: approveHash } = await signer.sendTransaction({
+          to: USDC_ADDRESS,
+          data: encodeFunctionData({
+            abi: ERC20_ABI,
+            functionName: "approve",
+            args: [OFFRAMP_INTEGRATOR_ADDRESS, totalCharge],
+          }),
+          gasLimit: 100_000,
+        });
+        await publicClient.waitForTransactionReceipt({ hash: approveHash });
+      }
+
+      // 2) Submit the integrator's place-offramp tx.
+      const data = encodeFunctionData({
+        abi: OFFRAMP_INTEGRATOR_ABI,
+        functionName: "userInitiateOfframp",
+        args: [
+          ctx.usdcAmount,
+          stringToHex(ctx.currency.symbol, { size: 32 }),
+          0n, // fiatAmountLimit (slippage floor) — 0 disables the check
+          ctx.currency.circleId!,
+          ctx.currency.paymentChannelConfigId ?? 0n,
+          ctx.userPubKey,
+        ],
+      });
+      const { hash } = await signer.sendTransaction({
+        to: OFFRAMP_INTEGRATOR_ADDRESS,
+        data,
+        gasLimit: 1_000_000,
+      });
+      const receipt = await publicClient.waitForTransactionReceipt({ hash });
+      if (receipt.status === "reverted") throw new Error("Tx reverted on chain");
+      const orderId = parseOfframpOrderId(receipt);
+      if (!orderId) throw new Error("orderId not in receipt");
+      return { orderId, txHash: hash };
+    },
+    [signer],
+  );
+
+  const deliverUpi = useCallback(
+    async (ctx: DeliverUpiContext): Promise<{ txHash: string }> => {
+      const data = encodeFunctionData({
+        abi: OFFRAMP_INTEGRATOR_ABI,
+        functionName: "deliverOfframpUpi",
+        args: [BigInt(ctx.orderId), ctx.encryptedUpi],
+      });
+      const { hash } = await signer.sendTransaction({
+        to: OFFRAMP_INTEGRATOR_ADDRESS,
+        data,
+        gasLimit: 500_000,
+      });
+      await publicClient.waitForTransactionReceipt({ hash });
+      return { txHash: hash };
+    },
+    [signer],
+  );
+
+  const reconcile = useCallback(
+    async (ctx: ReconcileContext): Promise<{ txHash: string }> => {
+      const data = encodeFunctionData({
+        abi: OFFRAMP_INTEGRATOR_ABI,
+        functionName: "reconcile",
+        args: [BigInt(ctx.orderId), ctx.status],
+      });
+      const { hash } = await signer.sendTransaction({
+        to: OFFRAMP_INTEGRATOR_ADDRESS,
+        data,
+        gasLimit: 200_000,
+      });
+      await publicClient.waitForTransactionReceipt({ hash });
+      return { txHash: hash };
+    },
+    [signer],
+  );
+
+  // ─── Error reporter (P2PError-aware) ───────────────────────────────
+  const handleError = useCallback((err: Error) => {
+    if (err instanceof P2PError) {
+      if (err.code === "WALLET_USER_REJECTED") return; // user cancelled
+      console.error(`[checkout] ${err.code}:`, err.userMessage, err.context);
+    } else {
+      console.error("[checkout] unexpected", err);
+    }
+  }, []);
 
   return (
     <main>
       <button onClick={() => setShowBuy(true)}>Buy 1 Common NFT (5 USDC)</button>
-      <button onClick={() => setSellTokenId(1n)}>Sell back token #1</button>
+      <button onClick={() => setShowSell(true)}>Withdraw USDC to fiat</button>
 
-      {showBuy && signer && (
-        <P2PCheckout
+      {showBuy && (
+        <Checkout
           placeOrder={placeBuy}
           currencies={CURRENCIES}
           amount="5 USDC"
@@ -180,34 +385,28 @@ export default function App() {
           chainId={CHAIN.id}
           diamondAddress={DIAMOND_ADDRESS}
           rpcUrl={RPC_URL}
-          screening={
-            SCREENING.apiUrl && SCREENING.encryptionKey
-              ? {
-                  apiUrl: SCREENING.apiUrl,
-                  encryptionKey: SCREENING.encryptionKey,
-                  orderSource: SCREENING.orderSource,
-                  orderDetails: { cryptoAmount: 5, currency: "INR" },
-                }
-              : undefined
-          }
+          onError={handleError}
           onClose={() => setShowBuy(false)}
           onComplete={() => setShowBuy(false)}
         />
       )}
 
-      {sellTokenId !== null && signer && (
-        <P2POfframp
-          integratorAddress={MARKETPLACE_INTEGRATOR_ADDRESS}
-          marketplaceAddress={MARKETPLACE_ADDRESS}
-          tokenId={sellTokenId}
+      {showSell && (
+        <Cashout
           signer={signer}
-          currencies={CURRENCIES}
-          diamondAddress={DIAMOND_ADDRESS}
           usdcAddress={USDC_ADDRESS}
+          diamondAddress={DIAMOND_ADDRESS}
           chainId={CHAIN.id}
-          onClose={() => setSellTokenId(null)}
-          onComplete={() => setSellTokenId(null)}
-          onCancelled={() => setSellTokenId(null)}
+          rpcUrl={RPC_URL}
+          currencies={CURRENCIES}
+          defaultAmountUsdc={2_000_000n}
+          placeCashout={placeCashout}
+          deliverUpi={deliverUpi}
+          reconcile={reconcile}
+          onError={handleError}
+          onClose={() => setShowSell(false)}
+          onComplete={() => setShowSell(false)}
+          onCancelled={() => setShowSell(false)}
         />
       )}
     </main>

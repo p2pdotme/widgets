@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createPublicClient, http, formatUnits, parseUnits, stringToHex } from "viem";
 import { baseSepolia, base } from "viem/chains";
-import type { P2POfframpProps, CurrencyOption } from "../types";
+import type { CashoutProps, CurrencyOption } from "../types";
 import { useOfframpMachine } from "../core/offramp-machine";
 import { color, radius, font, weight, shadow, S, themeToCssVars } from "../ui/theme";
 import { Modal } from "../ui/Modal";
@@ -23,20 +23,24 @@ import { resolveCurrencyMeta } from "../core/currency-meta";
 const USDC_DECIMALS = 6;
 
 /**
- * P2POfframp — convert USDC the user holds on Base into local fiat. The
- * widget orchestrates the Diamond-level lifecycle (auto-route circleId,
- * poll status, encrypt UPI, drive UI). Integrator-specific work — USDC
- * approve, the `userInitiateOfframp` / equivalent tx, the
- * `deliverOfframpUpi` tx, optional `reconcile` — flows through the host
- * callbacks (`placeOfframp`, `deliverUpi`, `reconcile`). The widget itself
- * never imports an integrator ABI. See README §"Offramp callback contract"
- * for the host-side recipe.
+ * Cashout — convert USDC the user holds on Base into local fiat. The widget
+ * orchestrates the Diamond-level lifecycle (auto-route circleId, poll
+ * status, encrypt the user's payment address, drive UI). Integrator-specific
+ * work — USDC approve, the place-cashout tx, the deliver-payment tx,
+ * optional `reconcile` — flows through the host callbacks (`placeCashout`,
+ * `deliverUpi`, `reconcile`). The widget itself never imports an integrator
+ * ABI. See README §"Cashout callback contract" for the host-side recipe.
+ *
+ * Internal naming: the protocol-level concept is "offramp" (the on-chain
+ * SELL order). The widget surface uses the friendlier "cashout" term, but
+ * internal modules — `useOfframpMachine`, `offramp-machine.ts` — keep the
+ * protocol term to stay accurate to what the Diamond does.
  */
-export function P2POfframp(props: P2POfframpProps) {
+export function Cashout(props: CashoutProps) {
   const {
     usdcAddress, diamondAddress, signer, currencies,
     chainId = 84532, rpcUrl, subgraphUrl, fiatAmountLimit,
-    placeOfframp, deliverUpi, reconcile,
+    placeCashout, deliverUpi, reconcile,
     defaultAmountUsdc, mode = "modal", open = true, theme,
     onClose, onOrderPlaced, onComplete, onCancelled, onError,
   } = props;
@@ -137,7 +141,7 @@ export function P2POfframp(props: P2POfframpProps) {
   const { state, submit, retryDeliver, canRetry, reset } = useOfframpMachine({
     usdcAddress, diamondAddress, signer,
     chainId, rpcUrl, subgraphUrl, fiatAmountLimit,
-    placeOfframp, deliverUpi, reconcile,
+    placeCashout, deliverUpi, reconcile,
     onOrderPlaced, onComplete, onCancelled, onError,
   });
 

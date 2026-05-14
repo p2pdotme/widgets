@@ -1,31 +1,18 @@
-export { P2PCheckout } from "./widgets/P2PCheckout";
-export { P2POfframp } from "./widgets/P2POfframp";
-export { P2POrderHistory, type P2POrderHistoryProps } from "./widgets/P2POrderHistory";
-export {
-  parseOrderIdFromReceipt,
-  fetchUserTxLimit,
-  readSmallOrderFixedFee,
-  INTEGRATOR_LIMITS_ABI,
-  ERC20_READ_ABI,
-  DIAMOND_ABI,
-  DEFAULT_DIAMOND_ADDRESS,
-  USDC_DECIMALS,
-} from "./core/contracts";
-export { useUserTxLimit } from "./hooks/useUserTxLimit";
-export type {
-  UseUserTxLimitOptions,
-  UseUserTxLimitResult,
-} from "./hooks/useUserTxLimit";
-export { OrderStatus } from "./types";
-export {
-  DEFAULT_VALIDATORS,
-  DEFAULT_PLACEHOLDERS,
-  PAYMENT_METHOD_LABEL,
-  FALLBACK_VALIDATOR,
-  getValidatorFor,
-  getPlaceholderFor,
-  getPaymentLabelFor,
-} from "./core/currencies";
+/**
+ * Bare-entry exports for `@p2pdotme/widgets`.
+ *
+ * Widgets themselves live behind subpaths so each can be imported (and
+ * tree-shaken) independently:
+ *   • `@p2pdotme/widgets/checkout`         → { Checkout }
+ *   • `@p2pdotme/widgets/cashout`          → { Cashout }
+ *   • `@p2pdotme/widgets/payment-history`  → { PaymentHistory }
+ *
+ * This module exposes only the SHARED surface — types and helpers usable
+ * across widgets — so a host that only renders one widget never pays for
+ * the others' bytes.
+ */
+
+// ─── Shared error system ───────────────────────────────────────────────
 export {
   P2PError,
   classifyError,
@@ -41,19 +28,41 @@ export type {
   P2PErrorInput,
   RevertEntry,
 } from "./core/errors";
+
+// ─── On-chain helpers ──────────────────────────────────────────────────
+export {
+  parseOrderIdFromReceipt,
+  fetchUserTxLimit,
+  readSmallOrderFixedFee,
+  INTEGRATOR_LIMITS_ABI,
+  ERC20_READ_ABI,
+  DIAMOND_ABI,
+  DEFAULT_DIAMOND_ADDRESS,
+  USDC_DECIMALS,
+} from "./core/contracts";
+
+// ─── Hooks ─────────────────────────────────────────────────────────────
+export { useUserTxLimit } from "./hooks/useUserTxLimit";
 export type {
-  P2PCheckoutProps,
-  P2POfframpProps,
+  UseUserTxLimitOptions,
+  UseUserTxLimitResult,
+} from "./hooks/useUserTxLimit";
+
+// ─── Currency / validator helpers ──────────────────────────────────────
+export {
+  DEFAULT_VALIDATORS,
+  DEFAULT_PLACEHOLDERS,
+  PAYMENT_METHOD_LABEL,
+  FALLBACK_VALIDATOR,
+  getValidatorFor,
+  getPlaceholderFor,
+  getPaymentLabelFor,
+} from "./core/currencies";
+
+// ─── Shared types ──────────────────────────────────────────────────────
+export { OrderStatus } from "./types";
+export type {
   CheckoutSigner,
-  CheckoutPhase,
-  OfframpPhase,
-  PlaceOrderResult,
-  PlaceOrderContext,
-  PendingOrderSummary,
-  PlaceOfframpContext,
-  PlaceOfframpResult,
-  DeliverUpiContext,
-  ReconcileContext,
   CurrencyOption,
   PaymentAddressValidator,
   ScreeningConfig,

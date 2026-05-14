@@ -1,6 +1,6 @@
 # Fraud screening — integrator guide
 
-This page is for partners integrating `<P2PCheckout>` who need their orders to
+This page is for partners integrating `<Checkout>` who need their orders to
 be **accepted by merchants**. The merchant app rejects any order that has no
 screening record, so wiring this up is mandatory for production traffic.
 
@@ -62,10 +62,10 @@ For wagmi/viem, `walletClient.signMessage({ message })` works the same shape.
 
 ---
 
-## 3. Pass the `screening` prop to `<P2PCheckout>`
+## 3. Pass the `screening` prop to `<Checkout>`
 
 ```tsx
-<P2PCheckout
+<Checkout
   signer={signer}
   placeOrder={placeOrder}
   currencies={CURRENCIES}
