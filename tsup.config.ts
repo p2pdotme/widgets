@@ -11,6 +11,7 @@ export default defineConfig({
     checkout: "src/checkout.ts",
     cashout: "src/cashout.ts",
     "payment-history": "src/payment-history.ts",
+    support: "src/support.ts",
   },
   format: ["esm", "cjs"],
   dts: true,
