@@ -26,6 +26,21 @@ export {
   getPlaceholderFor,
   getPaymentLabelFor,
 } from "./core/currencies";
+export {
+  P2PError,
+  classifyError,
+  logP2PError,
+  registerRevertSelectors,
+  lookupRevertSelector,
+} from "./core/errors";
+export type {
+  P2PErrorCode,
+  P2PErrorCategory,
+  P2PErrorFlow,
+  P2PErrorContext,
+  P2PErrorInput,
+  RevertEntry,
+} from "./core/errors";
 export type {
   P2PCheckoutProps,
   P2POfframpProps,
