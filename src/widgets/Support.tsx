@@ -88,7 +88,7 @@ export function Support(props: SupportProps) {
 
   const launcherLabel =
     disputeStatus === "open"
-      ? "View dispute"
+      ? "View report"
       : disputeStatus === "resolved"
         ? "View resolution"
         : chatState === "active"
@@ -172,7 +172,11 @@ export function Support(props: SupportProps) {
         chatState={chatState}
         onClick={handleOpen}
       />
-      <Modal open={open} onClose={handleClose}>
+      <Modal
+        open={open}
+        onClose={handleClose}
+        ariaLabelledBy="p2p-support-title"
+      >
         <DialogContent
           orderId={orderId}
           originApp={originApp}
@@ -257,10 +261,7 @@ function DialogContent({
   const busy = phase.kind === "signing" || phase.kind === "loading-chat";
   return (
     <div
-      role="dialog"
-      aria-modal="true"
       aria-busy={busy || undefined}
-      aria-labelledby="p2p-support-title"
       data-support-modal
       style={{
         padding: 24,
@@ -322,10 +323,8 @@ function DialogContent({
 
       <p style={{ ...S.muted, marginTop: 0, marginBottom: 16, lineHeight: 1.5 }}>
         Opened from{" "}
-        <code style={{ ...S.mono, color: color.text }}>{originApp}</code>.
-        Counterparties are labelled as Order Fulfillment Partner and Fulfillment
-        Partner Manager. No names, wallet addresses, or protocol role names are
-        shown.
+        <code style={{ ...S.mono, color: color.text }}>{originApp}</code>. No
+        names or wallet addresses are shared with the other side.
       </p>
 
       <PhaseView phase={phase} onRetry={onRetry} onClose={onClose} />
@@ -362,7 +361,7 @@ function PhaseView({
     return (
       <StatusBlock
         title="Support not available yet"
-        body="A fulfillment partner needs to accept your order before a support thread can open. Try again in a moment, or come back once your order moves to Accepted."
+        body="Your order needs to be accepted before a support thread can open. Try again in a moment, or come back once your order moves to Accepted."
         primaryLabel="Retry"
         onPrimary={onRetry}
         onSecondary={onClose}

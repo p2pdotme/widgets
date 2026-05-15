@@ -72,7 +72,7 @@ export function PaymentAddressInput(props: PaymentAddressInputProps) {
           </span>
         ) : (
           <span style={{ color: color.textFaint }}>
-            Encrypted with the merchant's public key after they accept the order.
+            Encrypted and shared securely once your order is accepted.
           </span>
         )}
       </div>

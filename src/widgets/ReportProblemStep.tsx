@@ -69,7 +69,7 @@ const REVERT_MESSAGES: Record<string, string> = {
   DisputeTimeExpired:
     "The review window for this order has closed.",
   InvalidOrderStatusToRaiseDispute:
-    "This order isn't in a state where a report can be filed yet. Wait for the merchant to act or for the order to expire.",
+    "This order isn't in a state where a report can be filed yet. Wait for it to expire or be completed.",
   CannotRaiseDisputeTwice:
     "A report has already been filed on this order.",
   DisputeAlreadySettled:
@@ -279,7 +279,9 @@ interface ConfirmViewProps {
 function ConfirmView({ onCancel, onContinue }: ConfirmViewProps) {
   return (
     <div>
-      <h3 style={titleStyle}>Contact Support</h3>
+      <h3 id="report-problem-title" style={titleStyle}>
+        Contact Support
+      </h3>
       <p style={paragraphStyle}>Before you continue, please note:</p>
       <ul style={listStyle}>
         <li>
@@ -287,8 +289,8 @@ function ConfirmView({ onCancel, onContinue }: ConfirmViewProps) {
           payment receipt details.
         </li>
         <li>
-          A mediator will review both sides. Resolution typically takes
-          24 to 72 hours.
+          The support team will review both sides. Resolution typically
+          takes 24 to 72 hours.
         </li>
         <li>
           Reports filed in bad faith may result in reputation penalties.
@@ -333,12 +335,14 @@ function FormView({
         onSubmit();
       }}
     >
-      <h3 style={titleStyle}>Confirm transaction details</h3>
+      <h3 id="report-problem-title" style={titleStyle}>
+        Confirm transaction details
+      </h3>
       <p style={paragraphStyle}>
         Order #{shortenId(orderId)}. Enter the last 4 digits of the
-        transaction id you used to pay the merchant. This helps the
-        mediator match your payment against the merchant's records.
-        Submitting opens the support thread for this order.
+        transaction id you used for payment. This helps the support team
+        match your payment against the other side's records. Submitting
+        opens the support thread for this order.
       </p>
       <label style={labelStyle}>
         <span>Last 4 digits</span>
@@ -353,12 +357,13 @@ function FormView({
           }
           disabled={submitting}
           aria-invalid={inputError ? "true" : "false"}
+          aria-describedby={inputError ? "report-redact-error" : undefined}
           aria-label="last 4 digits of transaction id"
           style={inputStyle}
         />
       </label>
       {inputError ? (
-        <p role="alert" style={errorTextStyle}>
+        <p id="report-redact-error" role="alert" style={errorTextStyle}>
           {inputError}
         </p>
       ) : null}
@@ -389,16 +394,15 @@ interface SubmittedViewProps {
   onClose?: () => void;
 }
 
-function SubmittedView({ txHash, onClose }: SubmittedViewProps) {
+function SubmittedView({ txHash: _txHash, onClose }: SubmittedViewProps) {
   return (
     <div>
-      <h3 style={titleStyle}>Report submitted</h3>
+      <h3 id="report-problem-title" style={titleStyle}>
+        Support request registered
+      </h3>
       <p style={paragraphStyle}>
-        Your report is on chain. A mediator will reach out via support
-        chat shortly.
-      </p>
-      <p style={{ ...paragraphStyle, fontFamily: "monospace", fontSize: 11 }}>
-        Tx: {shortenId(txHash)}
+        Your support request is registered. The support team will reach
+        out via the support thread shortly.
       </p>
       <div style={rowStyle}>
         <Button variant="primary" onClick={onClose}>
@@ -418,7 +422,9 @@ interface ErrorViewProps {
 function ErrorView({ reason, onRetry, onClose }: ErrorViewProps) {
   return (
     <div>
-      <h3 style={titleStyle}>Could not submit report</h3>
+      <h3 id="report-problem-title" style={titleStyle}>
+        Could not submit report
+      </h3>
       <p style={paragraphStyle}>{reason}</p>
       <div style={rowStyle}>
         <Button variant="ghost" onClick={onClose}>
