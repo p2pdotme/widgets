@@ -396,7 +396,7 @@ function DisputeBadge({ status }: { status: "open" | "resolved" }) {
 function StatusBadge({ status }: { status: Order["status"] }) {
   const { bg, fg, label } = (() => {
     switch (status) {
-      case "placed": return { bg: color.accentSoft, fg: color.accent, label: "Finding merchant" };
+      case "placed": return { bg: color.accentSoft, fg: color.accent, label: "Matching" };
       case "accepted": return { bg: color.warningSoft, fg: color.warning, label: "Awaiting payment" };
       case "paid": return { bg: color.accentSoft, fg: color.accent, label: "Verifying" };
       case "completed": return { bg: color.successSoft, fg: color.success, label: "Completed" };
