@@ -85,7 +85,7 @@ describe("Support", () => {
   it.each([
     { status: "none", chatState: "new", label: "Get help" },
     { status: "none", chatState: "active", label: "Continue support" },
-    { status: "open", chatState: "new", label: "View dispute" },
+    { status: "open", chatState: "new", label: "View report" },
     { status: "resolved", chatState: "new", label: "View resolution" },
   ] as const)(
     "adapts the launcher label for disputeStatus=$status / chatState=$chatState",
@@ -275,10 +275,10 @@ describe("Support", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: /open support/i }));
     const dialog = await screen.findByRole("dialog");
-    // The role="dialog" now lives on the inner content card (correct
-    // a11y). The backdrop is the dialog's grandparent (Modal renders
-    // backdrop > card > children) and is what closes on click.
-    const backdrop = dialog.parentElement?.parentElement;
+    // role="dialog" now lives on Modal's card (single owner of the
+    // dialog landmark). Modal renders backdrop > card > children, so
+    // the backdrop is the dialog's immediate parent.
+    const backdrop = dialog.parentElement;
     expect(backdrop).toBeTruthy();
     fireEvent.click(backdrop!);
     await waitFor(() => expect(onClose).toHaveBeenCalled());
