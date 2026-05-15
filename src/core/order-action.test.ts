@@ -76,6 +76,15 @@ test("placed: status only, no action", () => {
   assert.deepStrictEqual(out.action, { kind: "none" });
 });
 
+test("placed: past staleness threshold surfaces 'taking longer'", () => {
+  const out = computeOrderAction(
+    baseOrder({ status: "placed" }),
+    PLACED_AT_MS + 6 * 60 * 1000, // 6 minutes after placement, past 5-min threshold
+  );
+  assert.match(out.statusText, /taking longer than usual/);
+  assert.deepStrictEqual(out.action, { kind: "none" });
+});
+
 // ─── accepted ──────────────────────────────────────────────────────────
 
 test("accepted BUY: resume action surfaces", () => {
@@ -114,6 +123,9 @@ test("accepted PAY: status only", () => {
 // to complete OR for the order to auto-cancel.
 
 test("paid BUY: no action regardless of elapsed (chain requires CANCELLED)", () => {
+  // Within the BUY_PAID_PROCESSING_WINDOW_MS (30 min) we surface a countdown
+  // hint so the user sees an upper bound, not a forever spinner. After the
+  // window we fall back to the plain "Paid · processing payment" label.
   for (const elapsed of [
     5 * 60 * 1000,
     BUY_DISPUTE_OPEN_MS,
@@ -124,7 +136,11 @@ test("paid BUY: no action regardless of elapsed (chain requires CANCELLED)", () 
       baseOrder({ status: "paid", type: "buy", paidAt: 1n }),
       PLACED_AT_MS + elapsed,
     );
-    assert.strictEqual(out.statusText, "Paid · processing payment");
+    if (elapsed < 30 * 60 * 1000) {
+      assert.match(out.statusText, /^Paid · processing payment · completes within /);
+    } else {
+      assert.strictEqual(out.statusText, "Paid · processing payment");
+    }
     assert.deepStrictEqual(out.action, { kind: "none" });
   }
 });

@@ -82,6 +82,23 @@ export const BUY_DISPUTE_CLOSE_MS = 24 * HOUR;
 export const SELL_PAY_DISPUTE_OPEN_MS = 30 * MIN;
 export const SELL_PAY_DISPUTE_CLOSE_MS = 7 * DAY;
 
+// Threshold past which a still-unmatched PLACED order is "taking longer than
+// usual". Anything beyond this is past the chain's typical accept window, so
+// the row's status text reflects the staleness even when the on-chain status
+// hasn't flipped to CANCELLED yet (the chain only flips on
+// `autoCancelExpiredOrders` keeper sweeps, which can lag).
+export const PLACED_STALE_THRESHOLD_MS = 5 * MIN;
+
+// Soft upper bound used to render the "Paid · processing payment · completes
+// in <countdown>" hint. The on-chain contract enforces a `placedTimestamp +
+// orderExpiry` deadline (configurable in protocol storage, typically 30
+// minutes from PLACED). We assume the same envelope here so users know the
+// outer bound on how long the merchant has to confirm receipt. Conservative —
+// integrators can override by reading `getProtocolConfig` on chain if a
+// different value is configured; this default keeps the widget honest
+// without an extra RPC.
+export const BUY_PAID_PROCESSING_WINDOW_MS = 30 * MIN;
+
 export function computeOrderAction(
   order: Order,
   nowMs: number,
@@ -109,6 +126,16 @@ export function computeOrderAction(
 
   switch (order.status) {
     case "placed":
+      // The chain's status field is sticky on PLACED until an explicit
+      // `autoCancelExpiredOrders` sweep runs, which can lag the actual
+      // accept-window expiry. Past `PLACED_STALE_THRESHOLD_MS` we surface
+      // the staleness in the row so users don't keep waiting on an order
+      // that no merchant can pick up anymore.
+      if (elapsed >= PLACED_STALE_THRESHOLD_MS) {
+        return noAction(
+          "Placed · still matching, this is taking longer than usual",
+        );
+      }
       return noAction("Placed · matching");
 
     case "accepted":
@@ -123,6 +150,17 @@ export function computeOrderAction(
         // raiseDispute rejects this status (contracts-v4 #raiseDispute
         // gates BUY on status=CANCELLED). The user waits for completion
         // or auto-cancellation.
+        //
+        // Surface the worst-case remaining time so the user knows the
+        // upper bound, not a forever spinner. Window is anchored on
+        // `placedAt` to match the contract's `placedTimestamp +
+        // orderExpiry` deadline.
+        const remaining = BUY_PAID_PROCESSING_WINDOW_MS - elapsed;
+        if (remaining > 0) {
+          return noAction(
+            `Paid · processing payment · completes within ${formatRemaining(remaining)}`,
+          );
+        }
         return noAction("Paid · processing payment");
       }
       // SELL or PAY in PAID state means the user has been paid; they
