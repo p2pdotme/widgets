@@ -64,6 +64,11 @@ const baseProps = {
     originApp: "merchant-demo",
     bridgeUrl: "https://bridge.local",
     signer: stubSigner,
+    // Pre-bridge tests exercise the bridge /auth/me + /tickets/me path; the
+    // v1.1.1-bridge default flips chatEnabled to false (which skips the
+    // bridge round-trip entirely). Tests below assert on bridge fetches
+    // landing, so they opt back into chatEnabled.
+    chatEnabled: true,
   },
 };
 
