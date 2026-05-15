@@ -110,6 +110,11 @@ export function OrderAction(props: OrderActionProps) {
           fontSize: font.sm,
           color: color.textMuted,
           fontWeight: weight.regular,
+          // Right-align so the line ends flush with the action column on
+          // wide rows; wrap onto multiple lines on narrow rows instead of
+          // pushing the column wider than its container.
+          textAlign: "right",
+          wordBreak: "break-word",
         }}
       >
         {state.statusText}

@@ -357,7 +357,12 @@ function OrderRow({ order, onResume, renderRowAction, renderRowBadge, highlight,
         background: highlight ? color.accentSoft : color.surface,
         borderRadius: radius.md,
         display: "flex",
-        alignItems: "center",
+        // Wrap the row's left + right columns onto a new line on narrow
+        // surfaces (e.g. a side drawer) instead of letting them overlap.
+        // align-items: flex-start so the right column tops out next to the
+        // left column's status badges, not centered onto its amount row.
+        flexWrap: "wrap",
+        alignItems: "flex-start",
         justifyContent: "space-between",
         gap: 12,
         position: "relative",
@@ -377,21 +382,44 @@ function OrderRow({ order, onResume, renderRowAction, renderRowBadge, highlight,
           <div style={{ pointerEvents: "auto" }}>{renderRowBadge(order)}</div>
         </div>
       ) : null}
-      <div style={{ minWidth: 0, flex: 1 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+      <div
+        style={{
+          // `flex: 1 1 160px` gives the left column (badge / amount / age)
+          // a 160px basis — enough to read at a glance — and lets it
+          // shrink only when the row itself is wider than 160 + right
+          // col's natural width. Below that the row wraps and the right
+          // column drops to its own line.
+          flex: "1 1 160px",
+          minWidth: 0,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, flexWrap: "wrap" }}>
           <StatusBadge status={order.status} />
           {order.disputeStatus && order.disputeStatus !== "none" ? (
             <DisputeBadge status={order.disputeStatus} />
           ) : null}
           <span style={{ ...S.faint, ...S.mono }}>#{order.orderId.toString()}</span>
         </div>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
           <span style={{ fontSize: font.base, fontWeight: weight.semibold, ...S.num }}>{order.currency} {fiat}</span>
           <span style={{ ...S.faint, ...S.num }}>· {usdc} USDC</span>
         </div>
         <div style={{ ...S.faint, marginTop: 2 }}>{when}</div>
       </div>
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "flex-start",
+          gap: 8,
+          // `flex: 1 1 160px` matches the left column basis. On wide rows
+          // both share the line; on narrow rows the outer flex-wrap
+          // pushes this column onto its own line under the left column
+          // instead of overlapping it.
+          flex: "1 1 160px",
+          minWidth: 0,
+          justifyContent: "flex-end",
+        }}
+      >
         {isPending && onResume && (
           <button
             type="button"
