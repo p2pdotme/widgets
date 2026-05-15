@@ -469,7 +469,7 @@ export function Checkout(props: CheckoutProps) {
                 "Pay now"
               )}
             </button>
-            <p style={{ ...S.faint, textAlign: "center", marginTop: 12 }}>You'll pay fiat to a verified P2P merchant.</p>
+            <p style={{ ...S.faint, textAlign: "center", marginTop: 12 }}>You'll pay in your local currency to complete this order.</p>
           </div>
         )}
 
@@ -485,8 +485,8 @@ export function Checkout(props: CheckoutProps) {
             <div style={{ ...S.card, padding: "32px", marginTop: 16 }}>
 
               {state.phase === "placed" && (
-                <CenterStatus icon={<PulseDot />} title="Finding a merchant"
-                  subtitle={`Order #${state.orderId}: A P2P merchant will be assigned to accept your cash deposit and send USDC on your behalf to fulfill this checkout. Please note that this is a manual swap process and may take 2–3 minutes to complete. We appreciate your patience.`} />
+                <CenterStatus icon={<PulseDot />} title="Matching your order"
+                  subtitle={`Order #${state.orderId}: We're matching your cash payment with someone who will deliver USDC for this checkout. This typically takes 2-3 minutes.`} />
               )}
 
               {state.phase === "accepted" && (
@@ -669,7 +669,7 @@ export function Checkout(props: CheckoutProps) {
               )}
 
               {state.phase === "paid" && (
-                <CenterStatus icon={<Spinner />} title="Verifying your payment" subtitle="The merchant is confirming. Usually under a minute." />
+                <CenterStatus icon={<Spinner />} title="Verifying your payment" subtitle="Confirming receipt. Usually under a minute." />
               )}
 
               {state.phase === "completed" && (

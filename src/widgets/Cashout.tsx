@@ -420,7 +420,7 @@ export function Cashout(props: CashoutProps) {
             <CenterStatus
               icon={<Spinner />}
               title="Submitting withdrawal…"
-              subtitle="Resolving the merchant circle, approving USDC, and placing the SELL on-chain. Confirm any wallet prompts that pop up."
+              subtitle="Setting up your withdrawal. Confirm any wallet prompts that pop up."
             />
           </div>
         )}
@@ -434,8 +434,8 @@ export function Cashout(props: CashoutProps) {
               {state.phase === "placed" && (
                 <CenterStatus
                   icon={<PulseDot />}
-                  title="Finding a merchant"
-                  subtitle={`Order #${state.orderId}: A P2P merchant will be assigned to receive your ${usdcDisplay ?? ""} USDC and pay${state.currency ? ` ${state.currency.symbol}` : ""} into your ${state.currency?.paymentMethod ?? "account"} on your behalf. Please note that this is a manual swap process and may take 2–3 minutes to complete. We appreciate your patience.`}
+                  title="Matching your order"
+                  subtitle={`Order #${state.orderId}: We're matching your ${usdcDisplay ?? ""} USDC withdrawal with someone who will pay${state.currency ? ` ${state.currency.symbol}` : ""} into your ${state.currency?.paymentMethod ?? "account"}. This typically takes 2-3 minutes.`}
                 />
               )}
 
@@ -444,7 +444,7 @@ export function Cashout(props: CashoutProps) {
                   <CenterStatus
                     icon={<Spinner />}
                     title="Sending payment details"
-                    subtitle="Encrypting your address with the merchant's key."
+                    subtitle="Securely sharing your payout details."
                   />
                   <div style={{ ...S.cardFlat, padding: 14, marginTop: 16, background: color.surfaceAlt }}>
                     <div style={S.rowBetween}>
@@ -466,7 +466,7 @@ export function Cashout(props: CashoutProps) {
               {state.phase === "paid" && (
                 <CenterStatus
                   icon={<Spinner />}
-                  title="Merchant is paying you"
+                  title="Payment in progress"
                   subtitle={
                     fiatDisplay && state.currency
                       ? `Watch for ${state.currency.symbol} ${fiatDisplay} arriving via ${state.currency.paymentMethod}.`

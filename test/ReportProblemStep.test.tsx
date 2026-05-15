@@ -173,7 +173,7 @@ describe("ReportProblemStep", () => {
     });
     expect(onSubmitted).toHaveBeenCalledWith("0xfeedbeef");
     expect(
-      screen.getByRole("heading", { name: /report submitted/i }),
+      screen.getByRole("heading", { name: /support request registered/i }),
     ).toBeTruthy();
   });
 

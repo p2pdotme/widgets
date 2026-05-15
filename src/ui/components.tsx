@@ -94,7 +94,7 @@ export function CopyRow({ value, copied, onCopy, disabled }: {
 }
 
 export function Stepper({ stepIndex }: { stepIndex: number }) {
-  const steps = ["Merchant", "Payment", "Complete"];
+  const steps = ["Matching", "Payment", "Complete"];
   return (
     <div className="p2p-stepper" style={{
       display: "flex", alignItems: "center", gap: 0,

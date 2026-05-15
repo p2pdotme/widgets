@@ -256,7 +256,21 @@ export function ContactSupport(props: ContactSupportProps) {
           onClick={handleClick}
         />
       )}
-      <Modal open={modalState.kind !== "closed"} onClose={closeModal}>
+      <Modal
+        open={modalState.kind !== "closed"}
+        onClose={closeModal}
+        ariaLabelledBy={
+          modalState.kind === "report"
+            ? "report-problem-title"
+            : modalState.kind === "chat-error"
+              ? "contact-support-chat-error-title"
+              : modalState.kind === "chat-signing" ||
+                  modalState.kind === "chat-loading"
+                ? "contact-support-chat-loading-title"
+                : undefined
+        }
+        ariaLabel="Contact Support"
+      >
         {modalState.kind === "report" && txSigner ? (
           <ReportProblemStep
             orderId={orderId}
@@ -435,8 +449,6 @@ function ChatLoadingView({
 }) {
   return (
     <div
-      role="dialog"
-      aria-modal="true"
       aria-busy="true"
       style={{
         padding: 24,
@@ -454,7 +466,10 @@ function ChatLoadingView({
       >
         <Spinner />
         <div>
-          <h3 style={{ margin: 0, fontSize: 16, color: color.text }}>
+          <h3
+            id="contact-support-chat-loading-title"
+            style={{ margin: 0, fontSize: 16, color: color.text }}
+          >
             {phase === "chat-signing" ? "Signing in" : "Loading chat"}
           </h3>
           <p
@@ -485,8 +500,6 @@ function ChatErrorView({
 }) {
   return (
     <div
-      role="dialog"
-      aria-modal="true"
       style={{
         padding: 24,
         background: color.surface,
@@ -494,7 +507,10 @@ function ChatErrorView({
         fontFamily: "var(--p2p-font, inherit)",
       }}
     >
-      <h3 style={{ margin: 0, fontSize: 16, color: color.text }}>
+      <h3
+        id="contact-support-chat-error-title"
+        style={{ margin: 0, fontSize: 16, color: color.text }}
+      >
         Could not open support
       </h3>
       <p
