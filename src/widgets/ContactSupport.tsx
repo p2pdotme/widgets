@@ -124,17 +124,15 @@ export function ContactSupport(props: ContactSupportProps) {
     effectiveDispute === "resolved";
 
   const handleClick = useCallback(() => {
-    if (inWindow) {
-      if (!txSigner) {
-        // No signer wired → embedder hasn't enabled the report flow.
-        // Nothing to do; the chip would have already been styled
-        // disabled at render time.
-        return;
-      }
+    // In-window with a tx signer → open the on-chain report flow.
+    // In-window without a tx signer → fall through to chat. The embedder
+    // hasn't wired the dispute write path, but the user still needs a
+    // recourse, and chat will surface "Support not available yet" if the
+    // bridge has no inbox bound. Better than a dead-button experience.
+    if (inWindow && txSigner) {
       setModalState({ kind: "report" });
       return;
     }
-    // Otherwise click opens the chat thread.
     setModalState({ kind: "chat-signing" });
     setChatAttempt((a) => a + 1);
   }, [inWindow, txSigner]);
@@ -247,7 +245,6 @@ export function ContactSupport(props: ContactSupportProps) {
             windowOpenMs,
             windowCloseMs,
           })}
-          disabled={!txSigner}
           onClick={handleClick}
         />
       ) : (
@@ -303,14 +300,12 @@ export function ContactSupport(props: ContactSupportProps) {
 interface ReportChipProps {
   remainingMs: number;
   filled: number;
-  disabled: boolean;
   onClick: () => void;
 }
 
 function ReportChip({
   remainingMs,
   filled,
-  disabled,
   onClick,
 }: ReportChipProps) {
   return (
@@ -318,7 +313,6 @@ function ReportChip({
       type="button"
       data-contact-support-chip
       aria-label="Contact Support"
-      disabled={disabled}
       onClick={onClick}
       style={{
         display: "inline-flex",
@@ -333,8 +327,7 @@ function ReportChip({
         fontSize: font.sm,
         fontWeight: weight.regular,
         fontFamily: "var(--p2p-font, inherit)",
-        cursor: disabled ? "not-allowed" : "pointer",
-        opacity: disabled ? 0.55 : 1,
+        cursor: "pointer",
       }}
     >
       <Doughnut filled={filled} />
