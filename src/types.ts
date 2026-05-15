@@ -425,6 +425,16 @@ export interface SupportProps {
    * "View resolution" (resolved). Defaults to "none" when omitted.
    */
   disputeStatus?: SupportStatus;
+  /**
+   * Whether the user already has an open Chatwoot conversation for this
+   * order. Only consulted when `disputeStatus` is `"none"` — dispute
+   * variants take precedence over the chat-active vs chat-new label
+   * differentiation.
+   *
+   *   - `"active"` → label "Continue support" with a green pip.
+   *   - `"new"` (default) → label "Get help".
+   */
+  chatState?: "active" | "new";
   chatwootBaseUrl?: string;
   chatwootInboxIdentifier?: string;
   theme?: SupportTheme;

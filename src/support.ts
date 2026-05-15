@@ -18,6 +18,30 @@ export {
   PaymentHistoryWithSupport,
   type PaymentHistoryWithSupportProps,
 } from "./widgets/PaymentHistoryWithSupport";
+export { OrderAction, type OrderActionProps } from "./widgets/OrderAction";
+export {
+  ContactSupport,
+  type ContactSupportProps,
+} from "./widgets/ContactSupport";
+export {
+  ReportProblemStep,
+  type ReportProblemStepProps,
+  type RaiseDisputeSigner,
+} from "./widgets/ReportProblemStep";
+export {
+  computeOrderAction,
+  formatRemaining,
+  type OrderActionState,
+  type ActionVariant,
+  type DisputeState,
+} from "./core/order-action";
+export {
+  useOrderStates,
+  MULTICALL3_ADDRESS,
+  type UseOrderStatesOpts,
+  type UseOrderStatesResult,
+  type OrderStateRow,
+} from "./hooks/useOrderStates";
 export {
   fromPrivyWallet,
   type PrivyWalletLike,
