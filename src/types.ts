@@ -437,6 +437,14 @@ export interface SupportProps {
   chatState?: "active" | "new";
   chatwootBaseUrl?: string;
   chatwootInboxIdentifier?: string;
+  /**
+   * Toggle for the Chatwoot chat path. Default `false` (v1.1.1-bridge
+   * fallback): the launcher opens a static "support request registered"
+   * confirmation modal instead of attempting to sign in to the bridge
+   * and boot Chatwoot. Flip to `true` only when the bridge + Chatwoot
+   * stack is healthy.
+   */
+  chatEnabled?: boolean;
   theme?: SupportTheme;
   onOpen?: () => void;
   onClose?: () => void;

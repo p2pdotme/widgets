@@ -9,6 +9,7 @@ import {
 import { DEFAULT_DIAMOND_ADDRESS, DIAMOND_ABI, USDC_DECIMALS } from "../core/contracts";
 import { color, radius, font, weight, S, themeToCssVars, type P2PTheme } from "../ui/theme";
 import { Spinner, CenterStatus, injectKeyframes } from "../ui/components";
+import { isOrderActionable } from "../core/order-action";
 import type { CheckoutSigner } from "../types";
 
 export interface PaymentHistoryProps {
@@ -48,10 +49,20 @@ export interface PaymentHistoryProps {
   /** Optional title override. */
   title?: string;
   /**
-   * Which orders to render. "pending" shows only placed/accepted/paid;
-   * "all" shows everything. Default: "all".
+   * Which orders to render.
+   *
+   *   - `"pending"` shows only placed/accepted/paid (in-flight).
+   *   - `"all"` shows every order returned by the subgraph.
+   *   - `"actionable"` shows in-flight orders PLUS past orders that still
+   *     have an action surface (in-window cancelled-with-funds, open
+   *     dispute). Terminal-good and terminal-bad rows (completed,
+   *     cancelled-no-funds, past-window cancelled, resolved dispute) are
+   *     hidden so embedders that show this widget on a primary screen
+   *     don't accumulate a never-ending history.
+   *
+   * Default: `"all"`.
    */
-  filter?: "pending" | "all";
+  filter?: "pending" | "all" | "actionable";
   /**
    * When there are no orders to show (after filtering, loading, or on error),
    * return `null` instead of rendering an empty-state card. Useful for inline
@@ -102,8 +113,13 @@ export function PaymentHistory(props: PaymentHistoryProps) {
     theme,
   } = props;
   const themeStyle = themeToCssVars(theme);
-  const hideWhenEmpty = props.hideWhenEmpty ?? filter === "pending";
-  const title = props.title ?? (filter === "pending" ? "Pending orders" : "Order history");
+  const hideWhenEmpty =
+    props.hideWhenEmpty ?? (filter === "pending" || filter === "actionable");
+  const title =
+    props.title ??
+    (filter === "pending" || filter === "actionable"
+      ? "Pending orders"
+      : "Order history");
 
   useEffect(injectKeyframes, []);
 
@@ -213,7 +229,20 @@ export function PaymentHistory(props: PaymentHistoryProps) {
 
   const allOrders = overlaidOrders;
   const pending = allOrders.filter((o) => PENDING_STATUSES.includes(o.status));
-  const past = filter === "pending" ? [] : allOrders.filter((o) => !PENDING_STATUSES.includes(o.status));
+  // For "actionable" mode, past orders are kept only when they still surface
+  // a user action (in-window cancelled-with-funds → Contact Support chip,
+  // open dispute → View report). Terminal-good and post-window-terminal
+  // rows fall off so a primary-surface embedder doesn't accumulate a
+  // perpetually-growing history.
+  const past = (() => {
+    if (filter === "pending") return [];
+    const candidates = allOrders.filter(
+      (o) => !PENDING_STATUSES.includes(o.status),
+    );
+    if (filter !== "actionable") return candidates;
+    const now = Date.now();
+    return candidates.filter((o) => isOrderActionable(o, now));
+  })();
 
   // Auto-poll while there's at least one non-terminal order. Catches state
   // changes that happen outside this widget (e.g., merchant just accepted)
@@ -224,7 +253,8 @@ export function PaymentHistory(props: PaymentHistoryProps) {
     const id = setInterval(fetchOrders, pollIntervalMs);
     return () => clearInterval(id);
   }, [hasPendingForPoll, pollIntervalMs, fetchOrders]);
-  const visibleCount = filter === "pending" ? pending.length : allOrders.length;
+  const visibleCount =
+    filter === "pending" ? pending.length : pending.length + past.length;
   const hasNothingToShow = !loading && !error && visibleCount === 0;
 
   // Auto-hide surfaces (e.g. inline "needs attention" on a home page) collapse

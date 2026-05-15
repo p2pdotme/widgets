@@ -60,6 +60,8 @@ export interface OrderActionProps {
   onResumeOrder?: (orderId: string) => void;
   /** Fires the moment the report tx broadcasts. */
   onReportSubmitted?: (orderId: string, txHash: `0x${string}`) => void;
+  /** Forwarded to the per-row `ContactSupport`. See `ContactSupportProps.chatEnabled`. */
+  chatEnabled?: boolean;
   theme?: P2PTheme;
 }
 
@@ -76,6 +78,7 @@ export function OrderAction(props: OrderActionProps) {
     chainId,
     onResumeOrder,
     onReportSubmitted,
+    chatEnabled,
     theme,
   } = props;
 
@@ -132,6 +135,7 @@ export function OrderAction(props: OrderActionProps) {
           rpcUrl={rpcUrl}
           chainId={chainId}
           onReportSubmitted={onReportSubmitted}
+          chatEnabled={chatEnabled}
           theme={theme}
         />
       </div>

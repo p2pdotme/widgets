@@ -26,6 +26,10 @@ type Phase =
    *  circle. We render an actionable "not available yet" state with Retry
    *  instead of silently closing. */
   | { kind: "unavailable" }
+  /** v1.1.1-bridge fallback: chat is disabled, we skipped the bridge
+   *  entirely and surfaced a static "support request registered"
+   *  confirmation. No retry, no async work. */
+  | { kind: "registered" }
   | { kind: "error"; errorKind: ErrorKind; reason: string };
 
 /** Map any thrown error into a typed bucket the UI knows how to copy for.
@@ -75,6 +79,7 @@ export function Support(props: SupportProps) {
     onClose,
     disputeStatus = "none",
     chatState = "new",
+    chatEnabled = false,
   } = props;
   const [open, setOpen] = useState(false);
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
@@ -120,6 +125,14 @@ export function Support(props: SupportProps) {
 
   useEffect(() => {
     if (!open || attempt === 0) return;
+    // v1.1.1-bridge fallback: skip the bridge sign-in + Chatwoot boot
+    // entirely. The launcher acts as a "registered" confirmation only —
+    // the actual recovery path is the on-chain raiseDispute call wired
+    // by the per-row `ContactSupport` chip, not this standalone widget.
+    if (!chatEnabled) {
+      setPhase({ kind: "registered" });
+      return;
+    }
     let cancelled = false;
     (async () => {
       try {
@@ -159,7 +172,7 @@ export function Support(props: SupportProps) {
     return () => {
       cancelled = true;
     };
-  }, [open, attempt, signer, bridgeUrl, orderId, onClose]);
+  }, [open, attempt, signer, bridgeUrl, orderId, onClose, chatEnabled]);
 
   const themeStyle = useMemo(() => themeToCssVars(theme), [theme]);
 
@@ -365,6 +378,17 @@ function PhaseView({
         body="Your order needs to be accepted before a support thread can open. Try again in a moment, or come back once your order moves to Accepted."
         primaryLabel="Retry"
         onPrimary={onRetry}
+        onSecondary={onClose}
+      />
+    );
+  }
+  if (phase.kind === "registered") {
+    return (
+      <StatusBlock
+        title="Support request registered"
+        body="Your support request is on its way to the support team. Any stuck funds will be refunded once it's resolved. Check back here in a little while to see the updated status."
+        primaryLabel="Close"
+        onPrimary={onClose}
         onSecondary={onClose}
       />
     );
