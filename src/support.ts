@@ -20,10 +20,14 @@ export {
 } from "./widgets/PaymentHistoryWithSupport";
 export { OrderAction, type OrderActionProps } from "./widgets/OrderAction";
 export {
-  RaiseDisputeStep,
-  type RaiseDisputeStepProps,
+  ContactSupport,
+  type ContactSupportProps,
+} from "./widgets/ContactSupport";
+export {
+  ReportProblemStep,
+  type ReportProblemStepProps,
   type RaiseDisputeSigner,
-} from "./widgets/RaiseDisputeStep";
+} from "./widgets/ReportProblemStep";
 export {
   computeOrderAction,
   formatRemaining,

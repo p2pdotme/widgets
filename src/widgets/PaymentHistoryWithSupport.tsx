@@ -4,7 +4,7 @@ import type { Order } from "@p2pdotme/sdk/orders";
 import { PaymentHistory, type PaymentHistoryProps } from "./PaymentHistory";
 import { Support } from "./Support";
 import { OrderAction } from "./OrderAction";
-import type { RaiseDisputeSigner } from "./RaiseDisputeStep";
+import type { RaiseDisputeSigner } from "./ReportProblemStep";
 import type {
   SupportProps,
   SupportTheme,
@@ -64,9 +64,10 @@ export interface PaymentHistoryWithSupportProps
      * decision; status line still says payment is needed).
      */
     onResumeOrder?: (orderId: string) => void;
-    /** Fires the moment the raise-dispute tx broadcasts (hash known,
-     *  receipt pending). Optimistic state-machine flip per V1 decision. */
-    onDisputeRaised?: (orderId: string, txHash: `0x${string}`) => void;
+    /** Fires the moment the on-chain report (`raiseDispute`) tx
+     *  broadcasts (hash known, receipt pending). Optimistic
+     *  state-machine flip per V1 decision. */
+    onReportSubmitted?: (orderId: string, txHash: `0x${string}`) => void;
   };
   /**
    * Per-row layout:
@@ -122,16 +123,13 @@ export function PaymentHistoryWithSupport(
           <OrderAction
             orderId={order.orderId.toString()}
             order={order}
-            hasActiveSupportConversation={activeOrderIds.has(
-              order.orderId.toString(),
-            )}
             signer={support.signer}
             bridgeUrl={support.bridgeUrl}
             originApp={support.originApp}
             txSigner={support.txSigner}
             diamondAddress={support.diamondAddress}
             onResumeOrder={onResumeOrder}
-            onDisputeRaised={support.onDisputeRaised}
+            onReportSubmitted={support.onReportSubmitted}
             theme={support.theme}
           />
         )}

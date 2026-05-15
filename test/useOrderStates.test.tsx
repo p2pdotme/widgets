@@ -136,7 +136,7 @@ describe("useOrderStates", () => {
     expect(row?.order.disputeStatus).toBe("open");
     expect(row?.order.currency).toBe("INR");
     // Dispute short-circuits status flow per the state machine.
-    expect(row?.state.statusText).toBe("Dispute under review");
+    expect(row?.state.statusText).toBe("Under review");
     expect(row?.state.disputeState).toBe("open");
     expect(row?.state.action).toEqual({ kind: "none" });
   });
@@ -167,7 +167,7 @@ describe("useOrderStates", () => {
     );
     await waitFor(() => expect(result.current.rows.size).toBe(1));
     const row = result.current.rows.get("169");
-    expect(row?.state.action.kind).toBe("raise-dispute");
+    expect(row?.state.action.kind).toBe("report-problem");
   });
 
   it("re-fetches on the slow tick (pollIntervalMs)", async () => {

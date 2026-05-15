@@ -56,7 +56,14 @@ export function formatRemaining(remainingMs: number): string {
 export type ActionVariant =
   | { kind: "none" }
   | { kind: "resume" }
-  | { kind: "raise-dispute"; remainingMs: number };
+  | {
+      kind: "report-problem";
+      /** Time-left to file a report. Renders as the chip's countdown. */
+      remainingMs: number;
+      /** Doughnut fill fraction, drains 1.0 (window just opened) → 0.0
+       *  (window just closed). Linear in elapsed-since-window-open. */
+      filled: number;
+    };
 
 export type DisputeState = "none" | "open" | "resolved";
 
@@ -84,14 +91,14 @@ export function computeOrderAction(
   // becomes secondary.
   if (order.disputeStatus === "open") {
     return {
-      statusText: "Dispute under review",
+      statusText: "Under review",
       action: { kind: "none" },
       disputeState: "open",
     };
   }
   if (order.disputeStatus === "resolved") {
     return {
-      statusText: "Dispute resolved",
+      statusText: "Resolved",
       action: { kind: "none" },
       disputeState: "resolved",
     };
@@ -118,7 +125,7 @@ export function computeOrderAction(
           elapsed,
           beforeOpenLabel: "Paid",
           insideLabel: "Paid · awaiting merchant completion",
-          afterCloseLabel: "Paid · dispute window closed",
+          afterCloseLabel: "Paid · review window closed",
         });
       }
       // SELL or PAY in PAID state means the merchant has paid the user;
@@ -138,7 +145,7 @@ export function computeOrderAction(
         elapsed,
         beforeOpenLabel: "Completed",
         insideLabel: "Completed",
-        afterCloseLabel: "Completed · dispute window closed",
+        afterCloseLabel: "Completed · review window closed",
       });
     }
 
@@ -182,16 +189,18 @@ function computeDisputeWindow(input: DisputeWindowInput): OrderActionState {
   if (elapsed < openMs) {
     const remaining = openMs - elapsed;
     return {
-      statusText: `${beforeOpenLabel} · dispute opens in ${formatRemaining(remaining)}`,
+      statusText: `${beforeOpenLabel} · review opens in ${formatRemaining(remaining)}`,
       action: { kind: "none" },
       disputeState: "none",
     };
   }
   if (elapsed <= closeMs) {
     const remaining = closeMs - elapsed;
+    const windowMs = closeMs - openMs;
+    const filled = windowMs > 0 ? remaining / windowMs : 0;
     return {
       statusText: insideLabel,
-      action: { kind: "raise-dispute", remainingMs: remaining },
+      action: { kind: "report-problem", remainingMs: remaining, filled },
       disputeState: "none",
     };
   }

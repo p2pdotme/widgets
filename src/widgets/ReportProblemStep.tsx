@@ -1,12 +1,14 @@
-// Two-step raise-dispute flow: confirmation → 4-digit redact form →
-// submit. Lifts the user-facing warnings + form copy from the user-app
-// Help Drawer so the protocol-level UX is consistent across surfaces.
+// Two-step contact-support flow: confirmation → 4-digit redact form →
+// submit. User-facing label is "Contact Support"; under the hood this
+// is the on-chain `raiseDispute(orderId, redactTransId)` call which
+// makes the support thread accessible (chat is gated on the dispute
+// being on chain per the protocol's design).
 //
 // Optimistic flip on broadcast: once `signer.sendTransaction` returns a
 // hash (before the receipt confirms), `onSubmitted(hash)` fires so the
 // parent (<OrderAction>) can immediately swap the row's status to
-// `Dispute under review`. On revert / error the parent reconciles via
-// the next chain poll.
+// `Under review`. On revert / error the parent reconciles via the next
+// chain poll.
 
 import React, { useCallback, useState } from "react";
 import { encodeFunctionData, type Address } from "viem";
@@ -23,7 +25,7 @@ export interface RaiseDisputeSigner {
   }) => Promise<{ hash: `0x${string}` }>;
 }
 
-export interface RaiseDisputeStepProps {
+export interface ReportProblemStepProps {
   orderId: string;
   signer: RaiseDisputeSigner;
   diamondAddress?: Address;
@@ -48,7 +50,7 @@ type Phase =
 
 const REDACT_PATTERN = /^\d{4}$/;
 
-export function RaiseDisputeStep(props: RaiseDisputeStepProps) {
+export function ReportProblemStep(props: ReportProblemStepProps) {
   const {
     orderId,
     signer,
@@ -101,7 +103,7 @@ export function RaiseDisputeStep(props: RaiseDisputeStepProps) {
   }, []);
 
   return (
-    <div style={cssVars} data-raise-dispute-root>
+    <div style={cssVars} data-report-problem-root>
       {phase.kind === "confirm" ? (
         <ConfirmView onCancel={onClose} onContinue={handleContinue} />
       ) : phase.kind === "form" || phase.kind === "submitting" ? (
@@ -136,23 +138,21 @@ interface ConfirmViewProps {
 function ConfirmView({ onCancel, onContinue }: ConfirmViewProps) {
   return (
     <div>
-      <h3 style={titleStyle}>Raise a dispute</h3>
-      <p style={paragraphStyle}>
-        Before you continue, please understand:
-      </p>
+      <h3 style={titleStyle}>Contact Support</h3>
+      <p style={paragraphStyle}>Before you continue, please note:</p>
       <ul style={listStyle}>
         <li>
-          You must have already paid the order. The dispute review needs
-          your payment receipt details.
+          You must have already paid the order. The review needs your
+          payment receipt details.
         </li>
         <li>
           A mediator will review both sides. Resolution typically takes
           24 to 72 hours.
         </li>
         <li>
-          Disputes raised in bad faith may result in reputation
-          penalties. Only raise a dispute if the merchant has not
-          completed the order after you paid.
+          Reports filed in bad faith may result in reputation penalties.
+          Only file a report if the merchant has not completed the order
+          after you paid.
         </li>
       </ul>
       <div style={rowStyle}>
@@ -198,6 +198,7 @@ function FormView({
         Order #{shortenId(orderId)}. Enter the last 4 digits of the
         transaction id you used to pay the merchant. This helps the
         mediator match your payment against the merchant's records.
+        Submitting opens the support thread for this order.
       </p>
       <label style={labelStyle}>
         <span>Last 4 digits</span>
@@ -236,7 +237,7 @@ function FormView({
           disabled={submitting}
           data-action="submit"
         >
-          {submitting ? "Submitting…" : "Raise dispute"}
+          {submitting ? "Submitting…" : "Submit"}
         </Button>
       </div>
     </form>
@@ -251,9 +252,9 @@ interface SubmittedViewProps {
 function SubmittedView({ txHash, onClose }: SubmittedViewProps) {
   return (
     <div>
-      <h3 style={titleStyle}>Dispute submitted</h3>
+      <h3 style={titleStyle}>Report submitted</h3>
       <p style={paragraphStyle}>
-        Your dispute is on chain. A mediator will reach out via support
+        Your report is on chain. A mediator will reach out via support
         chat shortly.
       </p>
       <p style={{ ...paragraphStyle, fontFamily: "monospace", fontSize: 11 }}>
@@ -277,7 +278,7 @@ interface ErrorViewProps {
 function ErrorView({ reason, onRetry, onClose }: ErrorViewProps) {
   return (
     <div>
-      <h3 style={titleStyle}>Could not submit dispute</h3>
+      <h3 style={titleStyle}>Could not submit report</h3>
       <p style={paragraphStyle}>{reason}</p>
       <div style={rowStyle}>
         <Button variant="ghost" onClick={onClose}>
