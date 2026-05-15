@@ -29,6 +29,14 @@ interface ModalProps {
   ariaLabelledBy?: string;
   /** Fallback accessible name when no labelling heading exists. */
   ariaLabel?: string;
+  /** Theme CSS vars applied to the backdrop so the card surface + inner
+   *  content render against the integrator's palette. The Modal portals
+   *  to `document.body`, escaping the calling widget's root — without
+   *  this, the card's `var(--p2p-color-bg, #ffffff)` falls back to white
+   *  on dark themes, producing white-on-white text. Pass the same
+   *  `themeToCssVars(theme)` result the calling widget applies to its
+   *  root. */
+  themeStyle?: React.CSSProperties;
   children: React.ReactNode;
 }
 
@@ -37,6 +45,7 @@ export function Modal({
   onClose,
   ariaLabelledBy,
   ariaLabel,
+  themeStyle,
   children,
 }: ModalProps) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
@@ -100,6 +109,10 @@ export function Modal({
   return createPortal(
     <div
       style={{
+        // Theme CSS vars first so `color.surface` (`var(--p2p-color-bg, …)`)
+        // on the card resolves against the integrator's palette instead of
+        // the white fallback.
+        ...themeStyle,
         position: "fixed",
         inset: 0,
         zIndex: 999999,
@@ -121,6 +134,7 @@ export function Modal({
         aria-label={ariaLabelledBy ? undefined : ariaLabel}
         style={{
           background: color.surface,
+          color: color.text,
           borderRadius: radius.xl,
           boxShadow: shadow.pop,
           width: "100%",

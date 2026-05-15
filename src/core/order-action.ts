@@ -82,6 +82,21 @@ export const BUY_DISPUTE_CLOSE_MS = 24 * HOUR;
 export const SELL_PAY_DISPUTE_OPEN_MS = 30 * MIN;
 export const SELL_PAY_DISPUTE_CLOSE_MS = 7 * DAY;
 
+// Threshold past which a still-unmatched PLACED order is "taking longer than
+// usual". Anything beyond this is past the chain's typical accept window, so
+// the row's status text reflects the staleness even when the on-chain status
+// hasn't flipped to CANCELLED yet (the chain only flips on
+// `autoCancelExpiredOrders` keeper sweeps, which can lag).
+export const PLACED_STALE_THRESHOLD_MS = 5 * MIN;
+
+// BUY/PAID staleness threshold (5min handled by PLACED_STALE_THRESHOLD_MS):
+//   < 5min  → "Paid · processing payment"
+//   5–30min → "Paid · processing payment · taking longer than usual"
+//   ≥ 30min → "Paid · processing payment · will resolve within <countdown>"
+// The "will resolve within" countdown is anchored on `BUY_DISPUTE_CLOSE_MS`
+// (24h after placement) — the chain's outermost resolution deadline.
+export const BUY_PAID_PROCESSING_WINDOW_MS = 30 * MIN;
+
 export function computeOrderAction(
   order: Order,
   nowMs: number,
@@ -109,6 +124,16 @@ export function computeOrderAction(
 
   switch (order.status) {
     case "placed":
+      // The chain's status field is sticky on PLACED until an explicit
+      // `autoCancelExpiredOrders` sweep runs, which can lag the actual
+      // accept-window expiry. Past `PLACED_STALE_THRESHOLD_MS` we surface
+      // the staleness in the row so users don't keep waiting on an order
+      // that no merchant can pick up anymore.
+      if (elapsed >= PLACED_STALE_THRESHOLD_MS) {
+        return noAction(
+          "Placed · still matching, this is taking longer than usual",
+        );
+      }
       return noAction("Placed · matching");
 
     case "accepted":
@@ -123,6 +148,28 @@ export function computeOrderAction(
         // raiseDispute rejects this status (contracts-v4 #raiseDispute
         // gates BUY on status=CANCELLED). The user waits for completion
         // or auto-cancellation.
+        //
+        // Three tiers of urgency:
+        //   < 5min   → plain "Paid · processing payment"
+        //   5–30min  → "· taking longer than usual" (gentle warning)
+        //   ≥ 30min  → "· will resolve within <countdown>" anchored on
+        //              the contract's auto-cancel deadline. Gives the
+        //              user a hard upper bound when the merchant has
+        //              clearly missed the typical window.
+        if (elapsed >= BUY_PAID_PROCESSING_WINDOW_MS) {
+          const remaining = BUY_DISPUTE_CLOSE_MS - elapsed;
+          if (remaining > 0) {
+            return noAction(
+              `Paid · processing payment · will resolve within ${formatRemaining(remaining)}`,
+            );
+          }
+          return noAction("Paid · processing payment");
+        }
+        if (elapsed >= PLACED_STALE_THRESHOLD_MS) {
+          return noAction(
+            "Paid · processing payment · taking longer than usual",
+          );
+        }
         return noAction("Paid · processing payment");
       }
       // SELL or PAY in PAID state means the user has been paid; they

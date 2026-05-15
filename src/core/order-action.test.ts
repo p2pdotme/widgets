@@ -76,6 +76,15 @@ test("placed: status only, no action", () => {
   assert.deepStrictEqual(out.action, { kind: "none" });
 });
 
+test("placed: past staleness threshold surfaces 'taking longer'", () => {
+  const out = computeOrderAction(
+    baseOrder({ status: "placed" }),
+    PLACED_AT_MS + 6 * 60 * 1000, // 6 minutes after placement, past 5-min threshold
+  );
+  assert.match(out.statusText, /taking longer than usual/);
+  assert.deepStrictEqual(out.action, { kind: "none" });
+});
+
 // ─── accepted ──────────────────────────────────────────────────────────
 
 test("accepted BUY: resume action surfaces", () => {
@@ -113,18 +122,29 @@ test("accepted PAY: status only", () => {
 // no-action terminal-ish state where the user waits for the merchant
 // to complete OR for the order to auto-cancel.
 
-test("paid BUY: no action regardless of elapsed (chain requires CANCELLED)", () => {
-  for (const elapsed of [
-    5 * 60 * 1000,
-    BUY_DISPUTE_OPEN_MS,
-    10 * 60 * 60 * 1000,
-    BUY_DISPUTE_CLOSE_MS + 1,
-  ]) {
+test("paid BUY: status escalates by elapsed, no action (chain requires CANCELLED)", () => {
+  const cases: ReadonlyArray<{ elapsed: number; expect: RegExp | string }> = [
+    // < 5min: plain
+    { elapsed: 60 * 1000, expect: "Paid · processing payment" },
+    // 5–30min: taking longer than usual
+    { elapsed: 10 * 60 * 1000, expect: "Paid · processing payment · taking longer than usual" },
+    { elapsed: 29 * 60 * 1000, expect: "Paid · processing payment · taking longer than usual" },
+    // ≥ 30min: will resolve within <countdown>, anchored on BUY_DISPUTE_CLOSE_MS
+    { elapsed: 30 * 60 * 1000, expect: /^Paid · processing payment · will resolve within / },
+    { elapsed: 10 * 60 * 60 * 1000, expect: /^Paid · processing payment · will resolve within / },
+    // Past BUY_DISPUTE_CLOSE_MS (24h): countdown clamps, falls back to plain
+    { elapsed: BUY_DISPUTE_CLOSE_MS + 1, expect: "Paid · processing payment" },
+  ];
+  for (const { elapsed, expect } of cases) {
     const out = computeOrderAction(
       baseOrder({ status: "paid", type: "buy", paidAt: 1n }),
       PLACED_AT_MS + elapsed,
     );
-    assert.strictEqual(out.statusText, "Paid · processing payment");
+    if (typeof expect === "string") {
+      assert.strictEqual(out.statusText, expect, `elapsed=${elapsed}ms`);
+    } else {
+      assert.match(out.statusText, expect, `elapsed=${elapsed}ms`);
+    }
     assert.deepStrictEqual(out.action, { kind: "none" });
   }
 });
