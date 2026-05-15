@@ -116,12 +116,14 @@ export function ContactSupport(props: ContactSupportProps) {
   const inWindow =
     state.action.kind === "report-problem" && !optimisticDispute;
 
-  // Chip presence: in-window OR a dispute already exists (raised /
-  // resolved). All other states render nothing.
-  const shouldRender =
-    inWindow ||
-    effectiveDispute === "open" ||
-    effectiveDispute === "resolved";
+  // Contact Support is always available. The variant depends on chain
+  // state — in the dispute window it surfaces as the chip with countdown
+  // (click opens the report flow); after a dispute is filed it shows the
+  // status dot (click opens chat); otherwise it falls back to a plain
+  // launcher (click opens chat, or surfaces "Support not available yet"
+  // if the order isn't bound to an inbox yet). End users always need a
+  // recourse, regardless of where the order is in its lifecycle.
+  const shouldRender = true;
 
   const handleClick = useCallback(() => {
     if (inWindow) {
