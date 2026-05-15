@@ -89,14 +89,12 @@ export const SELL_PAY_DISPUTE_CLOSE_MS = 7 * DAY;
 // `autoCancelExpiredOrders` keeper sweeps, which can lag).
 export const PLACED_STALE_THRESHOLD_MS = 5 * MIN;
 
-// Soft upper bound used to render the "Paid · processing payment · completes
-// in <countdown>" hint. The on-chain contract enforces a `placedTimestamp +
-// orderExpiry` deadline (configurable in protocol storage, typically 30
-// minutes from PLACED). We assume the same envelope here so users know the
-// outer bound on how long the merchant has to confirm receipt. Conservative —
-// integrators can override by reading `getProtocolConfig` on chain if a
-// different value is configured; this default keeps the widget honest
-// without an extra RPC.
+// BUY/PAID staleness threshold (5min handled by PLACED_STALE_THRESHOLD_MS):
+//   < 5min  → "Paid · processing payment"
+//   5–30min → "Paid · processing payment · taking longer than usual"
+//   ≥ 30min → "Paid · processing payment · will resolve within <countdown>"
+// The "will resolve within" countdown is anchored on `BUY_DISPUTE_CLOSE_MS`
+// (24h after placement) — the chain's outermost resolution deadline.
 export const BUY_PAID_PROCESSING_WINDOW_MS = 30 * MIN;
 
 export function computeOrderAction(
@@ -151,14 +149,25 @@ export function computeOrderAction(
         // gates BUY on status=CANCELLED). The user waits for completion
         // or auto-cancellation.
         //
-        // Surface the worst-case remaining time so the user knows the
-        // upper bound, not a forever spinner. Window is anchored on
-        // `placedAt` to match the contract's `placedTimestamp +
-        // orderExpiry` deadline.
-        const remaining = BUY_PAID_PROCESSING_WINDOW_MS - elapsed;
-        if (remaining > 0) {
+        // Three tiers of urgency:
+        //   < 5min   → plain "Paid · processing payment"
+        //   5–30min  → "· taking longer than usual" (gentle warning)
+        //   ≥ 30min  → "· will resolve within <countdown>" anchored on
+        //              the contract's auto-cancel deadline. Gives the
+        //              user a hard upper bound when the merchant has
+        //              clearly missed the typical window.
+        if (elapsed >= BUY_PAID_PROCESSING_WINDOW_MS) {
+          const remaining = BUY_DISPUTE_CLOSE_MS - elapsed;
+          if (remaining > 0) {
+            return noAction(
+              `Paid · processing payment · will resolve within ${formatRemaining(remaining)}`,
+            );
+          }
+          return noAction("Paid · processing payment");
+        }
+        if (elapsed >= PLACED_STALE_THRESHOLD_MS) {
           return noAction(
-            `Paid · processing payment · completes within ${formatRemaining(remaining)}`,
+            "Paid · processing payment · taking longer than usual",
           );
         }
         return noAction("Paid · processing payment");
