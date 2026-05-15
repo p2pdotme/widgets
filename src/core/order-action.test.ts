@@ -1,0 +1,253 @@
+import { test } from "node:test";
+import assert from "node:assert";
+import type { Order } from "@p2pdotme/sdk/orders";
+import {
+  computeOrderAction,
+  BUY_DISPUTE_OPEN_MS,
+  BUY_DISPUTE_CLOSE_MS,
+  SELL_PAY_DISPUTE_OPEN_MS,
+  SELL_PAY_DISPUTE_CLOSE_MS,
+} from "./order-action.ts";
+
+// All test cases pin `placedAt` to a fixed epoch second and pass `now`
+// as the placedAt+elapsed time. This keeps the elapsed math explicit at
+// the call site so a reader can match each case directly against the
+// dispute window constants without doing wallclock arithmetic in their
+// head.
+const PLACED_AT_SEC = 1_700_000_000n;
+const PLACED_AT_MS = Number(PLACED_AT_SEC) * 1000;
+
+function baseOrder(overrides: Partial<Order> = {}): Order {
+  return {
+    orderId: 169n,
+    type: "buy",
+    status: "placed",
+    usdcAmount: 0n,
+    fiatAmount: 0n,
+    actualUsdcAmount: 0n,
+    actualFiatAmount: 0n,
+    currency: "INR",
+    user: "0x0000000000000000000000000000000000000001",
+    recipient: "0x0000000000000000000000000000000000000001",
+    acceptedMerchant: "0x0000000000000000000000000000000000000002",
+    placedAt: PLACED_AT_SEC,
+    acceptedAt: 0n,
+    paidAt: 0n,
+    completedAt: 0n,
+    circleId: 1n,
+    fixedFeePaid: 0n,
+    tipsPaid: 0n,
+    disputeStatus: "none",
+    encUpi: "",
+    encMerchantUpi: "",
+    pubkey: "",
+    ...overrides,
+  } as Order;
+}
+
+// ─── Dispute lifecycle short-circuits over status flow ─────────────────
+
+test("disputeStatus=open short-circuits regardless of order.status", () => {
+  const out = computeOrderAction(
+    baseOrder({ status: "paid", disputeStatus: "open" }),
+    PLACED_AT_MS,
+  );
+  assert.strictEqual(out.statusText, "Dispute under review");
+  assert.deepStrictEqual(out.action, { kind: "none" });
+  assert.strictEqual(out.disputeState, "open");
+});
+
+test("disputeStatus=resolved short-circuits regardless of order.status", () => {
+  const out = computeOrderAction(
+    baseOrder({ status: "completed", disputeStatus: "resolved" }),
+    PLACED_AT_MS,
+  );
+  assert.strictEqual(out.statusText, "Dispute resolved");
+  assert.deepStrictEqual(out.action, { kind: "none" });
+  assert.strictEqual(out.disputeState, "resolved");
+});
+
+// ─── placed ────────────────────────────────────────────────────────────
+
+test("placed: status only, no action", () => {
+  const out = computeOrderAction(baseOrder({ status: "placed" }), PLACED_AT_MS);
+  assert.strictEqual(out.statusText, "Placed · awaiting merchant");
+  assert.deepStrictEqual(out.action, { kind: "none" });
+});
+
+// ─── accepted ──────────────────────────────────────────────────────────
+
+test("accepted BUY: resume action surfaces", () => {
+  const out = computeOrderAction(
+    baseOrder({ status: "accepted", type: "buy" }),
+    PLACED_AT_MS,
+  );
+  assert.strictEqual(out.statusText, "Accepted · awaiting your payment");
+  assert.deepStrictEqual(out.action, { kind: "resume" });
+});
+
+test("accepted SELL: status only (merchant pays user)", () => {
+  const out = computeOrderAction(
+    baseOrder({ status: "accepted", type: "sell" }),
+    PLACED_AT_MS,
+  );
+  assert.strictEqual(out.statusText, "Accepted · awaiting merchant payment");
+  assert.deepStrictEqual(out.action, { kind: "none" });
+});
+
+test("accepted PAY: status only", () => {
+  const out = computeOrderAction(
+    baseOrder({ status: "accepted", type: "pay" }),
+    PLACED_AT_MS,
+  );
+  assert.strictEqual(out.statusText, "Accepted · awaiting merchant payment");
+  assert.deepStrictEqual(out.action, { kind: "none" });
+});
+
+// ─── paid BUY ──────────────────────────────────────────────────────────
+
+test("paid BUY before window opens: status carries countdown, no action", () => {
+  const elapsed = 5 * 60 * 1000; // 5min
+  const out = computeOrderAction(
+    baseOrder({ status: "paid", type: "buy" }),
+    PLACED_AT_MS + elapsed,
+  );
+  assert.strictEqual(
+    out.statusText,
+    `Paid · dispute opens in ${formatHelper(BUY_DISPUTE_OPEN_MS - elapsed)}`,
+  );
+  assert.deepStrictEqual(out.action, { kind: "none" });
+});
+
+test("paid BUY at the open boundary (15m exactly): raise-dispute available with full 23h45m left", () => {
+  const elapsed = BUY_DISPUTE_OPEN_MS; // exactly at boundary, inclusive
+  const out = computeOrderAction(
+    baseOrder({ status: "paid", type: "buy" }),
+    PLACED_AT_MS + elapsed,
+  );
+  assert.strictEqual(out.statusText, "Paid · awaiting merchant completion");
+  assert.deepStrictEqual(out.action, {
+    kind: "raise-dispute",
+    remainingMs: BUY_DISPUTE_CLOSE_MS - elapsed,
+  });
+});
+
+test("paid BUY mid-window (10h elapsed): raise-dispute with 14h remaining", () => {
+  const elapsed = 10 * 60 * 60 * 1000;
+  const out = computeOrderAction(
+    baseOrder({ status: "paid", type: "buy" }),
+    PLACED_AT_MS + elapsed,
+  );
+  assert.strictEqual(out.statusText, "Paid · awaiting merchant completion");
+  if (out.action.kind !== "raise-dispute") {
+    throw new Error("expected raise-dispute action");
+  }
+  assert.strictEqual(out.action.remainingMs, BUY_DISPUTE_CLOSE_MS - elapsed);
+});
+
+test("paid BUY at exactly 24h: still inside (closeMs is inclusive)", () => {
+  const elapsed = BUY_DISPUTE_CLOSE_MS;
+  const out = computeOrderAction(
+    baseOrder({ status: "paid", type: "buy" }),
+    PLACED_AT_MS + elapsed,
+  );
+  assert.deepStrictEqual(out.action, { kind: "raise-dispute", remainingMs: 0 });
+});
+
+test("paid BUY past 24h: window closed, no action", () => {
+  const elapsed = BUY_DISPUTE_CLOSE_MS + 1;
+  const out = computeOrderAction(
+    baseOrder({ status: "paid", type: "buy" }),
+    PLACED_AT_MS + elapsed,
+  );
+  assert.strictEqual(out.statusText, "Paid · dispute window closed");
+  assert.deepStrictEqual(out.action, { kind: "none" });
+});
+
+// ─── paid SELL/PAY ─────────────────────────────────────────────────────
+
+test("paid SELL: merchant-paid status, no dispute affordance (user must confirm)", () => {
+  const out = computeOrderAction(
+    baseOrder({ status: "paid", type: "sell" }),
+    PLACED_AT_MS + 60 * 60 * 1000,
+  );
+  assert.strictEqual(out.statusText, "Merchant paid · awaiting your confirmation");
+  assert.deepStrictEqual(out.action, { kind: "none" });
+});
+
+// ─── completed BUY ─────────────────────────────────────────────────────
+
+test("completed BUY: terminal, no action regardless of elapsed", () => {
+  const out = computeOrderAction(
+    baseOrder({ status: "completed", type: "buy" }),
+    PLACED_AT_MS + 30 * 60 * 1000,
+  );
+  assert.strictEqual(out.statusText, "Completed");
+  assert.deepStrictEqual(out.action, { kind: "none" });
+});
+
+// ─── completed SELL/PAY ────────────────────────────────────────────────
+
+test("completed SELL before window opens: status carries countdown", () => {
+  const elapsed = 10 * 60 * 1000;
+  const out = computeOrderAction(
+    baseOrder({ status: "completed", type: "sell" }),
+    PLACED_AT_MS + elapsed,
+  );
+  assert.strictEqual(
+    out.statusText,
+    `Completed · dispute opens in ${formatHelper(SELL_PAY_DISPUTE_OPEN_MS - elapsed)}`,
+  );
+  assert.deepStrictEqual(out.action, { kind: "none" });
+});
+
+test("completed PAY inside window (1h elapsed): raise-dispute available", () => {
+  const elapsed = 60 * 60 * 1000; // 1h
+  const out = computeOrderAction(
+    baseOrder({ status: "completed", type: "pay" }),
+    PLACED_AT_MS + elapsed,
+  );
+  assert.strictEqual(out.statusText, "Completed");
+  assert.deepStrictEqual(out.action, {
+    kind: "raise-dispute",
+    remainingMs: SELL_PAY_DISPUTE_CLOSE_MS - elapsed,
+  });
+});
+
+test("completed SELL past 7d: window closed", () => {
+  const elapsed = SELL_PAY_DISPUTE_CLOSE_MS + 1;
+  const out = computeOrderAction(
+    baseOrder({ status: "completed", type: "sell" }),
+    PLACED_AT_MS + elapsed,
+  );
+  assert.strictEqual(out.statusText, "Completed · dispute window closed");
+  assert.deepStrictEqual(out.action, { kind: "none" });
+});
+
+// ─── cancelled ─────────────────────────────────────────────────────────
+
+test("cancelled: terminal, no action", () => {
+  const out = computeOrderAction(
+    baseOrder({ status: "cancelled" }),
+    PLACED_AT_MS,
+  );
+  assert.strictEqual(out.statusText, "Cancelled");
+  assert.deepStrictEqual(out.action, { kind: "none" });
+});
+
+// Inline formatter reused by tests that need to assert the inline
+// countdown text. Mirrors formatRemaining's behaviour so the assertions
+// fail loudly if either side drifts.
+function formatHelper(remainingMs: number): string {
+  if (remainingMs <= 0) return "0s";
+  const totalSeconds = Math.floor(remainingMs / 1000);
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  if (totalMinutes < 60) return `${totalMinutes}m`;
+  const totalHours = Math.floor(totalMinutes / 60);
+  const remM = totalMinutes - totalHours * 60;
+  if (totalHours < 24) return `${totalHours}h ${remM}m`;
+  const totalDays = Math.floor(totalHours / 24);
+  const remH = totalHours - totalDays * 24;
+  return `${totalDays}d ${remH}h`;
+}
