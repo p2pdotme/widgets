@@ -109,25 +109,25 @@ export function computeOrderAction(
 
   switch (order.status) {
     case "placed":
-      return noAction("Placed · awaiting merchant");
+      return noAction("Placed · matching");
 
     case "accepted":
       if (order.type === "buy") {
         return resumeable("Accepted · awaiting your payment");
       }
-      return noAction("Accepted · awaiting merchant payment");
+      return noAction("Accepted · processing payment");
 
     case "paid": {
       if (order.type === "buy") {
-        // BUY/PAID = user paid, merchant hasn't completed yet. The on-chain
+        // BUY/PAID = user paid, fulfillment in progress. The on-chain
         // raiseDispute rejects this status (contracts-v4 #raiseDispute
-        // gates BUY on status=CANCELLED). The user must wait for the
-        // merchant to either complete or for the order to auto-cancel.
-        return noAction("Paid · awaiting merchant completion");
+        // gates BUY on status=CANCELLED). The user waits for completion
+        // or auto-cancellation.
+        return noAction("Paid · processing payment");
       }
-      // SELL or PAY in PAID state means the merchant has paid the user;
-      // user must mark complete next.
-      return noAction("Merchant paid · awaiting your confirmation");
+      // SELL or PAY in PAID state means the user has been paid; they
+      // mark complete next.
+      return noAction("Payment received · confirm to complete");
     }
 
     case "completed": {

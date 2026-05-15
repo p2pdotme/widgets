@@ -81,7 +81,7 @@ describe("OrderAction", () => {
     render(
       <OrderAction {...baseProps(baseOrder({ status: "placed" }))} />,
     );
-    expect(screen.getByText("Placed · awaiting merchant")).toBeTruthy();
+    expect(screen.getByText("Placed · matching")).toBeTruthy();
   });
 
   it("renders Resume button when state.action=resume AND onResumeOrder provided", () => {

@@ -266,8 +266,7 @@ function ConfirmView({ onCancel, onContinue }: ConfirmViewProps) {
         </li>
         <li>
           Reports filed in bad faith may result in reputation penalties.
-          Only file a report if the merchant has not completed the order
-          after you paid.
+          Only file a report if your paid order has not been completed.
         </li>
       </ul>
       <div style={rowStyle}>
