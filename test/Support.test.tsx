@@ -83,12 +83,13 @@ describe("Support", () => {
   });
 
   it.each([
-    { status: "none", label: "Support" },
-    { status: "open", label: "View support" },
-    { status: "resolved", label: "View resolution" },
+    { status: "none", chatState: "new", label: "Get help" },
+    { status: "none", chatState: "active", label: "Continue support" },
+    { status: "open", chatState: "new", label: "View dispute" },
+    { status: "resolved", chatState: "new", label: "View resolution" },
   ] as const)(
-    "adapts the launcher label for disputeStatus=$status",
-    ({ status, label }) => {
+    "adapts the launcher label for disputeStatus=$status / chatState=$chatState",
+    ({ status, chatState, label }) => {
       render(
         <Support
           orderId="0xabcdef1234567890"
@@ -96,6 +97,7 @@ describe("Support", () => {
           signer={stubSigner}
           bridgeUrl="https://bridge.local"
           disputeStatus={status}
+          chatState={chatState}
         />,
       );
       const launcher = screen.getByRole("button", { name: /open support/i });

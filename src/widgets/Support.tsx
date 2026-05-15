@@ -74,6 +74,7 @@ export function Support(props: SupportProps) {
     onOpen,
     onClose,
     disputeStatus = "none",
+    chatState = "new",
   } = props;
   const [open, setOpen] = useState(false);
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
@@ -87,10 +88,12 @@ export function Support(props: SupportProps) {
 
   const launcherLabel =
     disputeStatus === "open"
-      ? "View support"
+      ? "View dispute"
       : disputeStatus === "resolved"
         ? "View resolution"
-        : "Support";
+        : chatState === "active"
+          ? "Continue support"
+          : "Get help";
 
   const handleOpen = useCallback(() => {
     setOpen(true);
@@ -166,6 +169,7 @@ export function Support(props: SupportProps) {
         ref={launcherRef}
         label={launcherLabel}
         disputeStatus={disputeStatus}
+        chatState={chatState}
         onClick={handleOpen}
       />
       <Modal open={open} onClose={handleClose}>
@@ -184,20 +188,24 @@ export function Support(props: SupportProps) {
 interface LauncherButtonProps {
   label: string;
   disputeStatus: SupportStatus;
+  chatState: "active" | "new";
   onClick: () => void;
 }
 
 const LauncherButton = forwardRef<HTMLButtonElement, LauncherButtonProps>(
-  function LauncherButton({ label, disputeStatus, onClick }, ref) {
+  function LauncherButton({ label, disputeStatus, chatState, onClick }, ref) {
     // Match PaymentHistory's per-row Resume button so the two sit next to
-    // each other without a stylistic clash. The dispute-status indicator
-    // is the small dot to the left of the label.
+    // each other without a stylistic clash. The leading dot conveys the
+    // chat surface's state: warning (dispute open), success (dispute
+    // resolved or an active non-dispute chat).
     const dotColor =
       disputeStatus === "open"
         ? color.danger
         : disputeStatus === "resolved"
           ? color.success
-          : null;
+          : chatState === "active"
+            ? color.success
+            : null;
     return (
       <button
         ref={ref}

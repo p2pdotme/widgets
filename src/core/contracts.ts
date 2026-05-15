@@ -123,6 +123,59 @@ export const DIAMOND_ABI = [
     outputs: [ORDER_TUPLE],
   },
   {
+    // OrderProcessorFacet.raiseDispute(uint256 _orderId, uint256 redactTransId).
+    // User-only on chain (msg.sender must equal order.user). The widget's
+    // <ReportProblemStep> encodes + pre-simulates this against the diamond.
+    name: "raiseDispute",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "_orderId", type: "uint256" },
+      { name: "redactTransId", type: "uint256" },
+    ],
+    outputs: [],
+  },
+  // Custom errors thrown by `raiseDispute`. Including them in the ABI
+  // lets viem's `simulateContract` decode revert reasons into their
+  // names (eg "DisputeTimeNotReached") so the widget can show a
+  // human-readable message instead of "Execution reverted for an
+  // unknown reason".
+  {
+    type: "error",
+    name: "NotAuthorized",
+    inputs: [],
+  },
+  {
+    type: "error",
+    name: "DisputeTimeNotReached",
+    inputs: [],
+  },
+  {
+    type: "error",
+    name: "DisputeTimeExpired",
+    inputs: [],
+  },
+  {
+    type: "error",
+    name: "InvalidOrderType",
+    inputs: [],
+  },
+  {
+    type: "error",
+    name: "InvalidOrderStatusToRaiseDispute",
+    inputs: [],
+  },
+  {
+    type: "error",
+    name: "CannotRaiseDisputeTwice",
+    inputs: [],
+  },
+  {
+    type: "error",
+    name: "DisputeAlreadySettled",
+    inputs: [],
+  },
+  {
     name: "getAdditionalOrderDetails",
     type: "function",
     stateMutability: "view",
@@ -145,7 +198,44 @@ export const DIAMOND_ABI = [
   },
 ] as const;
 
-export const DEFAULT_DIAMOND_ADDRESS = "0xeb0BB8E3c014D915D9B2df03aBB130a1Fb44beb9" as `0x${string}`;
+/**
+ * Default Diamond deployments per chainId. Hosts that omit
+ * `diamondAddress` get this fallback. Add new networks here when the
+ * Diamond is deployed to them — never silently fall back to a
+ * different chain's address (a Base mainnet host calling the Base
+ * Sepolia diamond would silently no-op).
+ */
+const DIAMOND_BY_CHAIN: Record<number, `0x${string}`> = {
+  84532: "0xeb0BB8E3c014D915D9B2df03aBB130a1Fb44beb9", // base sepolia
+};
+
+/**
+ * Resolves the Diamond address for a chainId, falling back to the
+ * historical Base Sepolia constant. Throws if a chainId is supplied
+ * that has no registered diamond — protects against the footgun of a
+ * mainnet host forgetting to pass `diamondAddress` and calling a
+ * non-existent contract.
+ */
+export function resolveDiamondAddress(
+  chainId: number | undefined,
+  override?: `0x${string}`,
+): `0x${string}` {
+  if (override) return override;
+  if (chainId === undefined) {
+    return DIAMOND_BY_CHAIN[84532];
+  }
+  const hit = DIAMOND_BY_CHAIN[chainId];
+  if (!hit) {
+    throw new Error(
+      `@p2pdotme/widgets: no diamond address registered for chainId ${chainId}. Pass diamondAddress explicitly.`,
+    );
+  }
+  return hit;
+}
+
+/** @deprecated prefer `resolveDiamondAddress(chainId, override)`. Kept
+ *  for back-compat with embedders that import the constant directly. */
+export const DEFAULT_DIAMOND_ADDRESS = DIAMOND_BY_CHAIN[84532];
 export const USDC_DECIMALS = 6;
 
 // ─── V2 integrator event helper (convenience, not Diamond) ───────────
