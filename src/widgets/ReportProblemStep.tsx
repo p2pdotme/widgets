@@ -401,8 +401,9 @@ function SubmittedView({ txHash: _txHash, onClose }: SubmittedViewProps) {
         Support request registered
       </h3>
       <p style={paragraphStyle}>
-        Your support request is registered. The support team will reach
-        out via the support thread shortly.
+        Your support request is on its way to the support team. Any stuck
+        funds will be refunded once it's resolved. Check back here in a
+        little while to see the updated status.
       </p>
       <div style={rowStyle}>
         <Button variant="primary" onClick={onClose}>
