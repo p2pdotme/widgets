@@ -56,6 +56,10 @@ const baseProps = {
   signer: stubSigner,
   subgraphUrl: "https://subgraph.example",
   usdcAddress: "0x0000000000000000000000000000000000000099" as const,
+  // Existing tests cover the legacy single-button layout; opt into it
+  // explicitly so the default ("smart") change doesn't silently flip
+  // their assertions.
+  actionMode: "chat" as const,
   support: {
     originApp: "merchant-demo",
     bridgeUrl: "https://bridge.local",

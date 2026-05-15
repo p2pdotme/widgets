@@ -1,6 +1,10 @@
 import { useEffect, useState } from "react";
+import type { Address } from "viem";
+import type { Order } from "@p2pdotme/sdk/orders";
 import { PaymentHistory, type PaymentHistoryProps } from "./PaymentHistory";
 import { Support } from "./Support";
+import { OrderAction } from "./OrderAction";
+import type { RaiseDisputeSigner } from "./RaiseDisputeStep";
 import type {
   SupportProps,
   SupportTheme,
@@ -43,7 +47,40 @@ export interface PaymentHistoryWithSupportProps
     /** Optional theme override for just the support surface. Falls back
      * to the OrderHistory `theme` when omitted. */
     theme?: SupportTheme;
+    /**
+     * Required when `actionMode="smart"` AND any row is dispute-eligible:
+     * the signer that can `sendTransaction` for the on-chain
+     * `raiseDispute(orderId, redactTransId)` call. Absent → the
+     * dispute action button is suppressed (status line still informs
+     * the user) but chat stays available.
+     */
+    txSigner?: RaiseDisputeSigner;
+    /** Diamond address for the `raiseDispute` write. Defaults to the
+     *  widget's `DEFAULT_DIAMOND_ADDRESS`. */
+    diamondAddress?: Address;
+    /**
+     * Called from the smart layout when the user clicks "Resume order"
+     * on a BUY ACCEPTED row. Absent → Resume button is suppressed (V1
+     * decision; status line still says payment is needed).
+     */
+    onResumeOrder?: (orderId: string) => void;
+    /** Fires the moment the raise-dispute tx broadcasts (hash known,
+     *  receipt pending). Optimistic state-machine flip per V1 decision. */
+    onDisputeRaised?: (orderId: string, txHash: `0x${string}`) => void;
   };
+  /**
+   * Per-row layout:
+   *   - `"chat"` (legacy) — keeps the historical behaviour: dispute badge
+   *     above the row + a single Support launcher in the action slot. No
+   *     resume / raise-dispute UI from the widget itself.
+   *   - `"smart"` (default) — replaces the action slot with
+   *     `<OrderAction>` which surfaces the current order state, an
+   *     action button (resume / raise dispute) when one is actionable,
+   *     and a Support button with chat-active vs chat-new differentiation.
+   *
+   * Set to `"chat"` to preserve the prior visuals.
+   */
+  actionMode?: "chat" | "smart";
 }
 
 /**
@@ -58,13 +95,45 @@ export interface PaymentHistoryWithSupportProps
 export function PaymentHistoryWithSupport(
   props: PaymentHistoryWithSupportProps,
 ) {
-  const { support, ...orderHistoryProps } = props;
+  const { support, actionMode = "smart", ...orderHistoryProps } = props;
   const activeOrderIds = useActiveSupportTickets(support);
 
   if (!support) {
     return <PaymentHistory {...orderHistoryProps} />;
   }
 
+  if (actionMode === "smart") {
+    // Smart layout: status + action + support per row. PaymentHistory's
+    // native Resume button is suppressed (OrderAction owns the action
+    // slot now); the dispute badge stays since OrderAction's Support
+    // button reflects dispute state too and double-marking is fine.
+    return (
+      <PaymentHistory
+        {...orderHistoryProps}
+        onResume={undefined}
+        renderRowAction={(order: Order) => (
+          <OrderAction
+            orderId={order.orderId.toString()}
+            order={order}
+            hasActiveSupportConversation={activeOrderIds.has(
+              order.orderId.toString(),
+            )}
+            signer={support.signer}
+            bridgeUrl={support.bridgeUrl}
+            originApp={support.originApp}
+            txSigner={support.txSigner}
+            diamondAddress={support.diamondAddress}
+            onResumeOrder={support.onResumeOrder}
+            onDisputeRaised={support.onDisputeRaised}
+            theme={support.theme}
+          />
+        )}
+      />
+    );
+  }
+
+  // Legacy chat mode — preserved for callers that opt into the old
+  // single-button layout.
   return (
     <PaymentHistory
       {...orderHistoryProps}
@@ -72,11 +141,6 @@ export function PaymentHistoryWithSupport(
         activeOrderIds.has(order.orderId.toString()) ? <ActiveSupportPip /> : null
       }
       renderRowAction={(order: { orderId: { toString(): string }; disputeStatus?: string }) => (
-        // The bridge's sign-in handler is the source of truth for "can
-        // this order open a chat" — it resolves the order's on-chain
-        // circleId → inbox, and returns `chatwoot: null` when nothing
-        // is bound. The widget silently closes on that path. So the
-        // Support button is always rendered; gating is server-side.
         <Support
           orderId={order.orderId.toString()}
           originApp={support.originApp}

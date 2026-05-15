@@ -123,6 +123,19 @@ export const DIAMOND_ABI = [
     outputs: [ORDER_TUPLE],
   },
   {
+    // OrderProcessorFacet.raiseDispute(uint256 _orderId, uint256 redactTransId).
+    // User-only on chain (msg.sender must equal order.user). The widget's
+    // <RaiseDisputeStep> encodes this against the diamond.
+    name: "raiseDispute",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "_orderId", type: "uint256" },
+      { name: "redactTransId", type: "uint256" },
+    ],
+    outputs: [],
+  },
+  {
     name: "getAdditionalOrderDetails",
     type: "function",
     stateMutability: "view",
