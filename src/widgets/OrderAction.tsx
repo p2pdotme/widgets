@@ -49,6 +49,12 @@ export interface OrderActionProps {
    *  Contact Support chip renders disabled inside the review window. */
   txSigner?: RaiseDisputeSigner;
   diamondAddress?: Address;
+  /** Optional read RPC used by the report-problem pre-flight simulation
+   *  to decode contract reverts. When omitted the embedder's chain
+   *  default applies — recommended to point at a stable RPC for prod. */
+  rpcUrl?: string;
+  /** Chain id for the pre-simulation. Defaults to Base Sepolia. */
+  chainId?: number;
   /** Called from the smart layout when the user clicks "Resume order"
    *  on a BUY ACCEPTED row. Absent → Resume button is suppressed. */
   onResumeOrder?: (orderId: string) => void;
@@ -66,6 +72,8 @@ export function OrderAction(props: OrderActionProps) {
     originApp,
     txSigner,
     diamondAddress,
+    rpcUrl,
+    chainId,
     onResumeOrder,
     onReportSubmitted,
     theme,
@@ -121,6 +129,8 @@ export function OrderAction(props: OrderActionProps) {
           originApp={originApp}
           txSigner={txSigner}
           diamondAddress={diamondAddress}
+          rpcUrl={rpcUrl}
+          chainId={chainId}
           onReportSubmitted={onReportSubmitted}
           theme={theme}
         />

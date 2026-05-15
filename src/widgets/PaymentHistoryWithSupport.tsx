@@ -56,8 +56,15 @@ export interface PaymentHistoryWithSupportProps
      */
     txSigner?: RaiseDisputeSigner;
     /** Diamond address for the `raiseDispute` write. Defaults to the
-     *  widget's `DEFAULT_DIAMOND_ADDRESS`. */
+     *  outer `PaymentHistory` `diamondAddress`, then the widget's
+     *  `DEFAULT_DIAMOND_ADDRESS`. */
     diamondAddress?: Address;
+    /** Read RPC for the report-problem pre-flight simulation. Defaults
+     *  to the outer `PaymentHistory` `rpcUrl`. */
+    rpcUrl?: string;
+    /** Chain id for the pre-flight simulation. Defaults to the outer
+     *  `PaymentHistory` `chainId`. */
+    chainId?: number;
     /**
      * Called from the smart layout when the user clicks "Resume order"
      * on a BUY ACCEPTED row. Absent → Resume button is suppressed (V1
@@ -127,7 +134,11 @@ export function PaymentHistoryWithSupport(
             bridgeUrl={support.bridgeUrl}
             originApp={support.originApp}
             txSigner={support.txSigner}
-            diamondAddress={support.diamondAddress}
+            diamondAddress={
+              support.diamondAddress ?? orderHistoryProps.diamondAddress
+            }
+            rpcUrl={support.rpcUrl ?? orderHistoryProps.rpcUrl}
+            chainId={support.chainId ?? orderHistoryProps.chainId}
             onResumeOrder={onResumeOrder}
             onReportSubmitted={support.onReportSubmitted}
             theme={support.theme}

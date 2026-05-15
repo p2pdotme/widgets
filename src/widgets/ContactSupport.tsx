@@ -64,6 +64,10 @@ export interface ContactSupportProps {
 
   txSigner?: RaiseDisputeSigner;
   diamondAddress?: Address;
+  /** Read RPC for the report-problem pre-flight simulation. */
+  rpcUrl?: string;
+  /** Chain id for the report-problem pre-flight simulation. */
+  chainId?: number;
 
   onReportSubmitted?: (orderId: string, txHash: `0x${string}`) => void;
   theme?: P2PTheme;
@@ -88,6 +92,8 @@ export function ContactSupport(props: ContactSupportProps) {
     originApp,
     txSigner,
     diamondAddress,
+    rpcUrl,
+    chainId,
     onReportSubmitted,
     theme,
   } = props;
@@ -230,6 +236,8 @@ export function ContactSupport(props: ContactSupportProps) {
             orderId={orderId}
             signer={txSigner}
             diamondAddress={diamondAddress}
+            rpcUrl={rpcUrl}
+            chainId={chainId}
             onSubmitted={handleReportSubmitted}
             onClose={closeModal}
             theme={theme}
@@ -404,7 +412,12 @@ function ChatLoadingView({
       role="dialog"
       aria-modal="true"
       aria-busy="true"
-      style={{ padding: 24 }}
+      style={{
+        padding: 24,
+        background: color.surface,
+        color: color.text,
+        fontFamily: "var(--p2p-font, inherit)",
+      }}
     >
       <div
         style={{
@@ -445,7 +458,16 @@ function ChatErrorView({
   onClose: () => void;
 }) {
   return (
-    <div role="dialog" aria-modal="true" style={{ padding: 24 }}>
+    <div
+      role="dialog"
+      aria-modal="true"
+      style={{
+        padding: 24,
+        background: color.surface,
+        color: color.text,
+        fontFamily: "var(--p2p-font, inherit)",
+      }}
+    >
       <h3 style={{ margin: 0, fontSize: 16, color: color.text }}>
         Could not open support
       </h3>

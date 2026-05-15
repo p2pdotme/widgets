@@ -108,11 +108,14 @@ describe("OrderAction", () => {
   });
 
   it("forwards the computed state to <ContactSupport>", () => {
-    // BUY paid, 1h elapsed → inside the disputable window.
+    // BUY cancelled with paidAt > 0, 1h elapsed → inside the
+    // disputable window per OrderProcessorFacet#raiseDispute.
     vi.spyOn(Date, "now").mockReturnValue((NOW_SEC + 60 * 60) * 1000);
     render(
       <OrderAction
-        {...baseProps(baseOrder({ status: "paid", type: "buy" }))}
+        {...baseProps(
+          baseOrder({ status: "cancelled", type: "buy", paidAt: 1n }),
+        )}
       />,
     );
     expect(contactSupportProps).not.toBeNull();
