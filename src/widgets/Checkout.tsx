@@ -714,6 +714,6 @@ export function Checkout(props: CheckoutProps) {
     </div>
   );
 
-  if (mode === "modal") return <Modal open={open} onClose={onClose}>{content}</Modal>;
+  if (mode === "modal") return <Modal open={open} onClose={onClose} themeStyle={themeStyle}>{content}</Modal>;
   return <div style={{ ...S.card, overflow: "hidden" }}>{content}</div>;
 }
