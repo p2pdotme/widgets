@@ -125,7 +125,7 @@ export const DIAMOND_ABI = [
   {
     // OrderProcessorFacet.raiseDispute(uint256 _orderId, uint256 redactTransId).
     // User-only on chain (msg.sender must equal order.user). The widget's
-    // <RaiseDisputeStep> encodes this against the diamond.
+    // <ReportProblemStep> encodes + pre-simulates this against the diamond.
     name: "raiseDispute",
     type: "function",
     stateMutability: "nonpayable",
@@ -134,6 +134,46 @@ export const DIAMOND_ABI = [
       { name: "redactTransId", type: "uint256" },
     ],
     outputs: [],
+  },
+  // Custom errors thrown by `raiseDispute`. Including them in the ABI
+  // lets viem's `simulateContract` decode revert reasons into their
+  // names (eg "DisputeTimeNotReached") so the widget can show a
+  // human-readable message instead of "Execution reverted for an
+  // unknown reason".
+  {
+    type: "error",
+    name: "NotAuthorized",
+    inputs: [],
+  },
+  {
+    type: "error",
+    name: "DisputeTimeNotReached",
+    inputs: [],
+  },
+  {
+    type: "error",
+    name: "DisputeTimeExpired",
+    inputs: [],
+  },
+  {
+    type: "error",
+    name: "InvalidOrderType",
+    inputs: [],
+  },
+  {
+    type: "error",
+    name: "InvalidOrderStatusToRaiseDispute",
+    inputs: [],
+  },
+  {
+    type: "error",
+    name: "CannotRaiseDisputeTwice",
+    inputs: [],
+  },
+  {
+    type: "error",
+    name: "DisputeAlreadySettled",
+    inputs: [],
   },
   {
     name: "getAdditionalOrderDetails",

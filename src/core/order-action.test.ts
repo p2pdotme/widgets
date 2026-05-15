@@ -106,71 +106,93 @@ test("accepted PAY: status only", () => {
 });
 
 // ─── paid BUY ──────────────────────────────────────────────────────────
+//
+// On-chain `raiseDispute` rejects BUY orders with status=PAID — the
+// dispute path opens only after the order moves to CANCELLED with
+// paidAt > 0 (covered below under cancelled BUY). PAID BUY is a
+// no-action terminal-ish state where the user waits for the merchant
+// to complete OR for the order to auto-cancel.
 
-test("paid BUY before window opens: status carries countdown, no action", () => {
-  const elapsed = 5 * 60 * 1000; // 5min
+test("paid BUY: no action regardless of elapsed (chain requires CANCELLED)", () => {
+  for (const elapsed of [
+    5 * 60 * 1000,
+    BUY_DISPUTE_OPEN_MS,
+    10 * 60 * 60 * 1000,
+    BUY_DISPUTE_CLOSE_MS + 1,
+  ]) {
+    const out = computeOrderAction(
+      baseOrder({ status: "paid", type: "buy", paidAt: 1n }),
+      PLACED_AT_MS + elapsed,
+    );
+    assert.strictEqual(out.statusText, "Paid · awaiting merchant completion");
+    assert.deepStrictEqual(out.action, { kind: "none" });
+  }
+});
+
+// ─── cancelled BUY (the real dispute path) ─────────────────────────────
+
+test("cancelled BUY before window opens (paidAt > 0): countdown in status, no action", () => {
+  const elapsed = 5 * 60 * 1000;
   const out = computeOrderAction(
-    baseOrder({ status: "paid", type: "buy" }),
+    baseOrder({ status: "cancelled", type: "buy", paidAt: 1n }),
     PLACED_AT_MS + elapsed,
   );
   assert.strictEqual(
     out.statusText,
-    `Paid · review opens in ${formatHelper(BUY_DISPUTE_OPEN_MS - elapsed)}`,
+    `Cancelled · review opens in ${formatHelper(BUY_DISPUTE_OPEN_MS - elapsed)}`,
   );
   assert.deepStrictEqual(out.action, { kind: "none" });
 });
 
-test("paid BUY at open boundary (15m): report-problem, full window remaining, ring fully visible", () => {
+test("cancelled BUY at open boundary: report-problem, ring full, paidAt>0 required", () => {
   const elapsed = BUY_DISPUTE_OPEN_MS;
   const out = computeOrderAction(
-    baseOrder({ status: "paid", type: "buy" }),
+    baseOrder({ status: "cancelled", type: "buy", paidAt: 1n }),
     PLACED_AT_MS + elapsed,
   );
-  assert.strictEqual(out.statusText, "Paid · awaiting merchant completion");
+  assert.strictEqual(
+    out.statusText,
+    "Cancelled · contact support to recover funds",
+  );
   if (out.action.kind !== "report-problem") {
     throw new Error("expected report-problem action");
   }
   assert.strictEqual(out.action.remainingMs, BUY_DISPUTE_CLOSE_MS - elapsed);
-  // Ring drains to zero; just-opened = 1.0.
   assert.strictEqual(out.action.filled, 1);
 });
 
-test("paid BUY mid-window: ring fill proportional to remaining time", () => {
+test("cancelled BUY mid-window: ring fill proportional", () => {
   const elapsed = 10 * 60 * 60 * 1000;
   const out = computeOrderAction(
-    baseOrder({ status: "paid", type: "buy" }),
+    baseOrder({ status: "cancelled", type: "buy", paidAt: 1n }),
     PLACED_AT_MS + elapsed,
   );
   if (out.action.kind !== "report-problem") {
     throw new Error("expected report-problem action");
   }
   const windowMs = BUY_DISPUTE_CLOSE_MS - BUY_DISPUTE_OPEN_MS;
-  const expectedFilled = (BUY_DISPUTE_CLOSE_MS - elapsed) / windowMs;
-  assert.strictEqual(out.action.remainingMs, BUY_DISPUTE_CLOSE_MS - elapsed);
-  assert.strictEqual(out.action.filled, expectedFilled);
-  assert.ok(out.action.filled > 0 && out.action.filled < 1);
-});
-
-test("paid BUY at exactly 24h: still inside, ring drained to zero", () => {
-  const elapsed = BUY_DISPUTE_CLOSE_MS;
-  const out = computeOrderAction(
-    baseOrder({ status: "paid", type: "buy" }),
-    PLACED_AT_MS + elapsed,
+  assert.strictEqual(
+    out.action.filled,
+    (BUY_DISPUTE_CLOSE_MS - elapsed) / windowMs,
   );
-  if (out.action.kind !== "report-problem") {
-    throw new Error("expected report-problem action");
-  }
-  assert.strictEqual(out.action.remainingMs, 0);
-  assert.strictEqual(out.action.filled, 0);
 });
 
-test("paid BUY past 24h: window closed, no action", () => {
+test("cancelled BUY past window: no action, review window closed", () => {
   const elapsed = BUY_DISPUTE_CLOSE_MS + 1;
   const out = computeOrderAction(
-    baseOrder({ status: "paid", type: "buy" }),
+    baseOrder({ status: "cancelled", type: "buy", paidAt: 1n }),
     PLACED_AT_MS + elapsed,
   );
-  assert.strictEqual(out.statusText, "Paid · review window closed");
+  assert.strictEqual(out.statusText, "Cancelled · review window closed");
+  assert.deepStrictEqual(out.action, { kind: "none" });
+});
+
+test("cancelled BUY with paidAt == 0: no action — order expired before user paid", () => {
+  const out = computeOrderAction(
+    baseOrder({ status: "cancelled", type: "buy", paidAt: 0n }),
+    PLACED_AT_MS + BUY_DISPUTE_OPEN_MS + 60 * 60 * 1000,
+  );
+  assert.strictEqual(out.statusText, "Cancelled");
   assert.deepStrictEqual(out.action, { kind: "none" });
 });
 
@@ -242,12 +264,12 @@ test("completed SELL past 7d: window closed", () => {
   assert.deepStrictEqual(out.action, { kind: "none" });
 });
 
-// ─── cancelled ─────────────────────────────────────────────────────────
+// ─── cancelled SELL/PAY ────────────────────────────────────────────────
 
-test("cancelled: terminal, no action", () => {
+test("cancelled SELL: terminal, no action", () => {
   const out = computeOrderAction(
-    baseOrder({ status: "cancelled" }),
-    PLACED_AT_MS,
+    baseOrder({ status: "cancelled", type: "sell" }),
+    PLACED_AT_MS + 60 * 60 * 1000,
   );
   assert.strictEqual(out.statusText, "Cancelled");
   assert.deepStrictEqual(out.action, { kind: "none" });
