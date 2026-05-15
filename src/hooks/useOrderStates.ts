@@ -160,7 +160,7 @@ function bytes32ToString(hex: `0x${string}`): string {
 function smallestCountdownMs(rows: Map<string, OrderStateRow>): number {
   let min = Number.POSITIVE_INFINITY;
   for (const { state } of rows.values()) {
-    if (state.action.kind === "raise-dispute") {
+    if (state.action.kind === "report-problem") {
       if (state.action.remainingMs < min) min = state.action.remainingMs;
     }
   }

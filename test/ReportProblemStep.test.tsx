@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, act } from "@testing-library/react";
 import {
-  RaiseDisputeStep,
+  ReportProblemStep,
   type RaiseDisputeSigner,
-} from "../src/widgets/RaiseDisputeStep";
+} from "../src/widgets/ReportProblemStep";
 
 const DIAMOND = "0xeb0BB8E3c014D915D9B2df03aBB130a1Fb44beb9" as const;
 const USER = "0xe35DccC12404638B4e733881Df6D57D07B5d70E2" as `0x${string}`;
@@ -22,20 +22,20 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-describe("RaiseDisputeStep", () => {
+describe("ReportProblemStep", () => {
   it("renders the confirmation copy on mount (no form yet)", () => {
     render(
-      <RaiseDisputeStep
+      <ReportProblemStep
         orderId="169"
         signer={makeSigner()}
         diamondAddress={DIAMOND}
       />,
     );
     expect(
-      screen.getByRole("heading", { name: /raise a dispute/i }),
+      screen.getByRole("heading", { name: /contact support/i }),
     ).toBeTruthy();
     expect(
-      screen.getByText(/dispute review needs your payment receipt/i),
+      screen.getByText(/review needs your payment receipt/i),
     ).toBeTruthy();
     expect(screen.queryByLabelText(/last 4 digits/i)).toBeNull();
   });
@@ -44,7 +44,7 @@ describe("RaiseDisputeStep", () => {
     const onClose = vi.fn();
     const signer = makeSigner();
     render(
-      <RaiseDisputeStep
+      <ReportProblemStep
         orderId="169"
         signer={signer}
         diamondAddress={DIAMOND}
@@ -60,7 +60,7 @@ describe("RaiseDisputeStep", () => {
 
   it("Continue advances to the form step (input visible)", () => {
     render(
-      <RaiseDisputeStep
+      <ReportProblemStep
         orderId="169"
         signer={makeSigner()}
         diamondAddress={DIAMOND}
@@ -69,13 +69,13 @@ describe("RaiseDisputeStep", () => {
     fireEvent.click(screen.getByRole("button", { name: /continue/i }));
     expect(screen.getByLabelText(/last 4 digits/i)).toBeTruthy();
     expect(
-      screen.getByRole("button", { name: /raise dispute/i }),
+      screen.getByRole("button", { name: /submit/i }),
     ).toBeTruthy();
   });
 
   it("strips non-numeric input and caps to 4 digits", () => {
     render(
-      <RaiseDisputeStep
+      <ReportProblemStep
         orderId="169"
         signer={makeSigner()}
         diamondAddress={DIAMOND}
@@ -90,14 +90,14 @@ describe("RaiseDisputeStep", () => {
   it("rejects an empty / short input on submit (form stays open, no tx)", () => {
     const signer = makeSigner();
     render(
-      <RaiseDisputeStep
+      <ReportProblemStep
         orderId="169"
         signer={signer}
         diamondAddress={DIAMOND}
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: /continue/i }));
-    fireEvent.click(screen.getByRole("button", { name: /raise dispute/i }));
+    fireEvent.click(screen.getByRole("button", { name: /submit/i }));
     expect(signer.sendTransaction).not.toHaveBeenCalled();
     expect(
       screen.getByRole("alert").textContent?.toLowerCase(),
@@ -107,7 +107,7 @@ describe("RaiseDisputeStep", () => {
   it("submits a tx to the Diamond with the raiseDispute(orderId, redactTransId) payload", async () => {
     const signer = makeSigner();
     render(
-      <RaiseDisputeStep
+      <ReportProblemStep
         orderId="169"
         signer={signer}
         diamondAddress={DIAMOND}
@@ -117,7 +117,7 @@ describe("RaiseDisputeStep", () => {
     const input = screen.getByLabelText(/last 4 digits/i) as HTMLInputElement;
     fireEvent.change(input, { target: { value: "4242" } });
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /raise dispute/i }));
+      fireEvent.click(screen.getByRole("button", { name: /submit/i }));
     });
     expect(signer.sendTransaction).toHaveBeenCalledOnce();
     const call = (signer.sendTransaction as any).mock.calls[0][0];
@@ -144,7 +144,7 @@ describe("RaiseDisputeStep", () => {
       })),
     });
     render(
-      <RaiseDisputeStep
+      <ReportProblemStep
         orderId="169"
         signer={signer}
         diamondAddress={DIAMOND}
@@ -156,11 +156,11 @@ describe("RaiseDisputeStep", () => {
       target: { value: "9999" },
     });
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /raise dispute/i }));
+      fireEvent.click(screen.getByRole("button", { name: /submit/i }));
     });
     expect(onSubmitted).toHaveBeenCalledWith("0xfeedbeef");
     expect(
-      screen.getByRole("heading", { name: /dispute submitted/i }),
+      screen.getByRole("heading", { name: /report submitted/i }),
     ).toBeTruthy();
   });
 
@@ -175,7 +175,7 @@ describe("RaiseDisputeStep", () => {
       sendTransaction,
     };
     render(
-      <RaiseDisputeStep
+      <ReportProblemStep
         orderId="169"
         signer={signer}
         diamondAddress={DIAMOND}
@@ -187,11 +187,11 @@ describe("RaiseDisputeStep", () => {
       target: { value: "1234" },
     });
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: /raise dispute/i }));
+      fireEvent.click(screen.getByRole("button", { name: /submit/i }));
     });
     expect(onError).toHaveBeenCalledOnce();
     expect(
-      screen.getByRole("heading", { name: /could not submit dispute/i }),
+      screen.getByRole("heading", { name: /could not submit report/i }),
     ).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /try again/i }));
     expect(screen.getByLabelText(/last 4 digits/i)).toBeTruthy();
