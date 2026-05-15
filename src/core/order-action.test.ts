@@ -3,6 +3,7 @@ import assert from "node:assert";
 import type { Order } from "@p2pdotme/sdk/orders";
 import {
   computeOrderAction,
+  formatRemaining,
   BUY_DISPUTE_OPEN_MS,
   BUY_DISPUTE_CLOSE_MS,
   SELL_PAY_DISPUTE_OPEN_MS,
@@ -235,9 +236,59 @@ test("cancelled: terminal, no action", () => {
   assert.deepStrictEqual(out.action, { kind: "none" });
 });
 
-// Inline formatter reused by tests that need to assert the inline
-// countdown text. Mirrors formatRemaining's behaviour so the assertions
-// fail loudly if either side drifts.
+// ─── formatRemaining (inlined sibling) ────────────────────────────────
+
+const SEC = 1000;
+const MN = 60 * SEC;
+const HR = 60 * MN;
+const DY = 24 * HR;
+
+test("formatRemaining: 0s for non-positive input", () => {
+  assert.strictEqual(formatRemaining(0), "0s");
+  assert.strictEqual(formatRemaining(-1), "0s");
+});
+
+test("formatRemaining: 0s for non-finite input", () => {
+  assert.strictEqual(formatRemaining(Number.NaN), "0s");
+  assert.strictEqual(formatRemaining(Number.POSITIVE_INFINITY), "0s");
+});
+
+test("formatRemaining: sub-minute → seconds", () => {
+  assert.strictEqual(formatRemaining(1 * SEC), "1s");
+  assert.strictEqual(formatRemaining(42 * SEC), "42s");
+  assert.strictEqual(formatRemaining(59 * SEC + 999), "59s");
+});
+
+test("formatRemaining: minute boundary", () => {
+  assert.strictEqual(formatRemaining(60 * SEC), "1m");
+});
+
+test("formatRemaining: sub-hour → minutes", () => {
+  assert.strictEqual(formatRemaining(12 * MN), "12m");
+  assert.strictEqual(formatRemaining(59 * MN + 59 * SEC), "59m");
+});
+
+test("formatRemaining: hour boundary as 1h 0m", () => {
+  assert.strictEqual(formatRemaining(60 * MN), "1h 0m");
+});
+
+test("formatRemaining: sub-day → <h>h <m>m", () => {
+  assert.strictEqual(formatRemaining(4 * HR + 23 * MN), "4h 23m");
+  assert.strictEqual(formatRemaining(23 * HR + 59 * MN), "23h 59m");
+});
+
+test("formatRemaining: day boundary as 1d 0h", () => {
+  assert.strictEqual(formatRemaining(24 * HR), "1d 0h");
+});
+
+test("formatRemaining: multi-day → <d>d <h>h", () => {
+  assert.strictEqual(formatRemaining(2 * DY + 4 * HR), "2d 4h");
+  assert.strictEqual(formatRemaining(7 * DY), "7d 0h");
+});
+
+// Helper used by the order-action cases above. Same logic as
+// formatRemaining; defined here so the assertions don't depend on the
+// source under test for their own pre-conditions.
 function formatHelper(remainingMs: number): string {
   if (remainingMs <= 0) return "0s";
   const totalSeconds = Math.floor(remainingMs / 1000);

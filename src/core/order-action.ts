@@ -24,7 +24,34 @@
 // Date.now()).
 
 import type { Order } from "@p2pdotme/sdk/orders";
-import { formatRemaining } from "./format-remaining.ts";
+
+// Compact remaining-time formatter inlined here (vs. a peer file
+// imported by relative path) because node:test for the bridge runs
+// without a TypeScript loader and won't resolve extension-less peer
+// `.ts` imports. `formatRemaining` is small + tightly coupled to the
+// state machine and tested alongside it.
+//
+//   < 60s        →  "<n>s"      (e.g. "42s")
+//   < 60m        →  "<n>m"      (e.g. "12m")
+//   < 24h        →  "<h>h <m>m" (e.g. "4h 23m")
+//   ≥ 24h        →  "<d>d <h>h" (e.g. "2d 4h")
+//
+// Negative or non-finite input clamps to "0s" so the formatter never
+// returns an empty or negative-looking string when a state machine
+// slips one tick past its window.
+export function formatRemaining(remainingMs: number): string {
+  if (!Number.isFinite(remainingMs) || remainingMs <= 0) return "0s";
+  const totalSeconds = Math.floor(remainingMs / 1000);
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  if (totalMinutes < 60) return `${totalMinutes}m`;
+  const totalHours = Math.floor(totalMinutes / 60);
+  const remainderMinutes = totalMinutes - totalHours * 60;
+  if (totalHours < 24) return `${totalHours}h ${remainderMinutes}m`;
+  const totalDays = Math.floor(totalHours / 24);
+  const remainderHours = totalHours - totalDays * 24;
+  return `${totalDays}d ${remainderHours}h`;
+}
 
 export type ActionVariant =
   | { kind: "none" }
