@@ -82,6 +82,16 @@ export interface UseOrderStatesResult {
   refetch: () => void;
 }
 
+interface AdditionalOrderDetails {
+  fixedFeePaid: bigint;
+  tipsPaid: bigint;
+  acceptedTimestamp: bigint;
+  paidTimestamp: bigint;
+  reserved2: bigint;
+  actualUsdtAmount: bigint;
+  actualFiatAmount: bigint;
+}
+
 interface StorageOrder {
   amount: bigint;
   fiatAmount: bigint;
@@ -113,28 +123,33 @@ interface StorageOrder {
 }
 
 /** Storage `Order` (22 fields, raw chain shape) → SDK `Order` (normalized
- *  with string enums). The hook decodes everything here so consumers
- *  never touch the raw struct. */
-function storageToOrder(s: StorageOrder): Order {
+ *  with string enums). `acceptedAt` / `paidAt` / fee values are read from
+ *  the paired `getAdditionalOrderDetails` call when supplied — without
+ *  them the BUY/CANCELLED dispute eligibility predicate (which gates on
+ *  `paidAt > 0n`) would never fire. */
+function storageToOrder(
+  s: StorageOrder,
+  details?: AdditionalOrderDetails,
+): Order {
   return {
     orderId: s.id,
     type: ORDER_TYPE_MAP[s.orderType] ?? "buy",
     status: ORDER_STATUS_MAP[s.status] ?? "placed",
     usdcAmount: s.amount,
     fiatAmount: s.fiatAmount,
-    actualUsdcAmount: s.amount,
-    actualFiatAmount: s.fiatAmount,
+    actualUsdcAmount: details?.actualUsdtAmount ?? s.amount,
+    actualFiatAmount: details?.actualFiatAmount ?? s.fiatAmount,
     currency: bytes32ToString(s.currency),
     user: s.user,
     recipient: s.recipientAddr,
     acceptedMerchant: s.acceptedMerchant,
     placedAt: s.placedTimestamp,
-    acceptedAt: 0n,
-    paidAt: 0n,
+    acceptedAt: details?.acceptedTimestamp ?? 0n,
+    paidAt: details?.paidTimestamp ?? 0n,
     completedAt: s.completedTimestamp,
     circleId: s.circleId,
-    fixedFeePaid: 0n,
-    tipsPaid: 0n,
+    fixedFeePaid: details?.fixedFeePaid ?? 0n,
+    tipsPaid: details?.tipsPaid ?? 0n,
     disputeStatus:
       DISPUTE_STATUS_MAP[s.disputeInfo?.status ?? 0] ?? "none",
     encUpi: s.encUpi,
@@ -224,41 +239,63 @@ export function useOrderStates(
 
     (async () => {
       try {
-        const contracts = orderIds.map((id) => ({
-          address: diamondAddress,
-          abi: DIAMOND_ABI,
-          functionName: "getOrdersById" as const,
-          args: [BigInt(id)] as const,
-        }));
-
-        // viem.multicall uses Multicall3 under the hood; pass the
-        // canonical address explicitly so we don't depend on chain
-        // metadata being populated.
-        const [results, latestBlock] = await Promise.all([
-          (client as any).multicall({
-            contracts,
-            multicallAddress,
-            allowFailure: true,
-          }) as Promise<
-            Array<{ status: "success" | "failure"; result?: unknown }>
-          >,
-          (client as any).getBlock({ blockTag: "latest" }) as Promise<{
-            timestamp: bigint;
-          }>,
+        // Two parallel calls per row: getOrdersById + getAdditionalOrderDetails.
+        // The additional-details read is required to populate `paidAt`
+        // — without it, the BUY/CANCELLED dispute eligibility predicate
+        // is structurally broken (it gates on `order.paidAt > 0n`).
+        const contracts = orderIds.flatMap((id) => [
+          {
+            address: diamondAddress,
+            abi: DIAMOND_ABI,
+            functionName: "getOrdersById" as const,
+            args: [BigInt(id)] as const,
+          },
+          {
+            address: diamondAddress,
+            abi: DIAMOND_ABI,
+            functionName: "getAdditionalOrderDetails" as const,
+            args: [BigInt(id)] as const,
+          },
         ]);
+
+        const results = (await (client as any).multicall({
+          contracts,
+          multicallAddress,
+          allowFailure: true,
+        })) as Array<{ status: "success" | "failure"; result?: unknown }>;
 
         if (cancelled) return;
 
-        clockSkewMs.current =
-          Number(latestBlock.timestamp) * 1000 - Date.now();
+        // Fetch latest block separately and tolerate failure — a
+        // transient getBlock error must not erase the (successful)
+        // multicall result. Skew defaults to 0 (use browser clock).
+        try {
+          const latestBlock = (await (client as any).getBlock({
+            blockTag: "latest",
+          })) as { timestamp: bigint };
+          if (!cancelled) {
+            clockSkewMs.current =
+              Number(latestBlock.timestamp) * 1000 - Date.now();
+          }
+        } catch {
+          // Keep prior clockSkewMs (or 0). Logged at debug level only.
+        }
 
         const nextOrders = new Map<string, Order>();
         for (let i = 0; i < orderIds.length; i++) {
           const id = orderIds[i];
-          const res = results[i];
-          if (res?.status === "success" && res.result) {
+          const orderRes = results[i * 2];
+          const detailsRes = results[i * 2 + 1];
+          if (orderRes?.status === "success" && orderRes.result) {
             try {
-              nextOrders.set(id, storageToOrder(res.result as StorageOrder));
+              const details =
+                detailsRes?.status === "success"
+                  ? (detailsRes.result as AdditionalOrderDetails)
+                  : undefined;
+              nextOrders.set(
+                id,
+                storageToOrder(orderRes.result as StorageOrder, details),
+              );
             } catch {
               // Decode failure on this row only; other rows keep their
               // values. Surface as missing-key in the result.

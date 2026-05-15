@@ -198,7 +198,44 @@ export const DIAMOND_ABI = [
   },
 ] as const;
 
-export const DEFAULT_DIAMOND_ADDRESS = "0xeb0BB8E3c014D915D9B2df03aBB130a1Fb44beb9" as `0x${string}`;
+/**
+ * Default Diamond deployments per chainId. Hosts that omit
+ * `diamondAddress` get this fallback. Add new networks here when the
+ * Diamond is deployed to them — never silently fall back to a
+ * different chain's address (a Base mainnet host calling the Base
+ * Sepolia diamond would silently no-op).
+ */
+const DIAMOND_BY_CHAIN: Record<number, `0x${string}`> = {
+  84532: "0xeb0BB8E3c014D915D9B2df03aBB130a1Fb44beb9", // base sepolia
+};
+
+/**
+ * Resolves the Diamond address for a chainId, falling back to the
+ * historical Base Sepolia constant. Throws if a chainId is supplied
+ * that has no registered diamond — protects against the footgun of a
+ * mainnet host forgetting to pass `diamondAddress` and calling a
+ * non-existent contract.
+ */
+export function resolveDiamondAddress(
+  chainId: number | undefined,
+  override?: `0x${string}`,
+): `0x${string}` {
+  if (override) return override;
+  if (chainId === undefined) {
+    return DIAMOND_BY_CHAIN[84532];
+  }
+  const hit = DIAMOND_BY_CHAIN[chainId];
+  if (!hit) {
+    throw new Error(
+      `@p2pdotme/widgets: no diamond address registered for chainId ${chainId}. Pass diamondAddress explicitly.`,
+    );
+  }
+  return hit;
+}
+
+/** @deprecated prefer `resolveDiamondAddress(chainId, override)`. Kept
+ *  for back-compat with embedders that import the constant directly. */
+export const DEFAULT_DIAMOND_ADDRESS = DIAMOND_BY_CHAIN[84532];
 export const USDC_DECIMALS = 6;
 
 // ─── V2 integrator event helper (convenience, not Diamond) ───────────
