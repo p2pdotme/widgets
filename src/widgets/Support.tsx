@@ -176,6 +176,7 @@ export function Support(props: SupportProps) {
         open={open}
         onClose={handleClose}
         ariaLabelledBy="p2p-support-title"
+        themeStyle={themeStyle}
       >
         <DialogContent
           orderId={orderId}

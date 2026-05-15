@@ -259,6 +259,7 @@ export function ContactSupport(props: ContactSupportProps) {
       <Modal
         open={modalState.kind !== "closed"}
         onClose={closeModal}
+        themeStyle={themeStyle}
         ariaLabelledBy={
           modalState.kind === "report"
             ? "report-problem-title"
