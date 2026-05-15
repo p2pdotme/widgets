@@ -119,14 +119,11 @@ export function computeOrderAction(
 
     case "paid": {
       if (order.type === "buy") {
-        return computeDisputeWindow({
-          openMs: BUY_DISPUTE_OPEN_MS,
-          closeMs: BUY_DISPUTE_CLOSE_MS,
-          elapsed,
-          beforeOpenLabel: "Paid",
-          insideLabel: "Paid · awaiting merchant completion",
-          afterCloseLabel: "Paid · review window closed",
-        });
+        // BUY/PAID = user paid, merchant hasn't completed yet. The on-chain
+        // raiseDispute rejects this status (contracts-v4 #raiseDispute
+        // gates BUY on status=CANCELLED). The user must wait for the
+        // merchant to either complete or for the order to auto-cancel.
+        return noAction("Paid · awaiting merchant completion");
       }
       // SELL or PAY in PAID state means the merchant has paid the user;
       // user must mark complete next.
@@ -135,8 +132,7 @@ export function computeOrderAction(
 
     case "completed": {
       if (order.type === "buy") {
-        // BUY's dispute window is [PAID +15m, PAID +24h]; once completed
-        // it's terminal-good. No dispute affordance.
+        // BUY/COMPLETED is terminal-good — no dispute affordance.
         return noAction("Completed");
       }
       return computeDisputeWindow({
@@ -149,8 +145,27 @@ export function computeOrderAction(
       });
     }
 
-    case "cancelled":
+    case "cancelled": {
+      if (order.type === "buy") {
+        // The only BUY dispute path: status=CANCELLED AND the user paid
+        // before cancellation. Without paidAt > 0 the order expired before
+        // any USDC was pulled — nothing to recover.
+        if (order.paidAt === 0n) {
+          return noAction("Cancelled");
+        }
+        return computeDisputeWindow({
+          openMs: BUY_DISPUTE_OPEN_MS,
+          closeMs: BUY_DISPUTE_CLOSE_MS,
+          elapsed,
+          beforeOpenLabel: "Cancelled",
+          insideLabel: "Cancelled · contact support to recover funds",
+          afterCloseLabel: "Cancelled · review window closed",
+        });
+      }
+      // SELL/PAY cancelled = terminal-bad (e.g. merchant refunded). No
+      // dispute path.
       return noAction("Cancelled");
+    }
 
     default:
       // Defensive: an unknown status maps to a no-op informational line

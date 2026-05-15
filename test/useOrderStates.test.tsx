@@ -144,17 +144,20 @@ describe("useOrderStates", () => {
   it("uses chain block.timestamp for the now reference (clock-skew correction)", async () => {
     // Browser clock is way ahead of the chain so without correction the
     // dispute window math would already report the order as past-close.
-    // The hook should use chain time and report Paid + raise-dispute.
+    // The hook should use chain time and report a SELL order inside its
+    // 30-minute → 7-day dispute window (SELL/PAY uses status=COMPLETED
+    // for the dispute path, simpler to set up than the BUY/CANCELLED
+    // path which additionally requires paidAt > 0).
     const FAR_FUTURE_BROWSER = 2_000_000_000_000; // year 2033 ms
     vi.spyOn(Date, "now").mockReturnValue(FAR_FUTURE_BROWSER);
-    getBlock.mockResolvedValueOnce({ timestamp: 1_700_000_000n + 60n * 30n }); // 30 min after placement
+    getBlock.mockResolvedValueOnce({ timestamp: 1_700_000_000n + 60n * 60n }); // 1h after placement
     multicall.mockResolvedValueOnce([
       {
         status: "success",
         result: storageOrder({
           id: 169n,
-          orderType: 0, // buy
-          status: 2, // paid (in dispute window starting 15min after placement)
+          orderType: 1, // sell
+          status: 3, // completed (the SELL/PAY dispute path)
         }),
       },
     ]);

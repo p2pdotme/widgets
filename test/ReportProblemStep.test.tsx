@@ -5,6 +5,18 @@ import {
   type RaiseDisputeSigner,
 } from "../src/widgets/ReportProblemStep";
 
+// Stub viem so the pre-flight simulation runs against a mocked client
+// inside jsdom (no real network). `simulateContract` resolves by
+// default; individual tests can override to drive the revert path.
+const simulateContract = vi.fn(async () => ({ request: {} }));
+vi.mock("viem", async () => {
+  const actual = await vi.importActual<typeof import("viem")>("viem");
+  return {
+    ...actual,
+    createPublicClient: vi.fn(() => ({ simulateContract })),
+  };
+});
+
 const DIAMOND = "0xeb0BB8E3c014D915D9B2df03aBB130a1Fb44beb9" as const;
 const USER = "0xe35DccC12404638B4e733881Df6D57D07B5d70E2" as `0x${string}`;
 
@@ -20,6 +32,7 @@ function makeSigner(
 
 beforeEach(() => {
   vi.clearAllMocks();
+  simulateContract.mockResolvedValue({ request: {} });
 });
 
 describe("ReportProblemStep", () => {
@@ -195,5 +208,34 @@ describe("ReportProblemStep", () => {
     ).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /try again/i }));
     expect(screen.getByLabelText(/last 4 digits/i)).toBeTruthy();
+  });
+
+  it("decodes a contract custom-error revert into a friendly message (no gas spent)", async () => {
+    // Pre-flight simulation throws with a decoded errorName. The
+    // friendly message replaces the wallet's generic "execution
+    // reverted" output, and the wallet's sendTransaction is NEVER
+    // invoked because simulation failed first.
+    const simulationErr: any = new Error("simulation reverted");
+    simulationErr.data = { errorName: "DisputeTimeNotReached" };
+    simulateContract.mockRejectedValueOnce(simulationErr);
+    const signer = makeSigner();
+    render(
+      <ReportProblemStep
+        orderId="169"
+        signer={signer}
+        diamondAddress={DIAMOND}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /continue/i }));
+    fireEvent.change(screen.getByLabelText(/last 4 digits/i), {
+      target: { value: "1234" },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /submit/i }));
+    });
+    expect(signer.sendTransaction).not.toHaveBeenCalled();
+    expect(
+      screen.getByText(/support isn't available yet/i),
+    ).toBeTruthy();
   });
 });
