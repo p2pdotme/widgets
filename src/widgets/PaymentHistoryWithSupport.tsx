@@ -107,6 +107,13 @@ export function PaymentHistoryWithSupport(
     // native Resume button is suppressed (OrderAction owns the action
     // slot now); the dispute badge stays since OrderAction's Support
     // button reflects dispute state too and double-marking is fine.
+    //
+    // The embedder's existing `onResume` prop is reused as the resume
+    // handler unless `support.onResumeOrder` is explicitly set — keeps
+    // the smart-mode flip a zero-config upgrade for embedders that
+    // already wired the legacy onResume.
+    const onResumeOrder =
+      support.onResumeOrder ?? orderHistoryProps.onResume;
     return (
       <PaymentHistory
         {...orderHistoryProps}
@@ -123,7 +130,7 @@ export function PaymentHistoryWithSupport(
             originApp={support.originApp}
             txSigner={support.txSigner}
             diamondAddress={support.diamondAddress}
-            onResumeOrder={support.onResumeOrder}
+            onResumeOrder={onResumeOrder}
             onDisputeRaised={support.onDisputeRaised}
             theme={support.theme}
           />
