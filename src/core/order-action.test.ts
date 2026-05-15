@@ -72,7 +72,7 @@ test("disputeStatus=resolved short-circuits regardless of order.status", () => {
 
 test("placed: status only, no action", () => {
   const out = computeOrderAction(baseOrder({ status: "placed" }), PLACED_AT_MS);
-  assert.strictEqual(out.statusText, "Placed · awaiting merchant");
+  assert.strictEqual(out.statusText, "Placed · matching");
   assert.deepStrictEqual(out.action, { kind: "none" });
 });
 
@@ -92,7 +92,7 @@ test("accepted SELL: status only (merchant pays user)", () => {
     baseOrder({ status: "accepted", type: "sell" }),
     PLACED_AT_MS,
   );
-  assert.strictEqual(out.statusText, "Accepted · awaiting merchant payment");
+  assert.strictEqual(out.statusText, "Accepted · processing payment");
   assert.deepStrictEqual(out.action, { kind: "none" });
 });
 
@@ -101,7 +101,7 @@ test("accepted PAY: status only", () => {
     baseOrder({ status: "accepted", type: "pay" }),
     PLACED_AT_MS,
   );
-  assert.strictEqual(out.statusText, "Accepted · awaiting merchant payment");
+  assert.strictEqual(out.statusText, "Accepted · processing payment");
   assert.deepStrictEqual(out.action, { kind: "none" });
 });
 
@@ -124,7 +124,7 @@ test("paid BUY: no action regardless of elapsed (chain requires CANCELLED)", () 
       baseOrder({ status: "paid", type: "buy", paidAt: 1n }),
       PLACED_AT_MS + elapsed,
     );
-    assert.strictEqual(out.statusText, "Paid · awaiting merchant completion");
+    assert.strictEqual(out.statusText, "Paid · processing payment");
     assert.deepStrictEqual(out.action, { kind: "none" });
   }
 });
@@ -203,7 +203,7 @@ test("paid SELL: merchant-paid status, no dispute affordance (user must confirm)
     baseOrder({ status: "paid", type: "sell" }),
     PLACED_AT_MS + 60 * 60 * 1000,
   );
-  assert.strictEqual(out.statusText, "Merchant paid · awaiting your confirmation");
+  assert.strictEqual(out.statusText, "Payment received · confirm to complete");
   assert.deepStrictEqual(out.action, { kind: "none" });
 });
 
