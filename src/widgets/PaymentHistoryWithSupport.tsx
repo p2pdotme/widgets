@@ -223,6 +223,16 @@ function useActiveSupportTickets(
 
   useEffect(() => {
     if (!support) return;
+    // v1.1.1-bridge: the "active support" pip is sourced from the
+    // bridge's `/auth/me` + `/tickets/me` endpoints, which only exist
+    // when the chat path is on. When `chatEnabled` is off the bridge
+    // may be unreachable / mis-configured; skip the fetch entirely so
+    // we don't spam CORS preflight failures into the console. The pip
+    // is best-effort anyway — falling back to "no active conversation
+    // indicators" is the safe default.
+    if (support.chatEnabled === false || support.chatEnabled === undefined) {
+      return;
+    }
     let cancelled = false;
 
     (async () => {
@@ -247,7 +257,7 @@ function useActiveSupportTickets(
     return () => {
       cancelled = true;
     };
-  }, [support?.bridgeUrl, support?.signer]);
+  }, [support?.bridgeUrl, support?.signer, support?.chatEnabled]);
 
   return activeIds;
 }

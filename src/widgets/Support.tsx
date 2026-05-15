@@ -389,7 +389,6 @@ function PhaseView({
         body="Your support request is on its way to the support team. Any stuck funds will be refunded once it's resolved. Check back here in a little while to see the updated status."
         primaryLabel="Close"
         onPrimary={onClose}
-        onSecondary={onClose}
       />
     );
   }
@@ -488,7 +487,11 @@ function StatusBlock({
   detail?: string;
   primaryLabel: string;
   onPrimary: () => void;
-  onSecondary: () => void;
+  /** Optional secondary action. Omit when the primary action *is* the
+   *  only thing the user needs (e.g. the v1.1.1-bridge "registered"
+   *  confirmation, where both primary and secondary would both be
+   *  "Close"). When omitted, only the primary button renders. */
+  onSecondary?: () => void;
   variant?: "danger";
 }) {
   const titleColor = variant === "danger" ? color.danger : color.text;
@@ -548,19 +551,21 @@ function StatusBlock({
         >
           {primaryLabel}
         </button>
-        <button
-          type="button"
-          onClick={onSecondary}
-          style={{
-            ...S.secondaryBtn,
-            width: "auto",
-            flex: "1 1 140px",
-            height: 40,
-            fontSize: font.base,
-          }}
-        >
-          Close
-        </button>
+        {onSecondary ? (
+          <button
+            type="button"
+            onClick={onSecondary}
+            style={{
+              ...S.secondaryBtn,
+              width: "auto",
+              flex: "1 1 140px",
+              height: 40,
+              fontSize: font.base,
+            }}
+          >
+            Close
+          </button>
+        ) : null}
       </div>
     </div>
   );
