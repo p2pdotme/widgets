@@ -52,6 +52,28 @@ describe("Support", () => {
     ).toBeInTheDocument();
   });
 
+  it("with chatEnabled=false (default), opens directly to the 'support request registered' modal and never hits the bridge", async () => {
+    const fetchSpy = vi.fn();
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+    render(
+      <Support
+        originApp="merchant-demo"
+        signer={stubSigner}
+        bridgeUrl="https://bridge.local"
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /open support/i }));
+    await waitFor(() =>
+      expect(
+        screen.getByText(/support request registered/i),
+      ).toBeInTheDocument(),
+    );
+    expect(
+      screen.getByText(/check back here in a little while/i),
+    ).toBeInTheDocument();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it("opens the modal, shows masked order context, and renders an actionable unavailable state when the bridge has no inbox bound", async () => {
     const onOpen = vi.fn();
     render(
@@ -60,6 +82,7 @@ describe("Support", () => {
         originApp="merchant-demo"
         signer={stubSigner}
         bridgeUrl="https://bridge.local"
+        chatEnabled
         onOpen={onOpen}
       />,
     );
@@ -113,6 +136,7 @@ describe("Support", () => {
         originApp="merchant-demo"
         signer={{ address: stubSigner.address, signMessage: signSpy }}
         bridgeUrl="https://bridge.local/"
+        chatEnabled
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: /open support/i }));
@@ -146,6 +170,7 @@ describe("Support", () => {
         originApp="merchant-demo"
         signer={stubSigner}
         bridgeUrl="https://bridge.local"
+        chatEnabled
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: /open support/i }));
@@ -170,6 +195,7 @@ describe("Support", () => {
         originApp="merchant-demo"
         signer={{ address: stubSigner.address, signMessage: reject }}
         bridgeUrl="https://bridge.local"
+        chatEnabled
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: /open support/i }));
@@ -204,6 +230,7 @@ describe("Support", () => {
         originApp="merchant-demo"
         signer={stubSigner}
         bridgeUrl="https://bridge.local"
+        chatEnabled
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: /open support/i }));
@@ -233,6 +260,7 @@ describe("Support", () => {
         originApp="merchant-demo"
         signer={stubSigner}
         bridgeUrl="https://bridge.local"
+        chatEnabled
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: /open support/i }));
@@ -255,6 +283,7 @@ describe("Support", () => {
         originApp="merchant-demo"
         signer={stubSigner}
         bridgeUrl="https://bridge.local"
+        chatEnabled
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: /open support/i }));

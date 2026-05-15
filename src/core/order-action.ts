@@ -227,6 +227,23 @@ function noAction(statusText: string): OrderActionState {
   return { statusText, action: { kind: "none" }, disputeState: "none" };
 }
 
+/** Is this past-window order still worth showing in an "actionable only"
+ *  list? Returns `true` when the row has either an open dispute (the user
+ *  can view it / chat is reachable when re-enabled) OR a user-actionable
+ *  CTA the smart layout would render. Pending in-flight orders (placed /
+ *  accepted / paid) are NOT in scope here — embedders include those
+ *  unconditionally. Used by PaymentHistory's `filter="actionable"` mode
+ *  to prevent the history list from accumulating completed-good and
+ *  past-window-cancelled rows. */
+export function isOrderActionable(
+  order: Order,
+  nowMs: number = Date.now(),
+): boolean {
+  if (order.disputeStatus === "open") return true;
+  const state = computeOrderAction(order, nowMs);
+  return state.action.kind !== "none";
+}
+
 function resumeable(statusText: string): OrderActionState {
   return { statusText, action: { kind: "resume" }, disputeState: "none" };
 }

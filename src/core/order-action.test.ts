@@ -4,6 +4,7 @@ import type { Order } from "@p2pdotme/sdk/orders";
 import {
   computeOrderAction,
   formatRemaining,
+  isOrderActionable,
   BUY_DISPUTE_OPEN_MS,
   BUY_DISPUTE_CLOSE_MS,
   SELL_PAY_DISPUTE_OPEN_MS,
@@ -346,6 +347,71 @@ test("formatRemaining: multi-day → <d>d <h>h", () => {
 });
 
 // Helper used by the order-action cases above. Same logic as
+// ─── isOrderActionable ─────────────────────────────────────────────────
+//
+// Used by `PaymentHistory` `filter="actionable"` to drop terminal /
+// non-recoverable rows from the displayed list. Mirrors the smart-action
+// machine: an order is "actionable" when it has an open dispute OR when
+// the action variant computed for it is anything other than `"none"`.
+
+test("isOrderActionable: open dispute → true regardless of base status", () => {
+  for (const status of ["placed", "accepted", "paid", "completed", "cancelled"] as const) {
+    const out = isOrderActionable(
+      baseOrder({ status, disputeStatus: "open" }),
+      PLACED_AT_MS,
+    );
+    assert.strictEqual(out, true, `expected actionable for status=${status}/disputeStatus=open`);
+  }
+});
+
+test("isOrderActionable: resolved dispute → false (terminal-good for user)", () => {
+  const out = isOrderActionable(
+    baseOrder({ status: "completed", disputeStatus: "resolved" }),
+    PLACED_AT_MS + 1,
+  );
+  assert.strictEqual(out, false);
+});
+
+test("isOrderActionable: BUY completed → false (terminal-good)", () => {
+  const out = isOrderActionable(
+    baseOrder({ status: "completed", type: "buy" }),
+    PLACED_AT_MS + 1,
+  );
+  assert.strictEqual(out, false);
+});
+
+test("isOrderActionable: BUY cancelled with paidAt=0 → false (no funds at risk)", () => {
+  const out = isOrderActionable(
+    baseOrder({ status: "cancelled", type: "buy", paidAt: 0n }),
+    PLACED_AT_MS + BUY_DISPUTE_OPEN_MS + 1,
+  );
+  assert.strictEqual(out, false);
+});
+
+test("isOrderActionable: BUY cancelled paidAt>0 inside window → true (Contact Support chip)", () => {
+  const out = isOrderActionable(
+    baseOrder({ status: "cancelled", type: "buy", paidAt: 1n }),
+    PLACED_AT_MS + BUY_DISPUTE_OPEN_MS + 1,
+  );
+  assert.strictEqual(out, true);
+});
+
+test("isOrderActionable: BUY cancelled paidAt>0 PAST window → false (review window closed)", () => {
+  const out = isOrderActionable(
+    baseOrder({ status: "cancelled", type: "buy", paidAt: 1n }),
+    PLACED_AT_MS + BUY_DISPUTE_CLOSE_MS + 1,
+  );
+  assert.strictEqual(out, false);
+});
+
+test("isOrderActionable: BUY accepted → true (Resume action)", () => {
+  const out = isOrderActionable(
+    baseOrder({ status: "accepted", type: "buy" }),
+    PLACED_AT_MS,
+  );
+  assert.strictEqual(out, true);
+});
+
 // formatRemaining; defined here so the assertions don't depend on the
 // source under test for their own pre-conditions.
 function formatHelper(remainingMs: number): string {

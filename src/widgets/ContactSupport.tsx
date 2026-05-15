@@ -72,12 +72,21 @@ export interface ContactSupportProps {
   chainId?: number;
 
   onReportSubmitted?: (orderId: string, txHash: `0x${string}`) => void;
+  /** Toggle for the Chatwoot chat path. When `false` (the v1.1.1-bridge
+   *  default), every click that would have opened chat instead opens a
+   *  static "support request registered, check back here later" modal.
+   *  The on-chain raiseDispute flow (in-window with `txSigner`) is
+   *  unaffected — that path is the actual recovery mechanism. Default
+   *  `false`. Embedders flip to `true` only when their Chatwoot inbox is
+   *  reachable through the bridge. */
+  chatEnabled?: boolean;
   theme?: P2PTheme;
 }
 
 type Modal_State =
   | { kind: "closed" }
   | { kind: "report" }
+  | { kind: "registered" }
   | { kind: "chat-signing" }
   | { kind: "chat-loading" }
   | { kind: "chat-error"; reason: string };
@@ -97,6 +106,7 @@ export function ContactSupport(props: ContactSupportProps) {
     rpcUrl,
     chainId,
     onReportSubmitted,
+    chatEnabled = false,
     theme,
   } = props;
 
@@ -124,18 +134,26 @@ export function ContactSupport(props: ContactSupportProps) {
     effectiveDispute === "resolved";
 
   const handleClick = useCallback(() => {
-    // In-window with a tx signer → open the on-chain report flow.
-    // In-window without a tx signer → fall through to chat. The embedder
-    // hasn't wired the dispute write path, but the user still needs a
-    // recourse, and chat will surface "Support not available yet" if the
-    // bridge has no inbox bound. Better than a dead-button experience.
+    // In-window with a tx signer → open the on-chain report flow. The
+    // raiseDispute call is the actual recovery path; this stays live
+    // regardless of `chatEnabled`.
     if (inWindow && txSigner) {
       setModalState({ kind: "report" });
       return;
     }
+    // Outside the on-chain window (or with no txSigner) the row would
+    // normally open chat. When `chatEnabled` is off (v1.1.1-bridge
+    // default) we short-circuit to a static "support request registered"
+    // modal — the bridge / Chatwoot stack is the unstable piece we're
+    // temporarily routing around. When `chatEnabled` is on, the original
+    // chat flow runs.
+    if (!chatEnabled) {
+      setModalState({ kind: "registered" });
+      return;
+    }
     setModalState({ kind: "chat-signing" });
     setChatAttempt((a) => a + 1);
-  }, [inWindow, txSigner]);
+  }, [inWindow, txSigner, chatEnabled]);
 
   const handleReportSubmitted = useCallback(
     (txHash: `0x${string}`) => {
@@ -260,12 +278,14 @@ export function ContactSupport(props: ContactSupportProps) {
         ariaLabelledBy={
           modalState.kind === "report"
             ? "report-problem-title"
-            : modalState.kind === "chat-error"
-              ? "contact-support-chat-error-title"
-              : modalState.kind === "chat-signing" ||
-                  modalState.kind === "chat-loading"
-                ? "contact-support-chat-loading-title"
-                : undefined
+            : modalState.kind === "registered"
+              ? "support-registered-title"
+              : modalState.kind === "chat-error"
+                ? "contact-support-chat-error-title"
+                : modalState.kind === "chat-signing" ||
+                    modalState.kind === "chat-loading"
+                  ? "contact-support-chat-loading-title"
+                  : undefined
         }
         ariaLabel="Contact Support"
       >
@@ -280,6 +300,8 @@ export function ContactSupport(props: ContactSupportProps) {
             onClose={closeModal}
             theme={theme}
           />
+        ) : modalState.kind === "registered" ? (
+          <RegisteredView onClose={closeModal} />
         ) : modalState.kind === "chat-signing" ||
           modalState.kind === "chat-loading" ? (
           <ChatLoadingView phase={modalState.kind} />
@@ -554,6 +576,67 @@ function ChatErrorView({
           }}
         >
           Try again
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Static "support request registered" confirmation rendered when the
+ *  chat path is disabled (`chatEnabled=false`). Used both for orders that
+ *  already have an open/resolved dispute on chain AND for in-window rows
+ *  without a `txSigner`. Pure visual — no async work, no chain calls. */
+function RegisteredView({ onClose }: { onClose: () => void }) {
+  return (
+    <div
+      style={{
+        padding: 24,
+        background: color.surface,
+        color: color.text,
+        fontFamily: "var(--p2p-font, inherit)",
+      }}
+    >
+      <h3
+        id="support-registered-title"
+        style={{ margin: 0, fontSize: 18, color: color.text }}
+      >
+        Support request registered
+      </h3>
+      <p
+        style={{
+          color: color.textMuted,
+          fontSize: 13,
+          lineHeight: 1.5,
+          marginTop: 8,
+          marginBottom: 0,
+        }}
+      >
+        Your support request is on its way to the support team. Any stuck
+        funds will be refunded once it's resolved. Check back here in a
+        little while to see the updated status.
+      </p>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "flex-end",
+          gap: 8,
+          marginTop: 16,
+        }}
+      >
+        <button
+          type="button"
+          onClick={onClose}
+          style={{
+            padding: "8px 14px",
+            fontSize: 14,
+            background: color.accent,
+            color: color.accentText,
+            border: "none",
+            borderRadius: "var(--p2p-radius-button, 8px)",
+            cursor: "pointer",
+          }}
+        >
+          Close
         </button>
       </div>
     </div>
