@@ -7,6 +7,61 @@ and the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format. While
 the package is `0.x`, minor releases may introduce additive prop changes;
 patch releases stay backward-compatible.
 
+## [1.1.0] — 2026-05-15
+
+### Added — Smart per-row action layout (`<PaymentHistoryWithSupport>`)
+
+Three-layer per-row layout driven by a pure state machine over the
+order's on-chain status, dispute lifecycle, and dispute window:
+
+- **A** — informational status line, always rendered (e.g. `Paid · dispute opens in 8m`).
+- **B** — action button: `Resume order` / `Raise dispute · <countdown>` / hidden when not actionable.
+- **C** — support launcher: dispute-open / dispute-resolved / chat-active / chat-new.
+
+Opt out by passing `actionMode="chat"` on `<PaymentHistoryWithSupport>` —
+the prior single-launcher layout is preserved verbatim under that flag.
+Default is `"smart"`.
+
+New exports (`@p2pdotme/widgets/support` unless noted):
+
+- `OrderAction` — composes the three layers per row; 1 Hz tick while any
+  countdown is under 60s, optimistic flip when a dispute broadcasts.
+- `RaiseDisputeStep` — confirm → form → submitting → done/error state
+  machine; encodes `raiseDispute(orderId, redactTransId)`, fires
+  `onSubmitted` on tx broadcast (hash known, receipt pending) so the
+  parent can optimistically flip the row.
+- `useOrderStates` — multicall3-batched on-chain reads with a sub-tick
+  cadence under 60s, shipped as a standalone hook for embedders without
+  a `PaymentHistory` feed.
+- `computeOrderAction` / `formatRemaining` — pure logic (no UI), exposed
+  under `@p2pdotme/widgets` for hosts building bespoke layouts.
+
+New props:
+
+- `<PaymentHistoryWithSupport>` — `actionMode: "smart" | "chat"` (default `"smart"`),
+  and `support.txSigner` (`CheckoutSigner` shape) required for the
+  Raise-dispute action.
+- `<Support>` — `chatState: "active" | "new"` drives the launcher label
+  ("Continue support" + green pip vs "Get help") when `disputeStatus="none"`.
+
+Dispute windows match the on-chain enforcement in
+`OrderProcessorFacet.raiseDispute`: BUY/PAID is disputable
+[15 min, 24 h] after `placedAt`; SELL or PAY/COMPLETED is disputable
+[30 min, 7 d] after `placedAt`. Dispute lifecycle short-circuits status
+flow — a raised or settled dispute is always the most relevant state.
+
+### Changed
+- `<Support>` launcher label adapts to `chatState` when no dispute is
+  open: `"Get help"` (new thread) → `"Continue support"` (active thread)
+  with a green status dot.
+
+### Notes
+- 125 tests pass (70 node:test on pure logic, 55 vitest on UI surface);
+  typecheck + examples typecheck + ESM/CJS/dts build all clean.
+- All additions are non-breaking — existing 1.0.0 consumers see the
+  new smart layout automatically; pass `actionMode="chat"` to keep the
+  prior behavior verbatim.
+
 ## [1.0.0] — 2026-05-14
 
 ### Changed — BREAKING
