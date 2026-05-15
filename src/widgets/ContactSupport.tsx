@@ -23,6 +23,8 @@
 // "open report flow" to "open chat".
 
 import React, { useCallback, useEffect, useState } from "react";
+import { createPublicClient, http } from "viem";
+import { base, baseSepolia } from "viem/chains";
 import { color, font, weight, themeToCssVars } from "../ui/theme";
 import { Modal } from "../ui/Modal";
 import { signInWithBridge } from "../api/bridge";
@@ -141,10 +143,34 @@ export function ContactSupport(props: ContactSupportProps) {
     (txHash: `0x${string}`) => {
       setOptimisticDispute(true);
       onReportSubmitted?.(orderId, txHash);
-      // Keep the modal open showing the "Report submitted" view; the
-      // user dismisses with Close.
+      // Optimistic-flip rollback: wait for the receipt off the public
+      // RPC. If it reverts, clear the local flag so the chip falls
+      // back to the real chain state (which still says no dispute is
+      // raised). The user sees the report-flow CTA again and can retry.
+      // We deliberately don't surface a toast here — the next chain
+      // poll will reflect truth either way.
+      (async () => {
+        try {
+          const chain = chainId === 8453 ? base : baseSepolia;
+          const publicClient = createPublicClient({
+            chain,
+            transport: http(rpcUrl ?? chain.rpcUrls.default.http[0]),
+          });
+          const receipt = await (publicClient as any).waitForTransactionReceipt({
+            hash: txHash,
+            timeout: 60_000,
+          });
+          if (receipt?.status !== "success") {
+            setOptimisticDispute(false);
+          }
+        } catch {
+          // RPC timeout / hash not found — clear so the optimistic flip
+          // doesn't strand the row on an unresolvable state.
+          setOptimisticDispute(false);
+        }
+      })();
     },
-    [onReportSubmitted, orderId],
+    [onReportSubmitted, orderId, rpcUrl, chainId],
   );
 
   const closeModal = useCallback(() => {

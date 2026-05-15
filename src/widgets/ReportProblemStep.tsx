@@ -12,6 +12,8 @@
 
 import React, { useCallback, useState } from "react";
 import {
+  BaseError,
+  ContractFunctionRevertedError,
   createPublicClient,
   encodeFunctionData,
   http,
@@ -19,7 +21,10 @@ import {
   type Hex,
 } from "viem";
 import { base, baseSepolia } from "viem/chains";
-import { DIAMOND_ABI, DEFAULT_DIAMOND_ADDRESS } from "../core/contracts";
+import {
+  DIAMOND_ABI,
+  resolveDiamondAddress,
+} from "../core/contracts";
 import { color, radius, themeToCssVars, type P2PTheme } from "../ui/theme";
 import type { SupportTheme } from "../types";
 
@@ -78,27 +83,45 @@ interface RevertInfo {
 }
 
 /** Inspect a viem error chain for a decoded custom-error name + friendly
- *  message. Falls back to the raw shortMessage if the error isn't one of
- *  the diamond's known raiseDispute custom errors. */
+ *  message. Uses viem's `BaseError.walk` when possible (the canonical
+ *  way to find a `ContractFunctionRevertedError` inside a wrapped
+ *  `TransactionExecutionError` / `ContractFunctionExecutionError`),
+ *  and falls back to a manual property probe for non-viem shapes
+ *  (eg test fixtures, wallet-side errors that don't subclass BaseError).
+ */
 function extractRevert(err: unknown): RevertInfo {
-  const e = err as {
-    cause?: { data?: { errorName?: string }; shortMessage?: string };
-    shortMessage?: string;
-    message?: string;
-  };
   let name: string | undefined;
-  let probe: unknown = e;
-  for (let i = 0; i < 5 && probe; i++) {
-    const data = (probe as { data?: { errorName?: string } }).data;
-    if (data?.errorName) {
-      name = data.errorName;
-      break;
+  // 1. Preferred: viem's BaseError.walk. Resolves through nested
+  //    `cause` chains regardless of depth.
+  if (err instanceof BaseError) {
+    const revert = err.walk(
+      (e) => e instanceof ContractFunctionRevertedError,
+    ) as ContractFunctionRevertedError | undefined;
+    if (revert?.data?.errorName) name = revert.data.errorName;
+  }
+  // 2. Fallback: manually walk `.cause` for plain objects (tests, raw
+  //    wallet errors). Covers the case where the embedder's wallet
+  //    wraps a viem error into a non-BaseError before re-throwing.
+  if (!name) {
+    let probe: unknown = err;
+    for (let i = 0; i < 8 && probe; i++) {
+      const data = (probe as { data?: { errorName?: string } }).data;
+      if (data?.errorName) {
+        name = data.errorName;
+        break;
+      }
+      probe = (probe as { cause?: unknown }).cause;
     }
-    probe = (probe as { cause?: unknown }).cause;
   }
   if (name && REVERT_MESSAGES[name]) {
     return { errorName: name, message: REVERT_MESSAGES[name] };
   }
+  // No decoded name — surface the friendliest message we can find.
+  const e = err as {
+    shortMessage?: string;
+    message?: string;
+    cause?: { shortMessage?: string };
+  };
   const fallback =
     e.shortMessage ?? e.cause?.shortMessage ?? e.message ?? "Unknown error.";
   return { errorName: name, message: fallback };
@@ -117,7 +140,6 @@ export function ReportProblemStep(props: ReportProblemStepProps) {
   const {
     orderId,
     signer,
-    diamondAddress = DEFAULT_DIAMOND_ADDRESS,
     rpcUrl,
     chainId = 84532,
     onSubmitted,
@@ -125,6 +147,10 @@ export function ReportProblemStep(props: ReportProblemStepProps) {
     onClose,
     theme,
   } = props;
+  // Throws with a clear message if the host targeted an unknown chain
+  // without passing `diamondAddress` — better than silently calling
+  // a non-existent contract on mainnet.
+  const diamondAddress = resolveDiamondAddress(chainId, props.diamondAddress);
   const [phase, setPhase] = useState<Phase>({ kind: "confirm" });
   const [redactInput, setRedactInput] = useState<string>("");
   const [inputError, setInputError] = useState<string | null>(null);
