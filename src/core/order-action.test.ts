@@ -53,7 +53,7 @@ test("disputeStatus=open short-circuits regardless of order.status", () => {
     baseOrder({ status: "paid", disputeStatus: "open" }),
     PLACED_AT_MS,
   );
-  assert.strictEqual(out.statusText, "Dispute under review");
+  assert.strictEqual(out.statusText, "Under review");
   assert.deepStrictEqual(out.action, { kind: "none" });
   assert.strictEqual(out.disputeState, "open");
 });
@@ -63,7 +63,7 @@ test("disputeStatus=resolved short-circuits regardless of order.status", () => {
     baseOrder({ status: "completed", disputeStatus: "resolved" }),
     PLACED_AT_MS,
   );
-  assert.strictEqual(out.statusText, "Dispute resolved");
+  assert.strictEqual(out.statusText, "Resolved");
   assert.deepStrictEqual(out.action, { kind: "none" });
   assert.strictEqual(out.disputeState, "resolved");
 });
@@ -115,44 +115,53 @@ test("paid BUY before window opens: status carries countdown, no action", () => 
   );
   assert.strictEqual(
     out.statusText,
-    `Paid · dispute opens in ${formatHelper(BUY_DISPUTE_OPEN_MS - elapsed)}`,
+    `Paid · review opens in ${formatHelper(BUY_DISPUTE_OPEN_MS - elapsed)}`,
   );
   assert.deepStrictEqual(out.action, { kind: "none" });
 });
 
-test("paid BUY at the open boundary (15m exactly): raise-dispute available with full 23h45m left", () => {
-  const elapsed = BUY_DISPUTE_OPEN_MS; // exactly at boundary, inclusive
+test("paid BUY at open boundary (15m): report-problem, full window remaining, ring fully visible", () => {
+  const elapsed = BUY_DISPUTE_OPEN_MS;
   const out = computeOrderAction(
     baseOrder({ status: "paid", type: "buy" }),
     PLACED_AT_MS + elapsed,
   );
   assert.strictEqual(out.statusText, "Paid · awaiting merchant completion");
-  assert.deepStrictEqual(out.action, {
-    kind: "raise-dispute",
-    remainingMs: BUY_DISPUTE_CLOSE_MS - elapsed,
-  });
+  if (out.action.kind !== "report-problem") {
+    throw new Error("expected report-problem action");
+  }
+  assert.strictEqual(out.action.remainingMs, BUY_DISPUTE_CLOSE_MS - elapsed);
+  // Ring drains to zero; just-opened = 1.0.
+  assert.strictEqual(out.action.filled, 1);
 });
 
-test("paid BUY mid-window (10h elapsed): raise-dispute with 14h remaining", () => {
+test("paid BUY mid-window: ring fill proportional to remaining time", () => {
   const elapsed = 10 * 60 * 60 * 1000;
   const out = computeOrderAction(
     baseOrder({ status: "paid", type: "buy" }),
     PLACED_AT_MS + elapsed,
   );
-  assert.strictEqual(out.statusText, "Paid · awaiting merchant completion");
-  if (out.action.kind !== "raise-dispute") {
-    throw new Error("expected raise-dispute action");
+  if (out.action.kind !== "report-problem") {
+    throw new Error("expected report-problem action");
   }
+  const windowMs = BUY_DISPUTE_CLOSE_MS - BUY_DISPUTE_OPEN_MS;
+  const expectedFilled = (BUY_DISPUTE_CLOSE_MS - elapsed) / windowMs;
   assert.strictEqual(out.action.remainingMs, BUY_DISPUTE_CLOSE_MS - elapsed);
+  assert.strictEqual(out.action.filled, expectedFilled);
+  assert.ok(out.action.filled > 0 && out.action.filled < 1);
 });
 
-test("paid BUY at exactly 24h: still inside (closeMs is inclusive)", () => {
+test("paid BUY at exactly 24h: still inside, ring drained to zero", () => {
   const elapsed = BUY_DISPUTE_CLOSE_MS;
   const out = computeOrderAction(
     baseOrder({ status: "paid", type: "buy" }),
     PLACED_AT_MS + elapsed,
   );
-  assert.deepStrictEqual(out.action, { kind: "raise-dispute", remainingMs: 0 });
+  if (out.action.kind !== "report-problem") {
+    throw new Error("expected report-problem action");
+  }
+  assert.strictEqual(out.action.remainingMs, 0);
+  assert.strictEqual(out.action.filled, 0);
 });
 
 test("paid BUY past 24h: window closed, no action", () => {
@@ -161,7 +170,7 @@ test("paid BUY past 24h: window closed, no action", () => {
     baseOrder({ status: "paid", type: "buy" }),
     PLACED_AT_MS + elapsed,
   );
-  assert.strictEqual(out.statusText, "Paid · dispute window closed");
+  assert.strictEqual(out.statusText, "Paid · review window closed");
   assert.deepStrictEqual(out.action, { kind: "none" });
 });
 
@@ -197,22 +206,30 @@ test("completed SELL before window opens: status carries countdown", () => {
   );
   assert.strictEqual(
     out.statusText,
-    `Completed · dispute opens in ${formatHelper(SELL_PAY_DISPUTE_OPEN_MS - elapsed)}`,
+    `Completed · review opens in ${formatHelper(SELL_PAY_DISPUTE_OPEN_MS - elapsed)}`,
   );
   assert.deepStrictEqual(out.action, { kind: "none" });
 });
 
-test("completed PAY inside window (1h elapsed): raise-dispute available", () => {
-  const elapsed = 60 * 60 * 1000; // 1h
+test("completed PAY inside window (1h elapsed): report-problem available", () => {
+  const elapsed = 60 * 60 * 1000;
   const out = computeOrderAction(
     baseOrder({ status: "completed", type: "pay" }),
     PLACED_AT_MS + elapsed,
   );
   assert.strictEqual(out.statusText, "Completed");
-  assert.deepStrictEqual(out.action, {
-    kind: "raise-dispute",
-    remainingMs: SELL_PAY_DISPUTE_CLOSE_MS - elapsed,
-  });
+  if (out.action.kind !== "report-problem") {
+    throw new Error("expected report-problem action");
+  }
+  assert.strictEqual(
+    out.action.remainingMs,
+    SELL_PAY_DISPUTE_CLOSE_MS - elapsed,
+  );
+  const windowMs = SELL_PAY_DISPUTE_CLOSE_MS - SELL_PAY_DISPUTE_OPEN_MS;
+  assert.strictEqual(
+    out.action.filled,
+    (SELL_PAY_DISPUTE_CLOSE_MS - elapsed) / windowMs,
+  );
 });
 
 test("completed SELL past 7d: window closed", () => {
@@ -221,7 +238,7 @@ test("completed SELL past 7d: window closed", () => {
     baseOrder({ status: "completed", type: "sell" }),
     PLACED_AT_MS + elapsed,
   );
-  assert.strictEqual(out.statusText, "Completed · dispute window closed");
+  assert.strictEqual(out.statusText, "Completed · review window closed");
   assert.deepStrictEqual(out.action, { kind: "none" });
 });
 
