@@ -1,5 +1,6 @@
 import {
   encryptPayload,
+  getFingerprint,
   getSignedHeaders,
   type FraudEngineSigner,
 } from "@p2pdotme/sdk/fraud-engine";
@@ -8,7 +9,21 @@ import type {
   PlaceOrderResult,
   ScreeningConfig,
 } from "../types";
-import { screeningApiError, classifyError, logP2PError, type P2PErrorContext } from "./errors";
+import {
+  classifyError,
+  logP2PError,
+  screeningApiError,
+  screeningRejectedError,
+  type P2PErrorContext,
+} from "./errors";
+
+interface B2BScreeningResponse {
+  activity_log_id: number | null;
+  approved?: boolean;
+  reason?: string | null;
+  message?: string | null;
+  restricted_until?: string | null;
+}
 
 interface ProcessArgs {
   signer: CheckoutSigner;
@@ -31,16 +46,33 @@ export async function processB2BBuyOrder(
     return args.placeOrder();
   }
 
-  let activityLogId: number | null = null;
+  // Fire-and-await fingerprint log first, with a short timeout.
+  // Doing this before the activity log ensures the backend cluster
+  // gate sees the most up-to-date wallet→fingerprint mapping for
+  // this device/domain. Failures are fail-open: a missing
+  // fingerprint must never block a buy.
   try {
-    activityLogId = await postB2BActivityLog(fraudSigner, args.screening);
+    await postFingerprintLog(fraudSigner, args.screening);
   } catch (err) {
-    // Fail-open: a fraud-engine outage must not block a buy. Log via the
-    // unified channel so the structured shape (cause chain, context) is
-    // preserved without surfacing a P2PError to the user.
     logP2PError(classifyError(err, ctx));
   }
 
+  // Fail-open semantics: transport-level errors (network, 5xx,
+  // signing) get logged and the order proceeds. Explicit
+  // `approved=false` from the backend, however, is a hard reject —
+  // we MUST NOT call placeOrder in that case.
+  let screeningResponse: B2BScreeningResponse | null = null;
+  try {
+    screeningResponse = await postB2BActivityLog(fraudSigner, args.screening);
+  } catch (err) {
+    logP2PError(classifyError(err, ctx));
+  }
+
+  if (screeningResponse && screeningResponse.approved === false) {
+    throw screeningRejectedError(screeningResponse, ctx);
+  }
+
+  const activityLogId = screeningResponse?.activity_log_id ?? null;
   const result = await args.placeOrder();
 
   if (activityLogId !== null) {
@@ -67,7 +99,7 @@ function toFraudEngineSigner(s: CheckoutSigner): FraudEngineSigner | null {
 async function postB2BActivityLog(
   signer: FraudEngineSigner,
   screening: ScreeningConfig,
-): Promise<number> {
+): Promise<B2BScreeningResponse> {
   const userAddress = signer.address.toLowerCase();
   const timestamp = Date.now();
   const aad = `b2b_buy_order|${userAddress}|${timestamp}`;
@@ -96,6 +128,10 @@ async function postB2BActivityLog(
       order_source: screening.orderSource,
     },
     device_details: getMinimalDeviceDetails(),
+    // Used by the backend B2B cluster gate to scope rejection to
+    // the originating product domain. Ecosystem wallets shared
+    // across products are not blocked across the whole ecosystem.
+    domain: getDomain(),
   });
 
   const encrypted = await encryptPayload(payload, aad, screening.encryptionKey);
@@ -118,14 +154,19 @@ async function postB2BActivityLog(
       user: userAddress,
     });
   }
-  const data = (await res.json()) as { activity_log_id: number | null };
-  if (data.activity_log_id == null) {
+  const data = (await res.json()) as B2BScreeningResponse;
+  // Reject responses legitimately omit activity_log_id only when the
+  // backend short-circuited before persisting (shouldn't happen, but
+  // defensively allow null on approved=false). For approved!=false
+  // we still require activity_log_id so the post-tx /link-order call
+  // has something to bind to.
+  if (data.approved !== false && data.activity_log_id == null) {
     throw screeningApiError(200, `${endpoint} (missing activity_log_id)`, {
       flow: "screening",
       user: userAddress,
     });
   }
-  return data.activity_log_id;
+  return data;
 }
 
 async function linkOrder(
@@ -187,4 +228,61 @@ function getMinimalDeviceDetails(): Record<string, unknown> {
 
 function trimSlash(s: string): string {
   return s.endsWith("/") ? s.slice(0, -1) : s;
+}
+
+/**
+ * Embedding hostname for B2B contexts. Stripped to hostname so
+ * scheme/port don't fragment clusters. Empty string in non-browser
+ * envs (SSR, jsdom missing window) — the backend treats empty as
+ * "unknown" and skips cluster filtering.
+ */
+function getDomain(): string {
+  if (typeof window !== "undefined" && window.location) {
+    return window.location.hostname || "";
+  }
+  return "";
+}
+
+/**
+ * POST /fingerprint-log. Fire-before-order so the backend cluster
+ * gate sees the freshest wallet→fingerprint mapping for this device.
+ * Short timeout + fail-open: a missing fingerprint must not block
+ * the buy.
+ */
+async function postFingerprintLog(
+  signer: FraudEngineSigner,
+  screening: ScreeningConfig,
+): Promise<void> {
+  const fingerprintResult = await getFingerprint(3000);
+  if (!fingerprintResult) {
+    return;
+  }
+  const userAddress = signer.address.toLowerCase();
+  const timestamp = Date.now();
+  const aad = `fingerprint|${userAddress}|${timestamp}`;
+  const payload = JSON.stringify({
+    fingerprint_id: fingerprintResult.visitorId,
+    is_b2b: true,
+    domain: getDomain(),
+  });
+  const encrypted = await encryptPayload(payload, aad, screening.encryptionKey);
+  const headers = await getSignedHeaders(signer, "fingerprint-log");
+
+  const endpoint = "/fingerprint-log";
+  const url = `${trimSlash(screening.apiUrl)}${endpoint}`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...headers },
+    body: JSON.stringify({
+      user_address: userAddress,
+      timestamp,
+      encrypted_payload: encrypted,
+    }),
+  });
+  if (!res.ok) {
+    throw screeningApiError(res.status, endpoint, {
+      flow: "screening",
+      user: userAddress,
+    });
+  }
 }
