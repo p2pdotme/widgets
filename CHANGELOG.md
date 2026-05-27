@@ -7,6 +7,48 @@ and the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format. While
 the package is `0.x`, minor releases may introduce additive prop changes;
 patch releases stay backward-compatible.
 
+## [1.1.2] — 2026-05-27
+
+### Added — B2B order filtering (`<PaymentHistory>`)
+
+- New `b2bOnly`, `integrators`, and `integratorNames` props. In B2B mode
+  the canonical order list is intersected with the connected user's
+  `b2Borders` subgraph set, so only genuine B2B orders (placed through an
+  integrator gateway) render. `integrators` further restricts the list to
+  an address allow-list (case-insensitive, implies `b2bOnly`), and rows
+  are tagged with their integrator label when the visible list spans more
+  than one.
+- New `core/b2b-orders` module — `fetchB2BMap` (the `b2Borders`
+  user→integrator lookup) plus the pure `filterPendingToB2B` /
+  `keepOnlyB2BPending` helpers — shared by the widget and the checkout gate.
+
+### Added — Screening hard-reject + device fingerprint
+
+- The opt-in B2B fraud screening flow now honours a backend
+  `approved: false` response as a **hard reject**: the order is not placed
+  and a `screeningRejectedError` is passed to `onError`.
+- A `POST /fingerprint-log` fires before the order is placed — fail-open
+  with a short timeout, so a missing fingerprint never blocks a buy — so
+  the backend cluster gate sees the freshest wallet→device mapping.
+- The activity-log payload now includes the originating `domain`, letting
+  the backend scope a rejection to the product domain (ecosystem wallets
+  are shared across apps).
+- New exported errors: `screeningRejectedError`, `screeningApiError`.
+
+### Changed
+
+- Checkout concurrency gate narrows the host's pending-order list to the
+  user's B2B orders (via `keepOnlyB2BPending`) before deciding whether to
+  block a new placement. Legacy retail orders — including ones stuck
+  "pending" from before auto-cancellation existed — no longer gate. Falls
+  back to the prior behaviour if the subgraph lookup can't run.
+
+### Notes
+- All additions are non-breaking; existing consumers see no behavioural
+  change unless they opt into `b2bOnly` / `integrators` or `screening`.
+- typecheck + examples typecheck + tests + ESM/CJS/dts build all clean
+  (`npm run verify`).
+
 ## [1.1.0] — 2026-05-15
 
 ### Added — Smart per-row action layout (`<PaymentHistoryWithSupport>`)
