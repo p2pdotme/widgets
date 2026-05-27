@@ -665,6 +665,57 @@ catches up.
 an immediate refetch (useful from the same `onComplete` / `onCancel`
 handlers).
 
+### B2B-only history
+
+By default the list shows **all** of the user's orders (retail + B2B). To
+show only orders placed through a B2B integrator gateway, set `b2bOnly` —
+or, to scope to specific integrators, pass `integrators`.
+
+There's no separate "is this B2B?" flag on a plain order: B2B orders are
+identified by a companion `b2Borders` subgraph query keyed on the connected
+user, intersected with the order list. So this needs nothing beyond the
+`subgraphUrl` you already pass.
+
+**Adding integrator addresses.** The `integrators` allow-list takes the
+**on-chain integrator contract address(es)** — the same address P2P
+registered for you via `B2BGatewayFacet.registerIntegrator(...)` (see
+[Prerequisites](#prerequisites)). It's your own integrator contract, so you
+already have it (e.g. the `INTEGRATOR_ADDRESS` from the buy-flow example).
+Matching is case-insensitive.
+
+- **Omit `integrators` (or pass `[]`)** → every B2B order the user has, across
+  *all* integrators, including ones P2P has since deactivated ("old"
+  integrators). Useful for an ecosystem-wide "your P2P purchases" view.
+- **Pass one or more addresses** → only B2B orders placed through those
+  integrators. Passing a non-empty list implies `b2bOnly`, so you don't need
+  both.
+
+Since integrators are addresses on-chain (no names), pass `integratorNames`
+to label them. The label only renders as a per-row tag when the visible list
+spans **more than one** integrator — for a single-integrator list it's
+suppressed as redundant.
+
+```tsx
+<PaymentHistory
+  signer={signer}
+  subgraphUrl={SUBGRAPH_URL}
+  usdcAddress={USDC_ADDRESS}
+  chainId={84532}
+  filter="all"
+  // Only this integrator's B2B orders (implies b2bOnly):
+  integrators={["0x4eEe0701b53A031B510468fe4b9C6523Aa21613a"]}
+  // Optional friendly labels (shown when >1 integrator is visible):
+  integratorNames={{
+    "0x4eEe0701b53A031B510468fe4b9C6523Aa21613a": "Acme Checkout",
+  }}
+/>
+```
+
+> **Pagination note.** The order list is fetched newest-first up to `limit`
+> (default 20, mixing retail + B2B) and the B2B intersection is applied
+> client-side. A user with more than `limit` total orders may not see older
+> B2B orders — raise `limit` (max 100) for B2B-heavy histories.
+
 ### `<PaymentHistory>` props
 
 | Prop | Type | Required | Notes |
@@ -684,6 +735,9 @@ handlers).
 | `refreshKey` | `number \| string` | — | Bump to force an immediate refetch. |
 | `optimisticUpdates` | `Record<string, "completed" \| "cancelled">` | — | Local terminal-status overlay. Pass a stable reference. |
 | `pollIntervalMs` | `number` | — | Auto-poll cadence while pending exists. Default `15000`. `0` disables. |
+| `b2bOnly` | `boolean` | — | Show only B2B orders. See [B2B-only history](#b2b-only-history). |
+| `integrators` | `string[]` | — | Allow-list of integrator contract addresses (case-insensitive). Non-empty ⇒ implies `b2bOnly`. Omit/`[]` ⇒ all of the user's B2B orders across every integrator. |
+| `integratorNames` | `Record<string, string>` | — | Address → display-name map for the per-row integrator tag. Case-insensitive; unmapped integrators fall back to a shortened address. |
 | `theme` | `P2PTheme` | — | Optional visual overrides. See [Theming](#theming). |
 
 ---
@@ -1343,7 +1397,7 @@ Type-only exports include `CheckoutProps`, `CashoutProps`,
 `CurrencyOption`, `PaymentAddressValidator`, `ScreeningConfig`,
 `ScreeningOrderDetails`, and `ScreeningUserDetails`.
 
----
+---cla
 
 ## Fraud screening (B2B)
 
