@@ -27,6 +27,7 @@ import { DEMO_FIAT_RATE } from "./config";
 import { processB2BBuyOrder } from "./b2b-fraud-engine";
 import { getActiveOrder, setActiveOrder, removeActiveOrder, keyFor, type ActiveOrderKey } from "./active-orders-store";
 import { computeGateDecision, type GateDecision } from "./credit-math";
+import { keepOnlyB2BPending } from "./b2b-orders";
 import {
   toP2PError,
   noEligibleMerchantsError,
@@ -413,8 +414,16 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
           opts.fetchPendingOrders!(userAddr),
         ]);
         if (cancelled) return;
-        const gate = computeGateDecision(credit, pending, opts.usdcAmount);
-        dispatch({ type: "CREDIT_LOADED", credit, pending, gate });
+        // Only B2B orders (placed through an integrator gateway) can race the
+        // integrator's proxy credit, so only they should gate a new placement.
+        // Narrow the host's pending list to the user's B2B order set from the
+        // subgraph; legacy retail orders — including ones stuck "pending"
+        // forever from before auto-cancellation existed — fall out and no
+        // longer block. Resilient: passes through unchanged if it can't run.
+        const b2bPending = await keepOnlyB2BPending(pending, opts.subgraphUrl, userAddr);
+        if (cancelled) return;
+        const gate = computeGateDecision(credit, b2bPending, opts.usdcAmount);
+        dispatch({ type: "CREDIT_LOADED", credit, pending: b2bPending, gate });
         // Auto-resume side effect: when the gate decides to flip into
         // tracking-only mode for a matching pending order, do it here
         // (the reducer can't fetch chain state — the regular polling
