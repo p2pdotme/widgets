@@ -29,11 +29,15 @@ jobs:
       - name: Typecheck (src)
         run: npm run typecheck
 
+      # Build before the examples typecheck: examples import the package by
+      # name (`@p2pdotme/widgets`), which resolves through `exports` to
+      # `dist/*.d.ts`. Without a prior build those declarations don't exist
+      # in a fresh `npm ci` checkout and the examples typecheck fails.
+      - name: Build
+        run: npm run build
+
       - name: Typecheck (examples)
         run: npm run typecheck:examples
 
       - name: Test
         run: npm run test
-
-      - name: Build
-        run: npm run build
