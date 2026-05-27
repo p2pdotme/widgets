@@ -41,6 +41,7 @@ export type P2PErrorCode =
   | "ROUTING_MISSING_INPUTS"
   | "SCREENING_API_ERROR"
   | "SCREENING_SIGN_REJECTED"
+  | "SCREENING_REJECTED"
   | "ENCRYPTION_FAILED"
   | "ENCRYPTION_PREFLIGHT_FAILED"
   | "ORDER_BAD_STATUS"
@@ -685,4 +686,70 @@ export function screeningApiError(
     retryable: true,
     context: ctx,
   });
+}
+
+/**
+ * Backend explicitly rejected the order at the screening gate
+ * (`approved=false`). Distinct from `screeningApiError`, which is a
+ * fail-open transport-level failure. Carries `reason` so the host can
+ * render a tailored message; `restrictedUntil` is set when
+ * `reason==='user_restricted'`.
+ */
+export function screeningRejectedError(
+  res: {
+    reason?: string | null;
+    message?: string | null;
+    restricted_until?: string | null;
+  },
+  ctx: P2PErrorContext,
+): P2PError {
+  const reason = res.reason ?? "unknown";
+  const restrictedUntil = res.restricted_until ?? undefined;
+
+  let userMessage: string;
+  if (reason === "user_restricted") {
+    const suffix = restrictedUntil
+      ? ` Try again after ${formatRestrictionTime(restrictedUntil)}.`
+      : " Try again later.";
+    userMessage =
+      "Your account is temporarily restricted due to repeated cancellations." +
+      suffix;
+  } else if (reason === "cluster_blacklisted") {
+    userMessage =
+      "This order cannot be processed. Please contact support if you believe this is in error.";
+  } else {
+    userMessage =
+      res.message ||
+      "This order cannot be processed. Please contact support if you believe this is in error.";
+  }
+
+  return new P2PError({
+    code: "SCREENING_REJECTED",
+    category: "screening",
+    userMessage,
+    devMessage: `Screening rejected (reason=${reason})`,
+    retryable: false,
+    context: { ...ctx, screeningReason: reason, restrictedUntil },
+  });
+}
+
+function formatRestrictionTime(iso: string): string {
+  try {
+    const until = new Date(iso);
+    const ms = until.getTime() - Date.now();
+    if (!Number.isFinite(ms) || ms <= 0) {
+      return "shortly";
+    }
+    const totalMinutes = Math.ceil(ms / 60_000);
+    if (totalMinutes < 60) {
+      return `${totalMinutes} minute${totalMinutes === 1 ? "" : "s"}`;
+    }
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+    return minutes === 0
+      ? `${hours} hour${hours === 1 ? "" : "s"}`
+      : `${hours}h ${minutes}m`;
+  } catch {
+    return "shortly";
+  }
 }

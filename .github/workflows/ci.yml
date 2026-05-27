@@ -13,7 +13,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: [18.x, 20.x]
+        # `npm test` runs the core suite via `node --experimental-strip-types`,
+        # which requires Node >= 22.6. The published dist still supports the
+        # `engines.node >=18` floor at runtime; this matrix only covers the
+        # TS-native dev/test tooling.
+        node-version: [22.x, 24.x]
     steps:
       - uses: actions/checkout@v4
 
@@ -29,11 +33,15 @@ jobs:
       - name: Typecheck (src)
         run: npm run typecheck
 
+      # Build before the examples typecheck: examples import the package by
+      # name (`@p2pdotme/widgets`), which resolves through `exports` to
+      # `dist/*.d.ts`. Without a prior build those declarations don't exist
+      # in a fresh `npm ci` checkout and the examples typecheck fails.
+      - name: Build
+        run: npm run build
+
       - name: Typecheck (examples)
         run: npm run typecheck:examples
 
       - name: Test
         run: npm run test
-
-      - name: Build
-        run: npm run build

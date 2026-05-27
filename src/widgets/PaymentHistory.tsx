@@ -10,6 +10,7 @@ import { DEFAULT_DIAMOND_ADDRESS, DIAMOND_ABI, USDC_DECIMALS } from "../core/con
 import { color, radius, font, weight, S, themeToCssVars, type P2PTheme } from "../ui/theme";
 import { Spinner, CenterStatus, injectKeyframes } from "../ui/components";
 import { isOrderActionable } from "../core/order-action";
+import { fetchB2BMap, type B2BOrderMeta } from "../core/b2b-orders";
 import type { CheckoutSigner } from "../types";
 
 export interface PaymentHistoryProps {
@@ -95,6 +96,34 @@ export interface PaymentHistoryProps {
    * (manual refetch via `refreshKey` only). Default: 15000.
    */
   pollIntervalMs?: number;
+  /**
+   * Restrict the list to B2B orders only (orders placed through a B2B
+   * integrator gateway). Implied when `integrators` is non-empty.
+   *
+   * B2B orders are identified by a companion `b2Borders` subgraph query
+   * keyed on the connected user — the canonical order list is intersected
+   * with that set, so a row shows only when it's a genuine B2B order.
+   *
+   * NOTE: the SDK fetches the most-recent `limit` orders (B2B + retail) and
+   * the intersection happens client-side, so a user with more than `limit`
+   * total orders may not see older B2B orders. Raise `limit` for B2B-heavy
+   * histories.
+   */
+  b2bOnly?: boolean;
+  /**
+   * Allow-list of integrator contract addresses (case-insensitive). When
+   * non-empty, only B2B orders placed through one of these integrators are
+   * shown (and B2B-only mode is implied). Omit or pass `[]` to show the
+   * user's B2B orders across every integrator, including deactivated ones.
+   */
+  integrators?: string[];
+  /**
+   * Optional address → display-name map for labeling integrators. Used for
+   * the per-row integrator tag (shown only when the visible list spans more
+   * than one integrator). Unmapped integrators fall back to a shortened
+   * address. Lookup is case-insensitive.
+   */
+  integratorNames?: Record<string, string>;
   /** Optional theming overrides. See `P2PTheme` for the surface. */
   theme?: P2PTheme;
 }
@@ -110,9 +139,25 @@ export function PaymentHistory(props: PaymentHistoryProps) {
     refreshKey,
     optimisticUpdates,
     pollIntervalMs = 15_000,
+    b2bOnly,
+    integrators,
+    integratorNames,
     theme,
   } = props;
   const themeStyle = themeToCssVars(theme);
+
+  // Stable, lowercased key for the integrator allow-list so prop identity
+  // churn (a fresh array literal each render) doesn't retrigger effects.
+  const integratorsKey = (integrators ?? [])
+    .map((a) => a.toLowerCase())
+    .sort()
+    .join(",");
+  // B2B mode is on when explicitly requested or when an allow-list is given.
+  const b2bMode = b2bOnly === true || integratorsKey.length > 0;
+  const integratorFilter = useMemo(
+    () => (integratorsKey ? new Set(integratorsKey.split(",")) : null),
+    [integratorsKey],
+  );
   const hideWhenEmpty =
     props.hideWhenEmpty ?? (filter === "pending" || filter === "actionable");
   const title =
@@ -126,6 +171,8 @@ export function PaymentHistory(props: PaymentHistoryProps) {
   const [orders, setOrders] = useState<Order[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  // orderId (decimal string) → owning integrator, populated only in B2B mode.
+  const [b2bMap, setB2bMap] = useState<Map<string, B2BOrderMeta> | null>(null);
   // Per-currency on-chain config — fetched lazily for currencies that have
   // at least one order missing `actualFiatAmount` (i.e. pre-acceptance:
   // placed orders and orders cancelled before a merchant accepted). Lets us
@@ -149,15 +196,22 @@ export function PaymentHistory(props: PaymentHistoryProps) {
         subgraphUrl,
         relayIdentityStore: createLocalStorageRelayStore(),
       });
-      const result = await client.getOrders({ userAddress: signer.address, skip: 0, limit });
+      // Fetch the canonical order list and (in B2B mode) the user's B2B
+      // order→integrator map together so they land in the same render and
+      // the list never flickers through a "no orders" frame.
+      const [result, b2b] = await Promise.all([
+        client.getOrders({ userAddress: signer.address, skip: 0, limit }),
+        b2bMode ? fetchB2BMap(subgraphUrl, signer.address) : Promise.resolve(null),
+      ]);
       if (result.isErr()) throw result.error;
       setOrders(result.value);
+      setB2bMap(b2b);
     } catch (err: any) {
       setError(err?.message ?? "Failed to fetch orders");
     } finally {
       setLoading(false);
     }
-  }, [signer?.address, subgraphUrl, usdcAddress, chainId, diamondAddress, rpcUrl, limit]);
+  }, [signer?.address, subgraphUrl, usdcAddress, chainId, diamondAddress, rpcUrl, limit, b2bMode]);
 
   useEffect(() => { fetchOrders(); }, [fetchOrders, refreshKey]);
 
@@ -227,7 +281,34 @@ export function PaymentHistory(props: PaymentHistoryProps) {
     return override ? { ...o, status: override } : o;
   });
 
-  const allOrders = overlaidOrders;
+  // B2B filtering: keep only orders present in the B2B map (genuine B2B
+  // orders), and — when an allow-list is set — only those whose owning
+  // integrator is on it. In non-B2B mode this is a no-op pass-through.
+  const allOrders = b2bMode
+    ? overlaidOrders.filter((o) => {
+        const meta = b2bMap?.get(o.orderId.toString());
+        if (!meta) return false;
+        if (integratorFilter && !integratorFilter.has(meta.integrator)) return false;
+        return true;
+      })
+    : overlaidOrders;
+
+  // Tag rows with their integrator only when the visible list spans more
+  // than one — for a single-integrator list the heading already implies it.
+  const showIntegratorTag =
+    b2bMode &&
+    !!b2bMap &&
+    new Set(
+      allOrders
+        .map((o) => b2bMap.get(o.orderId.toString())?.integrator)
+        .filter((x): x is string => !!x),
+    ).size > 1;
+  const integratorLabelFor = (o: Order): string | undefined => {
+    if (!showIntegratorTag || !b2bMap) return undefined;
+    const meta = b2bMap.get(o.orderId.toString());
+    return meta ? resolveIntegratorLabel(meta.integrator, integratorNames) : undefined;
+  };
+
   const pending = allOrders.filter((o) => PENDING_STATUSES.includes(o.status));
   // For "actionable" mode, past orders are kept only when they still surface
   // a user action (in-window cancelled-with-funds → Contact Support chip,
@@ -299,7 +380,7 @@ export function PaymentHistory(props: PaymentHistoryProps) {
           {past.length > 0 && <p style={{ ...S.label, marginBottom: 8 }}>Pending</p>}
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {pending.map((o) => (
-              <OrderRow key={o.orderId.toString()} order={o} onResume={onResume} renderRowAction={renderRowAction} renderRowBadge={renderRowBadge} highlight config={currencyConfigs[o.currency]} />
+              <OrderRow key={o.orderId.toString()} order={o} onResume={onResume} renderRowAction={renderRowAction} renderRowBadge={renderRowBadge} highlight config={currencyConfigs[o.currency]} integratorLabel={integratorLabelFor(o)} />
             ))}
           </div>
         </div>
@@ -310,7 +391,7 @@ export function PaymentHistory(props: PaymentHistoryProps) {
           {pending.length > 0 && <p style={{ ...S.label, marginBottom: 8 }}>Past</p>}
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {past.map((o) => (
-              <OrderRow key={o.orderId.toString()} order={o} onResume={onResume} renderRowAction={renderRowAction} renderRowBadge={renderRowBadge} config={currencyConfigs[o.currency]} />
+              <OrderRow key={o.orderId.toString()} order={o} onResume={onResume} renderRowAction={renderRowAction} renderRowBadge={renderRowBadge} config={currencyConfigs[o.currency]} integratorLabel={integratorLabelFor(o)} />
             ))}
           </div>
         </div>
@@ -319,13 +400,14 @@ export function PaymentHistory(props: PaymentHistoryProps) {
   );
 }
 
-function OrderRow({ order, onResume, renderRowAction, renderRowBadge, highlight, config }: {
+function OrderRow({ order, onResume, renderRowAction, renderRowBadge, highlight, config, integratorLabel }: {
   order: Order;
   onResume?: (orderId: string) => void;
   renderRowAction?: (order: Order) => React.ReactNode;
   renderRowBadge?: (order: Order) => React.ReactNode;
   highlight?: boolean;
   config?: { buyPrice: bigint; smallOrderThreshold: bigint; smallOrderFixedFee: bigint };
+  integratorLabel?: string;
 }) {
   const isPending = PENDING_STATUSES.includes(order.status);
   // Source-of-truth precedence for the gross fiat the user paid (or would
@@ -399,6 +481,16 @@ function OrderRow({ order, onResume, renderRowAction, renderRowBadge, highlight,
             <DisputeBadge status={order.disputeStatus} />
           ) : null}
           <span style={{ ...S.faint, ...S.mono }}>#{order.orderId.toString()}</span>
+          {integratorLabel ? (
+            <span style={{
+              padding: "2px 8px", borderRadius: radius.pill,
+              background: color.surfaceAlt, color: color.textMuted,
+              fontSize: font.xs, fontWeight: weight.medium,
+              maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+            }}>
+              {integratorLabel}
+            </span>
+          ) : null}
         </div>
         <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
           <span style={{ fontSize: font.base, fontWeight: weight.semibold, ...S.num }}>{order.currency} {fiat}</span>
@@ -470,6 +562,27 @@ function StatusBadge({ status }: { status: Order["status"] }) {
       {label}
     </span>
   );
+}
+
+// ─── B2B integrator labels ───────────────────────────────────────────
+// `B2BOrderMeta` + `fetchB2BMap` (the `b2Borders` subgraph lookup) live in
+// `../core/b2b-orders` so the checkout concurrency gate can reuse them.
+
+function shortenAddress(a: string): string {
+  return a.length > 10 ? `${a.slice(0, 6)}…${a.slice(-4)}` : a;
+}
+
+/** Resolve a display label for an integrator address (case-insensitive map). */
+function resolveIntegratorLabel(
+  address: string,
+  names?: Record<string, string>,
+): string {
+  if (names) {
+    for (const [k, v] of Object.entries(names)) {
+      if (k.toLowerCase() === address) return v;
+    }
+  }
+  return shortenAddress(address);
 }
 
 function relativeTime(ts: number): string {
