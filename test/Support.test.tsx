@@ -292,6 +292,17 @@ describe("Support", () => {
     });
   });
 
+  it("renders the customer launcher with originApp omitted (now optional)", async () => {
+    render(
+      <Support signer={stubSigner} bridgeUrl="https://bridge.local" />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /open support/i }));
+    // Falls back to a neutral label in the privacy notice; no crash.
+    await waitFor(() =>
+      expect(screen.getByText(/support request registered/i)).toBeInTheDocument(),
+    );
+  });
+
   it("closes the modal on backdrop click", async () => {
     const onClose = vi.fn();
     render(
