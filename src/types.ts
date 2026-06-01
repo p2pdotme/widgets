@@ -410,6 +410,24 @@ export type SupportRole = "user" | "merchant" | "circle_admin" | "ops";
 export type SupportStatus = "none" | "open" | "resolved";
 
 /**
+ * The four operator-set tags written to the Chatwoot conversation's
+ * `custom_attributes.p2p_tag` (D-027-v2). Read by the customer surface and
+ * mapped to friendly copy via `friendlyP2PTagCopy`; written by the ops
+ * surface via the tag dropdown.
+ */
+export type SupportP2PTag =
+  | "awaiting_user"
+  | "reviewing"
+  | "evidence"
+  | "escalated";
+
+/**
+ * Chatwoot conversation status as surfaced by the ops `/ops/orders/:id/thread`
+ * read. `null` when the order has no conversation yet.
+ */
+export type SupportChatStatus = "open" | "pending" | "snoozed" | "resolved";
+
+/**
  * Minimal wallet abstraction the support widget accepts. Structurally
  * narrower than `CheckoutSigner` — only `address` + `signMessage`. A
  * `CheckoutSigner` is a valid `SupportSigner` (its `signMessage` is
@@ -436,7 +454,27 @@ export interface SupportSigner {
 
 export interface SupportProps {
   orderId?: string;
-  originApp: string;
+  /**
+   * Which surface to render. `"customer"` (default) is the per-order
+   * launcher modal that boots Chatwoot. `"ops"` renders `OpsSupportPanel`
+   * — the operator-facing read/reply/tag/resolve surface that talks to the
+   * bridge's `/ops/*` routes (D-027-v2). `chatEnabled` is honored in
+   * customer mode only; ops mode is always live.
+   */
+  mode?: "customer" | "ops";
+  /**
+   * Container layout. `"modal"` (default) wraps the surface in the dialog
+   * modal. `"inline"` renders it in flow. `"side-rail"` renders a right
+   * rail that collapses to inline below the `lg` breakpoint. Primarily for
+   * `mode="ops"`; the customer launcher always uses its own modal.
+   */
+  layout?: "modal" | "inline" | "side-rail";
+  /**
+   * Optional label for the surface header. Required in customer mode where
+   * it names the host app in the privacy notice; optional in ops mode.
+   * Defaults to a neutral label when omitted.
+   */
+  originApp?: string;
   signer: SupportSigner;
   bridgeUrl: string;
   /**
@@ -468,6 +506,12 @@ export interface SupportProps {
   theme?: SupportTheme;
   onOpen?: () => void;
   onClose?: () => void;
+  /**
+   * `mode="ops"` only. Fired after the operator resolves the chat (the
+   * bridge `POST /ops/orders/:id/resolve` succeeds). Hosts use this to
+   * refresh their own dispute/timeline view.
+   */
+  onChatResolved?: () => void;
 }
 
 export interface SupportSessionChatwoot {
