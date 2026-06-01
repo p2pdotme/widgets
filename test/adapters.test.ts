@@ -39,6 +39,29 @@ describe("fromPrivyWallet", () => {
     const signer = fromPrivyWallet(wallet);
     expect(await signer.signMessage!("m")).toBe("0xfeed");
   });
+
+  it("carries chainId through when supplied (multi-signer sign-in, D-027-v3 §4)", () => {
+    const wallet = {
+      address: "0xABCD000000000000000000000000000000000001",
+      chainId: 8453,
+      getEthereumProvider: vi.fn(async () => ({
+        request: vi.fn(async () => "0xdeadbeef"),
+      })),
+    };
+    const signer = fromPrivyWallet(wallet);
+    expect(signer.chainId).toBe(8453);
+  });
+
+  it("leaves chainId undefined when the wallet omits it", () => {
+    const wallet = {
+      address: "0xABCD000000000000000000000000000000000001",
+      getEthereumProvider: vi.fn(async () => ({
+        request: vi.fn(async () => "0xdeadbeef"),
+      })),
+    };
+    const signer = fromPrivyWallet(wallet);
+    expect(signer.chainId).toBeUndefined();
+  });
 });
 
 describe("fromThirdwebAccount", () => {
@@ -61,5 +84,15 @@ describe("fromThirdwebAccount", () => {
     const sig = await signer.signMessage!("hello world");
     expect(sig).toBe("0xabc");
     expect(signMessage).toHaveBeenCalledWith({ message: "hello world" });
+  });
+
+  it("carries chainId through when supplied (multi-signer sign-in, D-027-v3 §4)", () => {
+    const account = {
+      address: "0xABCD000000000000000000000000000000000002",
+      chainId: 84532,
+      signMessage: vi.fn(async () => "0xabc"),
+    };
+    const signer = fromThirdwebAccount(account);
+    expect(signer.chainId).toBe(84532);
   });
 });

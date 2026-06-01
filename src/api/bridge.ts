@@ -7,8 +7,29 @@ import type { SupportSigner } from "../types";
 
 const SIGN_IN_PURPOSE = "support.p2p.me:sign-in";
 
+/**
+ * Chain bound into the sign-in message + body when the signer does not carry
+ * its own `chainId`. Base Sepolia (84532), matching the widget's default
+ * across `contracts.ts`, `useOrderStates`, and the order machines.
+ */
+const DEFAULT_SUPPORT_CHAIN_ID = 84532;
+
 function trim(url: string): string {
   return url.replace(/\/$/, "");
+}
+
+/**
+ * Build the bridge sign-in message. MUST match the bridge's `buildSignMessage`
+ * exactly (D-027-v3 §4): `${purpose}:${address.toLowerCase()}:${chainId}:${timestamp}`.
+ * `chainId` is bound into the signed string (not merely sent as a sidecar)
+ * so a signature cannot be replayed against a verifier on another chain.
+ */
+export function buildSignMessage(
+  address: string,
+  chainId: number,
+  timestamp: number,
+): string {
+  return `${SIGN_IN_PURPOSE}:${address.toLowerCase()}:${chainId}:${timestamp}`;
 }
 
 export async function signInWithBridge(opts: {
@@ -22,13 +43,15 @@ export async function signInWithBridge(opts: {
     throw new Error("signer.signMessage is required to open support");
   }
   const timestamp = Date.now();
-  const message = `${SIGN_IN_PURPOSE}:${opts.signer.address.toLowerCase()}:${timestamp}`;
+  const chainId = opts.signer.chainId ?? DEFAULT_SUPPORT_CHAIN_ID;
+  const message = buildSignMessage(opts.signer.address, chainId, timestamp);
   const signature = await opts.signer.signMessage(message);
   const res = await fetch(`${trim(opts.bridgeUrl)}/auth/sign-in`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       address: opts.signer.address,
+      chainId,
       timestamp,
       signature,
       ...(opts.orderId ? { orderId: opts.orderId } : {}),

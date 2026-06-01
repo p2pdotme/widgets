@@ -8,6 +8,13 @@ import type { SupportSigner } from "../types";
 
 export interface ThirdwebAccountLike {
   address: string;
+  /**
+   * Numeric chain id of the connected account, if the host tracks it.
+   * Thirdweb resolves this from the active `Chain`; pass `chain.id` here
+   * (or omit and let the sign-in path default). Bound into the bridge
+   * sign-in per D-027-v3 §4.
+   */
+  chainId?: number;
   signMessage: (args: { message: string }) => Promise<string>;
 }
 
@@ -18,6 +25,7 @@ export interface ThirdwebAccountLike {
 export function fromThirdwebAccount(account: ThirdwebAccountLike): SupportSigner {
   return {
     address: account.address as `0x${string}`,
+    chainId: account.chainId,
     signMessage: (message: string) => account.signMessage({ message }),
   };
 }

@@ -412,6 +412,15 @@ export type SupportStatus = "none" | "open" | "resolved";
 export interface SupportSigner {
   address: `0x${string}`;
   signMessage?: (message: string) => Promise<string>;
+  /**
+   * The chain the wallet is on (e.g. 8453 Base, 84532 Base Sepolia). Bound
+   * into the bridge sign-in message and POST body per D-027-v3 §4 so an
+   * ERC-1271 / ERC-6492 signature is verified on the chain where the wallet
+   * is deployed and cannot be replayed cross-chain. Omit for EOAs that do
+   * not track a chain — the sign-in path defaults to Base Sepolia (84532),
+   * matching the rest of the widget.
+   */
+  chainId?: number;
 }
 
 export interface SupportProps {

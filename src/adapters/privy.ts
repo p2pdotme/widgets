@@ -9,6 +9,13 @@ import type { SupportSigner } from "../types";
 
 export interface PrivyWalletLike {
   address: string;
+  /**
+   * Numeric chain id of the wallet, if the host tracks it. Privy's
+   * `ConnectedWallet` exposes `chainId` as a CAIP-2 string
+   * (`"eip155:8453"`); pass the numeric form here (or omit and let the
+   * sign-in path default). Bound into the bridge sign-in per D-027-v3 §4.
+   */
+  chainId?: number;
   getEthereumProvider: () => Promise<EthereumProviderLike> | EthereumProviderLike;
 }
 
@@ -29,6 +36,7 @@ export function fromPrivyWallet(wallet: PrivyWalletLike): SupportSigner {
   const address = wallet.address as `0x${string}`;
   return {
     address,
+    chainId: wallet.chainId,
     signMessage: async (message: string) => {
       const provider = await wallet.getEthereumProvider();
       const signature = (await provider.request({
