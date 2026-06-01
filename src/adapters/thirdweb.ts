@@ -38,7 +38,7 @@ export function fromThirdwebAccount(account: ThirdwebAccountLike): SupportSigner
     // unresolvable chain surfaces as a rejected promise.
     getChainId: async () => {
       const id = account.getChain?.()?.id;
-      if (typeof id !== "number" || !Number.isFinite(id)) {
+      if (typeof id !== "number" || !Number.isInteger(id) || id <= 0) {
         throw new Error(
           "fromThirdwebAccount: could not resolve a numeric chainId from the active chain",
         );
