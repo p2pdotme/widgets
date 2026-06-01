@@ -47,6 +47,19 @@ vi.mock("../src/widgets/PaymentHistory", () => ({
   },
 }));
 
+// Smart-mode rows render <OrderAction> in the action slot, which calls
+// computeOrderAction() over a full SDK Order + pulls in the chatwoot chip.
+// The legacy chat-mode tests never touch it. Stub it so the smart-mode
+// banner test (below) can render with the lightweight mock rows and assert
+// purely on the customer banner surface.
+vi.mock("../src/widgets/OrderAction", () => ({
+  OrderAction: (props: { orderId: string }) => (
+    <button data-testid="stub-order-action" data-order-id={props.orderId}>
+      action
+    </button>
+  ),
+}));
+
 const stubSigner: SupportSigner = {
   address: "0x0000000000000000000000000000000000000001",
   signMessage: async (_message: string) => "0xsig",
@@ -250,6 +263,60 @@ describe("PaymentHistoryWithSupport", () => {
       expect((globalThis.fetch as any).mock.calls.length).toBeGreaterThan(0);
     });
     expect(signMessage).not.toHaveBeenCalled();
+  });
+
+  it("renders the customer P2P tag / resolved banner under the DEFAULT (smart) actionMode", async () => {
+    // The default layout renders <OrderAction> in the action slot. The
+    // customer-facing banner (D-027-v2) must still surface via the badge
+    // slot, otherwise the friendly p2p_tag copy + resolved lock are
+    // unreachable in the default config (the review gap this fixes).
+    mockFetch((input) => {
+      const url = String(input);
+      if (url.endsWith("/auth/me")) return { sub: stubSigner.address };
+      if (url.endsWith("/tickets/me")) {
+        return {
+          items: [
+            // order 42 → operator set the `reviewing` tag, conv still open.
+            { conversationId: 1, orderId: "42", status: "open", p2pTag: "reviewing", updatedAt: 1 },
+            // order 7 → conversation resolved → input-lock notice.
+            { conversationId: 2, orderId: "7", status: "resolved", updatedAt: 2 },
+          ],
+        };
+      }
+      return {};
+    });
+
+    const fresh = {
+      ok: true,
+      address: stubSigner.address,
+      role: "user",
+      chatwoot: null,
+      sessionToken: "stub.jwt.token",
+      expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000,
+    };
+    window.localStorage.setItem(
+      `support.p2p.me:session:https://bridge.local:${stubSigner.address.toLowerCase()}`,
+      JSON.stringify(fresh),
+    );
+
+    // No `actionMode` prop → exercises the default ("smart") layout.
+    render(<PaymentHistoryWithSupport {...baseProps} actionMode={undefined} />);
+
+    // Friendly tag copy on the tagged row (operator vocabulary never leaks).
+    await waitFor(() => {
+      expect(screen.getByText(/our team is reviewing/i)).toBeInTheDocument();
+    });
+    // Resolved row shows the "Chat closed by support" lock notice.
+    expect(screen.getByText(/chat closed by support/i)).toBeInTheDocument();
+
+    // Banners are scoped to the correct rows.
+    const row42 = document.querySelector('[data-row="42"]');
+    const row7 = document.querySelector('[data-row="7"]');
+    expect(row42?.querySelector('[data-p2p-tag-banner="reviewing"]')).not.toBeNull();
+    expect(row7?.querySelector('[data-p2p-tag-banner="resolved"]')).not.toBeNull();
+    // A row with neither a tag nor a resolved status carries no banner.
+    const row999 = document.querySelector('[data-row="999"]');
+    expect(row999?.querySelector("[data-p2p-tag-banner]")).toBeNull();
   });
 
   it("refreshes silently when the cached /auth/me returns 401", async () => {

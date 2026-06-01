@@ -133,6 +133,22 @@ export function PaymentHistoryWithSupport(
       <PaymentHistory
         {...orderHistoryProps}
         onResume={undefined}
+        // Same customer-facing decoration as the legacy chat path: the
+        // active-support pip plus the D-027-v2 P2P tag / resolved banner.
+        // Without this the friendly tag copy and "Chat closed by support"
+        // lock are unreachable under the default smart layout.
+        renderRowBadge={(order: { orderId: { toString(): string } }) => {
+          const id = order.orderId.toString();
+          const tagged = tagByOrder.get(id);
+          return (
+            <>
+              {activeOrderIds.has(id) ? <ActiveSupportPip /> : null}
+              {tagged ? (
+                <P2PTagBanner tag={tagged.p2pTag} status={tagged.status} />
+              ) : null}
+            </>
+          );
+        }}
         renderRowAction={(order: Order) => (
           <OrderAction
             orderId={order.orderId.toString()}
