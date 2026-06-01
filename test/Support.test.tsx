@@ -6,6 +6,7 @@ import type { SupportSigner } from "../src/types";
 const stubSigner: SupportSigner = {
   address: "0x0000000000000000000000000000000000000001",
   signMessage: async (_message: string) => "0xdeadbeef",
+  getChainId: async () => 84532,
 };
 
 const stubSession = {
@@ -134,7 +135,11 @@ describe("Support", () => {
       <Support
         orderId="0xabcdef1234567890"
         originApp="merchant-demo"
-        signer={{ address: stubSigner.address, signMessage: signSpy, chainId: 8453 }}
+        signer={{
+          address: stubSigner.address,
+          signMessage: signSpy,
+          getChainId: async () => 8453,
+        }}
         bridgeUrl="https://bridge.local/"
         chatEnabled
       />,
@@ -162,8 +167,9 @@ describe("Support", () => {
     expect(msg).toContain(`:${body.chainId}:${body.timestamp}`);
   });
 
-  it("defaults the sign-in chainId to Base Sepolia (84532) when the signer omits it", async () => {
+  it("surfaces a retryable error and never hits the bridge when the signer cannot resolve a chainId (hard cutover, no silent default)", async () => {
     const signSpy = vi.fn(async (_m: string) => "0xsig");
+    const fetchSpy = globalThis.fetch as any;
     render(
       <Support
         orderId="0xabcdef1234567890"
@@ -174,18 +180,12 @@ describe("Support", () => {
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: /open support/i }));
-    await waitFor(() => {
-      expect(signSpy).toHaveBeenCalledOnce();
-    });
-    const msg = signSpy.mock.calls[0]![0];
-    expect(msg).toMatch(/^support\.p2p\.me:sign-in:0x0+1:84532:\d+$/);
-
-    await waitFor(() => {
-      expect((globalThis.fetch as any).mock.calls.length).toBeGreaterThan(0);
-    });
-    const [, init] = (globalThis.fetch as any).mock.calls[0];
-    const body = JSON.parse(init.body);
-    expect(body.chainId).toBe(84532);
+    // chainId is mandatory: the flow throws before signing or POSTing.
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^retry$/i })).toBeInTheDocument(),
+    );
+    expect(signSpy).not.toHaveBeenCalled();
+    expect(fetchSpy.mock.calls.length).toBe(0);
   });
 
   it("classifies a 4xx sign-in failure as an auth error with a retry CTA", async () => {
@@ -224,7 +224,11 @@ describe("Support", () => {
     render(
       <Support
         originApp="merchant-demo"
-        signer={{ address: stubSigner.address, signMessage: reject }}
+        signer={{
+          address: stubSigner.address,
+          signMessage: reject,
+          getChainId: async () => 84532,
+        }}
         bridgeUrl="https://bridge.local"
         chatEnabled
       />,
