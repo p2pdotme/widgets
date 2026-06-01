@@ -42,6 +42,11 @@ import { color, radius, font, weight, S } from "../ui/theme";
 
 const POLL_INTERVAL_MS = 7_000;
 
+/** An optimistic ops reply. `id` is a temp negative value (stable React key
+ *  + rollback handle); `serverId` is filled with the real Chatwoot message id
+ *  once the POST resolves, and is what reconcile matches the polled thread on. */
+type OptimisticMessage = OpsThreadMessage & { serverId?: number };
+
 const TAG_OPTIONS: Array<{ value: SupportP2PTag; label: string }> = [
   { value: "awaiting_user", label: "Awaiting user" },
   { value: "reviewing", label: "Reviewing" },
@@ -75,8 +80,12 @@ export function OpsSupportPanel({
   const [sending, setSending] = useState(false);
   const [confirmResolve, setConfirmResolve] = useState(false);
   const [resolving, setResolving] = useState(false);
-  // Optimistic messages not yet seen in a poll. Keyed by temp negative id.
-  const [optimistic, setOptimistic] = useState<OpsThreadMessage[]>([]);
+  // Optimistic messages not yet seen in a poll. The React key stays the temp
+  // negative `id` (stable across the POST so the bubble never remounts); once
+  // the POST returns we stamp `serverId` with the real Chatwoot message id and
+  // reconcile on that. Reconciling on id (not content) keeps two identical
+  // replies as two bubbles instead of collapsing them into one.
+  const [optimistic, setOptimistic] = useState<OptimisticMessage[]>([]);
   // Optimistic tag override so the dropdown reflects the choice immediately.
   const [tagOverride, setTagOverride] = useState<
     SupportP2PTag | null | undefined
@@ -130,14 +139,15 @@ export function OpsSupportPanel({
       if (!mountedRef.current || !next) return;
       setThread(next);
       setLoadError(null);
-      // Reconcile optimism: drop temp messages whose content now appears in
-      // the real thread, and clear the tag override once the server agrees.
+      // Reconcile optimism: drop a temp message once its real counterpart
+      // (matched on the server id stamped after POST) appears in the polled
+      // thread, and clear the tag override once the server agrees. A temp
+      // whose POST hasn't resolved yet (no `serverId`) is kept until it does.
       setOptimistic((prev) =>
         prev.filter(
           (t) =>
-            !next.messages.some(
-              (m) => m.direction === "ops" && m.content === t.content,
-            ),
+            t.serverId === undefined ||
+            !next.messages.some((m) => m.id === t.serverId),
         ),
       );
       setTagOverride((ov) => (ov === undefined ? undefined : ov === next.p2pTag ? undefined : ov));
@@ -179,9 +189,18 @@ export function OpsSupportPanel({
     setOptimistic((prev) => [...prev, temp]);
     setDraft("");
     try {
-      await withAuth((token) =>
+      const result = await withAuth((token) =>
         postOpsMessage({ bridgeUrl, sessionToken: token, orderId, content }),
       );
+      // Stamp the real Chatwoot message id onto the temp bubble so reconcile
+      // dedups on id, not content (two identical replies stay two bubbles).
+      if (mountedRef.current && result) {
+        setOptimistic((prev) =>
+          prev.map((m) =>
+            m.id === temp.id ? { ...m, serverId: result.id } : m,
+          ),
+        );
+      }
       // Pull the canonical thread so the real message replaces the temp one.
       await loadThread();
     } catch {

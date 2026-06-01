@@ -217,6 +217,67 @@ describe("<Support mode=\"ops\">", () => {
     );
   });
 
+  it("keeps two identical replies as two bubbles (dedup by id, not content)", async () => {
+    // Two ops replies with the same text. The bridge returns distinct ids
+    // (51, 52). With id-based reconcile, polling that surfaces ONLY the
+    // first (id 51) must drop exactly one optimistic copy — leaving the
+    // second (id 52, not yet polled) intact. Content-based dedup would
+    // have collapsed both into one.
+    let postCount = 0;
+    let firstReplyLanded = false;
+    globalThis.fetch = vi.fn(async (url: string, init?: any) => {
+      const u = String(url);
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (u.endsWith("/messages") && method === "POST") {
+        postCount += 1;
+        // First send → id 51, second → id 52.
+        return jsonRes({ ok: true, id: postCount === 1 ? 51 : 52 });
+      }
+      if (u.endsWith("/thread")) {
+        // The polled thread only ever surfaces the FIRST reply (id 51).
+        return jsonRes(
+          firstReplyLanded
+            ? threadBody({
+                messages: [
+                  ...threadBody().messages,
+                  {
+                    id: 51,
+                    content: "Thanks for your patience",
+                    direction: "ops",
+                    createdAt: 2000,
+                    senderName: "Support Team",
+                  },
+                ],
+              })
+            : threadBody(),
+        );
+      }
+      if (u.endsWith("/auth/sign-in")) return jsonRes(opsSession());
+      return jsonRes({ ok: false }, 500);
+    }) as unknown as typeof fetch;
+
+    render(
+      <Support mode="ops" orderId={ORDER} signer={signer} bridgeUrl={BASE} layout="inline" />,
+    );
+    const textarea = await screen.findByRole("textbox", { name: /reply/i });
+
+    // Send the same text twice.
+    fireEvent.change(textarea, { target: { value: "Thanks for your patience" } });
+    fireEvent.click(screen.getByRole("button", { name: /^send$/i }));
+    await waitFor(() => expect(postCount).toBe(1));
+    // From here the polled thread carries the real id-51 message.
+    firstReplyLanded = true;
+    fireEvent.change(textarea, { target: { value: "Thanks for your patience" } });
+    fireEvent.click(screen.getByRole("button", { name: /^send$/i }));
+    await waitFor(() => expect(postCount).toBe(2));
+
+    // Both bubbles survive: id-51 (now real, from the poll) + id-52 (still
+    // optimistic, never polled). Content dedup would have shown only one.
+    await waitFor(() =>
+      expect(screen.getAllByText(/thanks for your patience/i)).toHaveLength(2),
+    );
+  });
+
   it("submits the reply on Cmd/Ctrl+Enter", async () => {
     let messagePosted = false;
     globalThis.fetch = routedFetch({
