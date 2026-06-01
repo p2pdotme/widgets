@@ -413,14 +413,19 @@ export interface SupportSigner {
   address: `0x${string}`;
   signMessage?: (message: string) => Promise<string>;
   /**
-   * The chain the wallet is on (e.g. 8453 Base, 84532 Base Sepolia). Bound
-   * into the bridge sign-in message and POST body per D-027-v3 §4 so an
-   * ERC-1271 / ERC-6492 signature is verified on the chain where the wallet
-   * is deployed and cannot be replayed cross-chain. Omit for EOAs that do
-   * not track a chain — the sign-in path defaults to Base Sepolia (84532),
-   * matching the rest of the widget.
+   * Resolves the numeric chain id of the LIVE connector at sign time (e.g.
+   * 8453 Base, 84532 Base Sepolia). Bound into the bridge sign-in message
+   * and POST body per D-027-v3 §4 so an ERC-1271 / ERC-6492 signature is
+   * verified on the chain where the wallet is actually deployed and cannot
+   * be replayed cross-chain.
+   *
+   * HARD CUTOVER: this is read live from the connected wallet (not a cached
+   * prop) every time the support handshake runs. The support sign-in path
+   * REQUIRES a numeric chainId — if it cannot be resolved, sign-in throws
+   * rather than silently defaulting. The Privy and Thirdweb adapters supply
+   * this resolver; hosts wiring a raw signer must provide it too.
    */
-  chainId?: number;
+  getChainId?: () => Promise<number> | number;
 }
 
 export interface SupportProps {
