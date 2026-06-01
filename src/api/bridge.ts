@@ -37,7 +37,7 @@ export async function signInWithBridge(opts: {
   }
   // HARD CUTOVER (D-027-v3 §4): chainId is MANDATORY on the support sign-in
   // path. Resolve it live from the connected wallet at sign time — no cached
-  // prop, no Base Sepolia fallback. If it cannot be resolved to a finite
+  // prop, no Base Sepolia fallback. If it cannot be resolved to a positive
   // integer, throw so the signature is never produced against a guessed
   // chain (which the bridge's ERC-1271/6492 verifier would 401 anyway).
   if (!opts.signer.getChainId) {
@@ -46,7 +46,7 @@ export async function signInWithBridge(opts: {
     );
   }
   const resolved = await opts.signer.getChainId();
-  if (typeof resolved !== "number" || !Number.isFinite(resolved)) {
+  if (typeof resolved !== "number" || !Number.isInteger(resolved)) {
     throw new Error(
       "support sign-in requires a chainId from the connected wallet",
     );

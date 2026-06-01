@@ -81,6 +81,30 @@ describe("fromPrivyWallet", () => {
     const signer = fromPrivyWallet(wallet as never);
     await expect(signer.getChainId!()).rejects.toThrow(/chainId/i);
   });
+
+  it("rejects a bare 'eip155:' (empty tail parses to 0, not a valid chain)", async () => {
+    const wallet = {
+      address: "0xABCD000000000000000000000000000000000001",
+      chainId: "eip155:",
+      getEthereumProvider: vi.fn(async () => ({
+        request: vi.fn(async () => "0xdeadbeef"),
+      })),
+    };
+    const signer = fromPrivyWallet(wallet);
+    await expect(signer.getChainId!()).rejects.toThrow(/chainId/i);
+  });
+
+  it("rejects an empty chainId string (Number('') === 0)", async () => {
+    const wallet = {
+      address: "0xABCD000000000000000000000000000000000001",
+      chainId: "",
+      getEthereumProvider: vi.fn(async () => ({
+        request: vi.fn(async () => "0xdeadbeef"),
+      })),
+    };
+    const signer = fromPrivyWallet(wallet);
+    await expect(signer.getChainId!()).rejects.toThrow(/chainId/i);
+  });
 });
 
 describe("fromThirdwebAccount", () => {
