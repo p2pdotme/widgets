@@ -26,8 +26,11 @@ export interface PrivyWalletLike {
  */
 function parsePrivyChainId(raw: string | undefined): number {
   const tail = typeof raw === "string" ? raw.split(":").pop() : undefined;
-  const n = tail !== undefined ? Number(tail) : NaN;
-  if (!Number.isFinite(n)) {
+  // Number("") === 0 and Number("  ") === 0, both finite, so a bare
+  // "eip155:" or empty/whitespace tail must be rejected explicitly. Require
+  // a positive integer (chainId 0 is not a valid EVM chain).
+  const n = tail !== undefined && tail.trim() !== "" ? Number(tail) : NaN;
+  if (!Number.isInteger(n) || n <= 0) {
     throw new Error(
       `fromPrivyWallet: could not resolve a numeric chainId from the live wallet (got ${JSON.stringify(raw)})`,
     );
