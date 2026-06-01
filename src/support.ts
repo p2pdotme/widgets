@@ -50,6 +50,7 @@ export {
 export {
   fromThirdwebAccount,
   type ThirdwebAccountLike,
+  type ThirdwebChainLike,
 } from "./adapters/thirdweb";
 export { DEFAULT_THEME, themeToCssVars } from "./ui/support-theme";
 export type {

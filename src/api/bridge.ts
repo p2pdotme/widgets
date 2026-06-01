@@ -7,13 +7,6 @@ import type { SupportSigner } from "../types";
 
 const SIGN_IN_PURPOSE = "support.p2p.me:sign-in";
 
-/**
- * Chain bound into the sign-in message + body when the signer does not carry
- * its own `chainId`. Base Sepolia (84532), matching the widget's default
- * across `contracts.ts`, `useOrderStates`, and the order machines.
- */
-const DEFAULT_SUPPORT_CHAIN_ID = 84532;
-
 function trim(url: string): string {
   return url.replace(/\/$/, "");
 }
@@ -42,8 +35,24 @@ export async function signInWithBridge(opts: {
   if (!opts.signer.signMessage) {
     throw new Error("signer.signMessage is required to open support");
   }
+  // HARD CUTOVER (D-027-v3 §4): chainId is MANDATORY on the support sign-in
+  // path. Resolve it live from the connected wallet at sign time — no cached
+  // prop, no Base Sepolia fallback. If it cannot be resolved to a finite
+  // integer, throw so the signature is never produced against a guessed
+  // chain (which the bridge's ERC-1271/6492 verifier would 401 anyway).
+  if (!opts.signer.getChainId) {
+    throw new Error(
+      "support sign-in requires a chainId from the connected wallet",
+    );
+  }
+  const resolved = await opts.signer.getChainId();
+  if (typeof resolved !== "number" || !Number.isFinite(resolved)) {
+    throw new Error(
+      "support sign-in requires a chainId from the connected wallet",
+    );
+  }
+  const chainId = resolved;
   const timestamp = Date.now();
-  const chainId = opts.signer.chainId ?? DEFAULT_SUPPORT_CHAIN_ID;
   const message = buildSignMessage(opts.signer.address, chainId, timestamp);
   const signature = await opts.signer.signMessage(message);
   const res = await fetch(`${trim(opts.bridgeUrl)}/auth/sign-in`, {

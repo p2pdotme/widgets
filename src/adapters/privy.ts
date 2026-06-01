@@ -10,13 +10,29 @@ import type { SupportSigner } from "../types";
 export interface PrivyWalletLike {
   address: string;
   /**
-   * Numeric chain id of the wallet, if the host tracks it. Privy's
-   * `ConnectedWallet` exposes `chainId` as a CAIP-2 string
-   * (`"eip155:8453"`); pass the numeric form here (or omit and let the
-   * sign-in path default). Bound into the bridge sign-in per D-027-v3 §4.
+   * Privy's `ConnectedWallet` exposes the LIVE chain as a CAIP-2 string
+   * (`"eip155:8453"`). Pass the wallet through unchanged — the adapter reads
+   * and parses this field at sign time so a chain switch is reflected. Bound
+   * into the bridge sign-in per D-027-v3 §4.
    */
-  chainId?: number;
+  chainId?: string;
   getEthereumProvider: () => Promise<EthereumProviderLike> | EthereumProviderLike;
+}
+
+/**
+ * Parse a Privy CAIP-2 chain id (`"eip155:8453"`) to a number. Throws when
+ * the wallet exposes nothing parseable — the support sign-in path treats
+ * chainId as mandatory (hard cutover, D-027-v3 §4).
+ */
+function parsePrivyChainId(raw: string | undefined): number {
+  const tail = typeof raw === "string" ? raw.split(":").pop() : undefined;
+  const n = tail !== undefined ? Number(tail) : NaN;
+  if (!Number.isFinite(n)) {
+    throw new Error(
+      `fromPrivyWallet: could not resolve a numeric chainId from the live wallet (got ${JSON.stringify(raw)})`,
+    );
+  }
+  return n;
 }
 
 export interface EthereumProviderLike {
@@ -36,7 +52,10 @@ export function fromPrivyWallet(wallet: PrivyWalletLike): SupportSigner {
   const address = wallet.address as `0x${string}`;
   return {
     address,
-    chainId: wallet.chainId,
+    // Read live: parse the wallet's current CAIP-2 chainId at sign time, so
+    // a chain switch after this signer was built is reflected. Async so an
+    // unresolvable chain surfaces as a rejected promise.
+    getChainId: async () => parsePrivyChainId(wallet.chainId),
     signMessage: async (message: string) => {
       const provider = await wallet.getEthereumProvider();
       const signature = (await provider.request({

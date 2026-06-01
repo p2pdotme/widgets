@@ -50,6 +50,7 @@ vi.mock("../src/widgets/PaymentHistory", () => ({
 const stubSigner: SupportSigner = {
   address: "0x0000000000000000000000000000000000000001",
   signMessage: async (_message: string) => "0xsig",
+  getChainId: async () => 84532,
 };
 
 const baseProps = {
