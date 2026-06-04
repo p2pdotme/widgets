@@ -708,12 +708,7 @@ export function screeningRejectedError(
 
   let userMessage: string;
   if (reason === "user_restricted") {
-    const suffix = restrictedUntil
-      ? ` Try again after ${formatRestrictionTime(restrictedUntil)}.`
-      : " Try again later.";
-    userMessage =
-      "Your account is temporarily restricted due to repeated cancellations." +
-      suffix;
+    userMessage = "We saw unusual activity - pls wait for sometime as a minor update";
   } else if (reason === "cluster_blacklisted") {
     userMessage =
       "This order cannot be processed. Please contact support if you believe this is in error.";
@@ -733,23 +728,3 @@ export function screeningRejectedError(
   });
 }
 
-function formatRestrictionTime(iso: string): string {
-  try {
-    const until = new Date(iso);
-    const ms = until.getTime() - Date.now();
-    if (!Number.isFinite(ms) || ms <= 0) {
-      return "shortly";
-    }
-    const totalMinutes = Math.ceil(ms / 60_000);
-    if (totalMinutes < 60) {
-      return `${totalMinutes} minute${totalMinutes === 1 ? "" : "s"}`;
-    }
-    const hours = Math.floor(totalMinutes / 60);
-    const minutes = totalMinutes % 60;
-    return minutes === 0
-      ? `${hours} hour${hours === 1 ? "" : "s"}`
-      : `${hours}h ${minutes}m`;
-  } catch {
-    return "shortly";
-  }
-}
