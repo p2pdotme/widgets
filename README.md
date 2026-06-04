@@ -1404,7 +1404,7 @@ Type-only exports include `CheckoutProps`, `CashoutProps`,
 `CurrencyOption`, `PaymentAddressValidator`, `ScreeningConfig`,
 `ScreeningOrderDetails`, and `ScreeningUserDetails`.
 
----cla
+---
 
 ## Fraud screening (B2B)
 
