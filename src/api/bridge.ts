@@ -11,6 +11,20 @@ function trim(url: string): string {
   return url.replace(/\/$/, "");
 }
 
+/**
+ * Build the bridge sign-in message. MUST match the bridge's `buildSignMessage`
+ * exactly (D-027-v3 §4): `${purpose}:${address.toLowerCase()}:${chainId}:${timestamp}`.
+ * `chainId` is bound into the signed string (not merely sent as a sidecar)
+ * so a signature cannot be replayed against a verifier on another chain.
+ */
+export function buildSignMessage(
+  address: string,
+  chainId: number,
+  timestamp: number,
+): string {
+  return `${SIGN_IN_PURPOSE}:${address.toLowerCase()}:${chainId}:${timestamp}`;
+}
+
 export async function signInWithBridge(opts: {
   signer: SupportSigner;
   bridgeUrl: string;
@@ -21,14 +35,32 @@ export async function signInWithBridge(opts: {
   if (!opts.signer.signMessage) {
     throw new Error("signer.signMessage is required to open support");
   }
+  // HARD CUTOVER (D-027-v3 §4): chainId is MANDATORY on the support sign-in
+  // path. Resolve it live from the connected wallet at sign time — no cached
+  // prop, no Base Sepolia fallback. If it cannot be resolved to a positive
+  // integer, throw so the signature is never produced against a guessed
+  // chain (which the bridge's ERC-1271/6492 verifier would 401 anyway).
+  if (!opts.signer.getChainId) {
+    throw new Error(
+      "support sign-in requires a chainId from the connected wallet",
+    );
+  }
+  const resolved = await opts.signer.getChainId();
+  if (typeof resolved !== "number" || !Number.isInteger(resolved)) {
+    throw new Error(
+      "support sign-in requires a chainId from the connected wallet",
+    );
+  }
+  const chainId = resolved;
   const timestamp = Date.now();
-  const message = `${SIGN_IN_PURPOSE}:${opts.signer.address.toLowerCase()}:${timestamp}`;
+  const message = buildSignMessage(opts.signer.address, chainId, timestamp);
   const signature = await opts.signer.signMessage(message);
   const res = await fetch(`${trim(opts.bridgeUrl)}/auth/sign-in`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       address: opts.signer.address,
+      chainId,
       timestamp,
       signature,
       ...(opts.orderId ? { orderId: opts.orderId } : {}),

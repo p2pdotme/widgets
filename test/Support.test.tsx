@@ -6,6 +6,7 @@ import type { SupportSigner } from "../src/types";
 const stubSigner: SupportSigner = {
   address: "0x0000000000000000000000000000000000000001",
   signMessage: async (_message: string) => "0xdeadbeef",
+  getChainId: async () => 84532,
 };
 
 const stubSession = {
@@ -128,8 +129,47 @@ describe("Support", () => {
     },
   );
 
-  it("calls the bridge with the signed sign-in payload", async () => {
+  it("calls the bridge with the signed sign-in payload, binding chainId into the message and body (D-027-v3 §4)", async () => {
     const signSpy = vi.fn(async (_m: string) => "0xsig");
+    render(
+      <Support
+        orderId="0xabcdef1234567890"
+        originApp="merchant-demo"
+        signer={{
+          address: stubSigner.address,
+          signMessage: signSpy,
+          getChainId: async () => 8453,
+        }}
+        bridgeUrl="https://bridge.local/"
+        chatEnabled
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /open support/i }));
+    await waitFor(() => {
+      expect(signSpy).toHaveBeenCalledOnce();
+    });
+    const msg = signSpy.mock.calls[0]![0];
+    // New bound format: ${purpose}:${address.toLowerCase()}:${chainId}:${timestamp}
+    expect(msg).toMatch(/^support\.p2p\.me:sign-in:0x0+1:8453:\d+$/);
+
+    await waitFor(() => {
+      expect((globalThis.fetch as any).mock.calls.length).toBeGreaterThan(0);
+    });
+    const [url, init] = (globalThis.fetch as any).mock.calls[0];
+    expect(url).toBe("https://bridge.local/auth/sign-in");
+    const body = JSON.parse(init.body);
+    expect(body.address).toBe(stubSigner.address);
+    expect(body.chainId).toBe(8453);
+    expect(body.signature).toBe("0xsig");
+    expect(typeof body.timestamp).toBe("number");
+    // The chainId in the body must match the one bound into the signed
+    // message, or the bridge recomputes a different message and 401s.
+    expect(msg).toContain(`:${body.chainId}:${body.timestamp}`);
+  });
+
+  it("surfaces a retryable error and never hits the bridge when the signer cannot resolve a chainId (hard cutover, no silent default)", async () => {
+    const signSpy = vi.fn(async (_m: string) => "0xsig");
+    const fetchSpy = globalThis.fetch as any;
     render(
       <Support
         orderId="0xabcdef1234567890"
@@ -140,21 +180,12 @@ describe("Support", () => {
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: /open support/i }));
-    await waitFor(() => {
-      expect(signSpy).toHaveBeenCalledOnce();
-    });
-    const msg = signSpy.mock.calls[0]![0];
-    expect(msg).toMatch(/^support\.p2p\.me:sign-in:0x0+1:\d+$/);
-
-    await waitFor(() => {
-      expect((globalThis.fetch as any).mock.calls.length).toBeGreaterThan(0);
-    });
-    const [url, init] = (globalThis.fetch as any).mock.calls[0];
-    expect(url).toBe("https://bridge.local/auth/sign-in");
-    const body = JSON.parse(init.body);
-    expect(body.address).toBe(stubSigner.address);
-    expect(body.signature).toBe("0xsig");
-    expect(typeof body.timestamp).toBe("number");
+    // chainId is mandatory: the flow throws before signing or POSTing.
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^retry$/i })).toBeInTheDocument(),
+    );
+    expect(signSpy).not.toHaveBeenCalled();
+    expect(fetchSpy.mock.calls.length).toBe(0);
   });
 
   it("classifies a 4xx sign-in failure as an auth error with a retry CTA", async () => {
@@ -193,7 +224,11 @@ describe("Support", () => {
     render(
       <Support
         originApp="merchant-demo"
-        signer={{ address: stubSigner.address, signMessage: reject }}
+        signer={{
+          address: stubSigner.address,
+          signMessage: reject,
+          getChainId: async () => 84532,
+        }}
         bridgeUrl="https://bridge.local"
         chatEnabled
       />,
