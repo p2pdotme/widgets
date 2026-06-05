@@ -802,8 +802,15 @@ import { Support } from "@p2pdotme/widgets/support";
 ### What happens on click
 
 1. **Sign-in** — widget asks the signer for a personal_sign over
-   `support.p2p.me:sign-in:<addr>:<ts>`, POSTs `{ address, timestamp,
-   signature, orderId }` to `<bridgeUrl>/auth/sign-in`. The 7-day session
+   `support.p2p.me:sign-in:<addr lowercased>:<chainId>:<ts>`, POSTs
+   `{ address, chainId, timestamp, signature, orderId }` to
+   `<bridgeUrl>/auth/sign-in`. `chainId` is resolved live from the
+   connected wallet at sign time via `signer.getChainId()` (supplied by
+   `fromPrivyWallet` / `fromThirdwebAccount`). It is mandatory and is bound
+   into the signed message so the bridge can verify ERC-1271 / ERC-6492
+   signatures on the right chain and reject cross-chain replays. There is no
+   Base Sepolia (84532) default: sign-in throws before producing any
+   signature if the chainId cannot be resolved (D-027-v3 §4). The 7-day session
    token is cached in `localStorage` (per `(bridgeUrl, address, orderId)`)
    so subsequent clicks are silent.
 2. **Inbox resolution** — the bridge reads the order's on-chain
@@ -1397,7 +1404,7 @@ Type-only exports include `CheckoutProps`, `CashoutProps`,
 `CurrencyOption`, `PaymentAddressValidator`, `ScreeningConfig`,
 `ScreeningOrderDetails`, and `ScreeningUserDetails`.
 
----cla
+---
 
 ## Fraud screening (B2B)
 
