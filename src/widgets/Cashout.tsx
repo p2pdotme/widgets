@@ -40,7 +40,7 @@ export function Cashout(props: CashoutProps) {
   const {
     usdcAddress, diamondAddress, signer, currencies,
     chainId = 84532, rpcUrl, subgraphUrl, fiatAmountLimit,
-    placeCashout, deliverUpi, reconcile,
+    placeCashout, deliverUpi, reconcile, fetchAvailableOfframp,
     defaultAmountUsdc, mode = "modal", open = true, theme,
     onClose, onOrderPlaced, onComplete, onCancelled, onError,
   } = props;
@@ -116,16 +116,27 @@ export function Cashout(props: CashoutProps) {
     }
   }, [amountInput]);
 
-  // Read USDC balance for the "Max" affordance + insufficient-balance hint.
-  // Uses the read-only ERC20 ABI fragment — no integrator dependency.
+  // Source the cashout-able amount for the "Max" affordance + insufficient
+  // hint. Default: the user's on-chain USDC balance (read-only ERC20 ABI, no
+  // integrator dependency). Allocation-funded offramps (e.g. TradeStars) pass
+  // `fetchAvailableOfframp` so the amount comes from the user's per-user-proxy
+  // allocation instead of their wallet balance.
   useEffect(() => {
+    let cancelled = false;
+    if (fetchAvailableOfframp) {
+      fetchAvailableOfframp(signer.address)
+        .then((b) => { if (!cancelled) setBalance(b); })
+        .catch(() => {});
+      return () => { cancelled = true; };
+    }
     const chain = chainId === 8453 ? base : baseSepolia;
     const pc = createPublicClient({ chain, transport: http(rpcUrl) });
     pc.readContract({
       address: usdcAddress, abi: ERC20_READ_ABI,
       functionName: "balanceOf", args: [signer.address],
-    }).then((b) => setBalance(b as bigint)).catch(() => {});
-  }, [chainId, rpcUrl, usdcAddress, signer.address]);
+    }).then((b) => { if (!cancelled) setBalance(b as bigint); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [chainId, rpcUrl, usdcAddress, signer.address, fetchAvailableOfframp]);
 
   useEffect(() => {
     if (!dropdownOpen) return;
@@ -138,7 +149,7 @@ export function Cashout(props: CashoutProps) {
     return () => document.removeEventListener("mousedown", onClick);
   }, [dropdownOpen]);
 
-  const { state, submit, retryDeliver, canRetry, reset } = useOfframpMachine({
+  const { state, submit, retryDeliver, canRetry, retryPlace, canRetryPlace, reset } = useOfframpMachine({
     usdcAddress, diamondAddress, signer,
     chainId, rpcUrl, subgraphUrl, fiatAmountLimit,
     placeCashout, deliverUpi, reconcile,
@@ -506,11 +517,21 @@ export function Cashout(props: CashoutProps) {
                   <CenterStatus
                     icon={<XIcon />}
                     title="Order cancelled"
-                    subtitle="Your USDC was refunded to your wallet automatically. You can try again any time."
+                    subtitle="The order was cancelled and your funds were returned. You can try again any time."
                     variant="warning"
                   />
+                  {canRetryPlace && (
+                    <button style={{ ...S.primaryBtn, marginTop: 20 }} onClick={() => retryPlace()}>
+                      Try again
+                    </button>
+                  )}
                   {onClose && (
-                    <button style={{ ...S.primaryBtn, marginTop: 20 }} onClick={onClose}>Close</button>
+                    <button
+                      style={canRetryPlace
+                        ? { ...S.ghostBtn, width: "100%", marginTop: 8, height: 40 }
+                        : { ...S.primaryBtn, marginTop: 20 }}
+                      onClick={onClose}
+                    >Close</button>
                   )}
                 </div>
               )}

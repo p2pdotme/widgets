@@ -364,6 +364,11 @@ export interface CashoutProps {
    *  Diamond hits a terminal status. Skip if your integrator doesn't
    *  need it. Always called best-effort (errors swallowed). */
   reconcile?: (ctx: ReconcileContext) => Promise<{ txHash: string }>;
+  /** Optional — source the cashout-able amount from an integrator allocation
+   *  (e.g. TradeStars per-user-proxy) instead of the user's wallet USDC
+   *  balance. When provided, the "Max" affordance + insufficient-balance check
+   *  use this value (6-decimal USDC). Omit for the default user-holds-USDC flow. */
+  fetchAvailableOfframp?: (user: `0x${string}`) => Promise<bigint>;
   chainId?: number;
   rpcUrl?: string;
   /** Required when any selected `CurrencyOption` omits `circleId` — passed

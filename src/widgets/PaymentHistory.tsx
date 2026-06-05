@@ -124,6 +124,15 @@ export interface PaymentHistoryProps {
    * address. Lookup is case-insensitive.
    */
   integratorNames?: Record<string, string>;
+  /**
+   * Optional — extra addresses to merge into this user's history. For
+   * integrators that place orders under a per-user proxy (e.g. TradeStars
+   * offramp v2, where `order.user` is the user's proxy), resolve the proxy
+   * address(es) here so those orders show alongside the EOA's. Results are
+   * merged, de-duped by orderId, and re-sorted newest-first; extra-address
+   * orders bypass the b2b intersection (they're keyed on the proxy, not the EOA).
+   */
+  resolveExtraAddresses?: (user: `0x${string}`) => Promise<`0x${string}`[]>;
   /** Optional theming overrides. See `P2PTheme` for the surface. */
   theme?: P2PTheme;
 }
@@ -142,6 +151,7 @@ export function PaymentHistory(props: PaymentHistoryProps) {
     b2bOnly,
     integrators,
     integratorNames,
+    resolveExtraAddresses,
     theme,
   } = props;
   const themeStyle = themeToCssVars(theme);
@@ -173,6 +183,9 @@ export function PaymentHistory(props: PaymentHistoryProps) {
   const [loading, setLoading] = useState(true);
   // orderId (decimal string) → owning integrator, populated only in B2B mode.
   const [b2bMap, setB2bMap] = useState<Map<string, B2BOrderMeta> | null>(null);
+  // orderIds sourced from an extra (proxy) address via `resolveExtraAddresses`;
+  // these bypass the b2b intersection since they're keyed on the proxy.
+  const [extraOrderIds, setExtraOrderIds] = useState<Set<string>>(new Set());
   // Per-currency on-chain config — fetched lazily for currencies that have
   // at least one order missing `actualFiatAmount` (i.e. pre-acceptance:
   // placed orders and orders cancelled before a merchant accepted). Lets us
@@ -199,19 +212,40 @@ export function PaymentHistory(props: PaymentHistoryProps) {
       // Fetch the canonical order list and (in B2B mode) the user's B2B
       // order→integrator map together so they land in the same render and
       // the list never flickers through a "no orders" frame.
-      const [result, b2b] = await Promise.all([
+      const extraAddrs = resolveExtraAddresses
+        ? await resolveExtraAddresses(signer.address)
+        : [];
+      const [result, b2b, ...extra] = await Promise.all([
         client.getOrders({ userAddress: signer.address, skip: 0, limit }),
         b2bMode ? fetchB2BMap(subgraphUrl, signer.address) : Promise.resolve(null),
+        ...extraAddrs.map((a) => client.getOrders({ userAddress: a, skip: 0, limit })),
       ]);
       if (result.isErr()) throw result.error;
-      setOrders(result.value);
+      // Merge the EOA's orders with any extra-address (e.g. per-user proxy)
+      // orders, de-duping by orderId and re-sorting newest-first.
+      const merged = [...result.value];
+      const seen = new Set(merged.map((o) => o.orderId.toString()));
+      const extraIds = new Set<string>();
+      for (const r of extra) {
+        if (r.isErr()) continue;
+        for (const o of r.value) {
+          const id = o.orderId.toString();
+          if (seen.has(id)) continue;
+          seen.add(id);
+          extraIds.add(id);
+          merged.push(o);
+        }
+      }
+      merged.sort((a, b) => Number(b.placedAt - a.placedAt));
+      setOrders(merged);
+      setExtraOrderIds(extraIds);
       setB2bMap(b2b);
     } catch (err: any) {
       setError(err?.message ?? "Failed to fetch orders");
     } finally {
       setLoading(false);
     }
-  }, [signer?.address, subgraphUrl, usdcAddress, chainId, diamondAddress, rpcUrl, limit, b2bMode]);
+  }, [signer?.address, subgraphUrl, usdcAddress, chainId, diamondAddress, rpcUrl, limit, b2bMode, resolveExtraAddresses]);
 
   useEffect(() => { fetchOrders(); }, [fetchOrders, refreshKey]);
 
@@ -286,6 +320,9 @@ export function PaymentHistory(props: PaymentHistoryProps) {
   // integrator is on it. In non-B2B mode this is a no-op pass-through.
   const allOrders = b2bMode
     ? overlaidOrders.filter((o) => {
+        // Extra-address (per-user proxy) orders are keyed on the proxy, not the
+        // EOA's b2Borders set, so the intersection would drop them — keep them.
+        if (extraOrderIds.has(o.orderId.toString())) return true;
         const meta = b2bMap?.get(o.orderId.toString());
         if (!meta) return false;
         if (integratorFilter && !integratorFilter.has(meta.integrator)) return false;
