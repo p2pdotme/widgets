@@ -34,69 +34,47 @@ export function creditFullyCovers(usdcAmount: bigint, credit: bigint): boolean {
   return credit >= usdcAmount && usdcAmount > 0n;
 }
 
-/** Find a pending order whose full-purchase-intent USDC amount matches the
- *  widget's `usdcAmount` prop EXACTLY. Used by the credit-aware concurrency
- *  gate to decide between "auto-resume the same-amount pending order" and
- *  "reject this new order until the pending one finishes". */
-export function findMatchingPending(
-  pending: PendingOrderSummary[],
-  usdcAmount: bigint,
-): PendingOrderSummary | null {
-  return pending.find((p) => p.usdcAmount === usdcAmount) ?? null;
-}
-
 export type GateDecision =
-  /** Render the regular pre-order form. Either there's no credit or no
-   *  pending order, so the existing flow applies. */
+  /** Render the regular pre-order form. No pending order exists (or there's
+   *  no placement intent), so the existing flow applies. */
   | { kind: "allow" }
-  /** Same-amount pending order found while credit > 0 — flip the widget
-   *  into tracking-only mode for `orderId` and skip placement. */
-  | { kind: "auto-resume"; orderId: string }
-  /** credit > 0 AND a pending order exists but its amount doesn't match the
-   *  current widget's `usdcAmount`. The widget renders the rejection
-   *  screen showing the conflicting order; host can navigate via
-   *  `onResumeRequest`. */
+  /** A pending order exists. Block this placement: the widget renders the
+   *  rejection screen showing the conflicting order and (when wired) a
+   *  Resume affordance. The user must complete or cancel the pending order
+   *  before placing another. */
   | { kind: "reject"; conflict: PendingOrderSummary };
 
 /**
- * The concurrency gate. Rule:
+ * The concurrency gate. Rule: one in-flight order at a time.
  *
- *   - no pending                  → allow
- *   - pending matches `usdcAmount` → auto-resume that order (regardless of credit)
- *   - pending doesn't match:
- *       - credit > 0              → reject (credit can race across orders)
- *       - credit == 0             → allow (concurrent different-amount orders ok)
+ *   - no pending  → allow
+ *   - any pending → reject (regardless of amount or credit)
  *
- * The same-amount auto-resume engages regardless of credit because clicking
- * "Pay" with the same amount as an existing pending order is almost always
- * a duplicate-click / refresh, not intentional concurrency. The
- * different-amount-with-credit reject still exists because the integrator's
- * on-chain credit-netting can produce inconsistent Diamond deltas if two
- * orders compete for the same proxy USDC.
+ * Credit and amount-matching no longer factor into the decision. The
+ * product rule is simply "finish your current order before starting
+ * another," so a same-amount re-click, a different-amount order, and a
+ * credit / no-credit user all block identically and land on the same
+ * "complete or cancel it first" screen (with a Resume affordance).
  *
- * `usdcAmount` is the new order's intended purchase total (full intent,
- * matching what hosts report via `fetchPendingOrders`).
+ * `pending` is expected to already be narrowed to the orders that should
+ * gate — see `keepOnlyB2BPending` in the order-machine, which drops stale
+ * legacy retail orders so they can't permanently lock the user out.
+ *
+ * `usdcAmount` is the new order's intended purchase total. When undefined
+ * (tracking-only mode — the host drives an explicit `orderId` and isn't
+ * placing) there's nothing to gate, so we allow.
  */
 export function computeGateDecision(
-  credit: bigint,
   pending: PendingOrderSummary[],
   usdcAmount: bigint | undefined,
 ): GateDecision {
   if (pending.length === 0) return { kind: "allow" };
 
-  // No widget-side amount to compare against → fall through to allow. This
-  // happens for tracking-only modes where the host never set `usdcAmount`;
-  // those flows already have an explicit orderId and aren't placing a new
-  // order anyway, so gating doesn't apply.
+  // No widget-side amount → no placement intent (tracking-only mode). The
+  // host already has an explicit orderId and isn't placing, so don't gate.
   if (usdcAmount === undefined) return { kind: "allow" };
 
-  const match = findMatchingPending(pending, usdcAmount);
-  if (match) return { kind: "auto-resume", orderId: match.orderId };
-
-  // No same-amount match. With credit, the user must finish the pending
-  // order first because the integrator's proxy USDC can be raced by two
-  // in-flight orders. Without credit, concurrent different-amount orders
-  // are independent and safe to allow.
-  if (credit > 0n) return { kind: "reject", conflict: pending[0] };
-  return { kind: "allow" };
+  // Any pending order blocks a new placement. Surface the first one (stable
+  // ordering) as the conflict; the widget shows it with a Resume affordance.
+  return { kind: "reject", conflict: pending[0] };
 }
