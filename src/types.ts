@@ -66,9 +66,8 @@ export interface PlaceOrderResult {
 
 /** A user's currently-pending order, returned by the host's
  *  `fetchPendingOrders` callback. `usdcAmount` is the FULL purchase intent
- *  (not the Diamond-side delta on a credit-applied order) so the widget
- *  can compare against its own `usdcAmount` prop for the same-amount
- *  auto-resume rule. */
+ *  (not the Diamond-side delta on a credit-applied order); the widget
+ *  surfaces it on the "finish your pending order first" gate screen. */
 export interface PendingOrderSummary {
   orderId: string;
   usdcAmount: bigint;
@@ -202,16 +201,18 @@ export interface CheckoutProps {
   /** Returns the user's currently-pending orders (Diamond status PLACED /
    *  ACCEPTED / PAID). `usdcAmount` must be the full purchase intent (not
    *  the Diamond delta on a credit-applied order). When both this and
-   *  `fetchCredit` are provided, the widget enforces:
-   *   - credit == 0                → no gate (existing `<PaymentHistory>`
-   *                                  resume flow applies separately).
-   *   - credit > 0, no pending      → no gate.
-   *   - credit > 0, amount match   → auto-resume that order in tracking
-   *                                  mode (placement is skipped).
-   *   - credit > 0, no match       → render the rejection screen showing
-   *                                  the conflicting pending order's
-   *                                  amount; the user must finish that
-   *                                  order before placing a new one. */
+   *  `fetchCredit` are provided, the widget enforces one in-flight order
+   *  at a time:
+   *   - no pending  → no gate; the normal place flow applies.
+   *   - any pending → render the "finish your pending order first" screen
+   *                   showing the conflicting order; the user must complete
+   *                   or cancel it before placing a new one — regardless of
+   *                   amount or credit. (Legacy retail orders are filtered
+   *                   out so a stale "pending forever" order can't lock the
+   *                   user out.)
+   *  `fetchCredit` is still required for the gate to engage and to drive the
+   *  credit-applied breakdown, even though credit no longer affects the
+   *  block / allow decision. */
   fetchPendingOrders?: (user: `0x${string}`) => Promise<PendingOrderSummary[]>;
 
   /** Fired when the rejection screen's "Resume that order" button is
