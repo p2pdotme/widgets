@@ -66,20 +66,21 @@ so subsequent orders fulfill normally.
 - [ ] `onComplete` fires with the sentinel orderId.
 - [ ] `availableCredit(me)` decreases by `usdcAmount`.
 
-## Verify concurrency gate (`credit > 0` + same-amount pending)
+## Verify concurrency gate (any pending order blocks placement)
 
-- [ ] With credit > 0 already on your proxy, place an order at amount X.
-      Let it sit in PLACED.
-- [ ] Refresh the host app checkout with `usdcAmount = X` (same amount).
-- [ ] Widget **auto-snaps to tracking** the pending order — no pre-order
-      form, no Pay button. Stepper shows step 0.
+The rule is one in-flight order at a time: any pending order blocks a new
+placement, regardless of amount or credit.
 
-## Verify concurrency gate (`credit > 0` + different-amount pending)
-
-- [ ] With credit > 0 and a pending order at amount X still active, open
-      the host app checkout with `usdcAmount = Y` where `Y ≠ X`.
+- [ ] Place an order at amount X and let it sit in PLACED.
+- [ ] Reopen the host app checkout with `usdcAmount = X` (**same** amount).
 - [ ] Widget renders the **"Finish your pending order first"** rejection
-      screen with the pending order's ID + amount.
+      screen with the pending order's ID + amount — no pre-order form, no
+      Pay button. (Previously the same-amount case silently auto-snapped to
+      tracking; it now shows this screen like every other pending case.)
+- [ ] Reopen with `usdcAmount = Y` where `Y ≠ X` (**different** amount) —
+      the same rejection screen appears.
+- [ ] Repeat both with `credit == 0` and `credit > 0` — the gate behaves
+      identically (credit only affects the pre-order breakdown).
 - [ ] Click **Resume that order** → `onResumeRequest(pendingOrderId)`
       fires; host should navigate the user to that order (e.g., re-open
       the widget with `orderId={pendingOrderId}`).

@@ -171,9 +171,9 @@ export function Checkout(props: CheckoutProps) {
   // Also holds while the credit/pending fetch is in flight (state.gate ===
   // "loading"). Without this, the user would briefly see the un-credited
   // price + Pay button — and could fire the order before the credit
-  // adjustment renders. The gate resolves to allow/auto-resume/reject as
-  // soon as both fetchers return (or short-circuits to allow when the
-  // host didn't wire either callback).
+  // adjustment renders. The gate resolves to allow/reject as soon as both
+  // fetchers return (or short-circuits to allow when the host didn't wire
+  // either callback).
   const isQuotePending = Boolean(
     !demo && usdcAmount && selectedCurrency && (
       (!state.priceConfigFailed && (!preview || state.currency !== selectedCurrency.symbol)) ||
@@ -262,22 +262,18 @@ export function Checkout(props: CheckoutProps) {
       </div>
 
       <div style={{ padding: "24px" }}>
-        {/* CREDIT GATE REJECTION — credit > 0 + a pending order with a
-            different intended amount blocks new placement. The host can
-            wire `onResumeRequest` to navigate the user to that order
-            (typically re-opens the widget with `orderId={pendingOrderId}`).
-            Hidden in tracking-only mode (initialOrderId set) since the
-            host is already driving a specific order. */}
+        {/* PENDING-ORDER GATE — any in-flight order blocks a new placement
+            (regardless of amount or credit). The host can wire
+            `onResumeRequest` to navigate the user to that order (typically
+            re-opens the widget with `orderId={pendingOrderId}`). Hidden in
+            tracking-only mode (initialOrderId set) since the host is already
+            driving a specific order. */}
         {state.phase === "checkout" && hasPlaceOrder && rejection && (
           <div>
             <CenterStatus
               icon={<PulseDot />}
               title="Finish your pending order first"
-              subtitle={
-                usdcAmount
-                  ? `You have a pending order for ${formatUnits(rejection.usdcAmount, USDC_DECIMALS)} USDC. Complete or cancel it before placing this ${formatUnits(usdcAmount, USDC_DECIMALS)} USDC order.`
-                  : `You have a pending order for ${formatUnits(rejection.usdcAmount, USDC_DECIMALS)} USDC. Complete or cancel it before placing another.`
-              }
+              subtitle="Please complete or cancel your pending order before creating another one."
             />
             <div style={{ ...S.cardFlat, padding: 14, marginTop: 16, background: color.surfaceAlt }}>
               <div style={S.rowBetween}>

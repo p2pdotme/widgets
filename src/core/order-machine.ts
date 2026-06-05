@@ -99,7 +99,6 @@ type OrderAction =
   | { type: "RESUMABLE_CLEARED" }
   // Credit-accounting actions.
   | { type: "CREDIT_LOADED"; credit: bigint; pending: PendingOrderSummary[]; gate: GateDecision }
-  | { type: "CREDIT_AUTO_RESUMED"; orderId: string }
   | { type: "CREDIT_ONLY_PLACED"; orderId: string; txHash: string };
 
 const INITIAL: OrderState = {
@@ -140,9 +139,6 @@ function reducer(state: OrderState, action: OrderAction): OrderState {
     case "RESUMABLE_CLEARED": return { ...state, orderId: null, txHash: null };
     case "CREDIT_LOADED": return {
       ...state, credit: action.credit, pendingOrders: action.pending, gate: action.gate,
-    };
-    case "CREDIT_AUTO_RESUMED": return {
-      ...state, phase: "placed", orderId: action.orderId, txHash: "",
     };
     case "CREDIT_ONLY_PLACED": return {
       ...state, phase: "completed",
@@ -422,15 +418,8 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
         // longer block. Resilient: passes through unchanged if it can't run.
         const b2bPending = await keepOnlyB2BPending(pending, opts.subgraphUrl, userAddr);
         if (cancelled) return;
-        const gate = computeGateDecision(credit, b2bPending, opts.usdcAmount);
+        const gate = computeGateDecision(b2bPending, opts.usdcAmount);
         dispatch({ type: "CREDIT_LOADED", credit, pending: b2bPending, gate });
-        // Auto-resume side effect: when the gate decides to flip into
-        // tracking-only mode for a matching pending order, do it here
-        // (the reducer can't fetch chain state — the regular polling
-        // effect on `state.orderId` walks it forward from PLACED).
-        if (gate.kind === "auto-resume") {
-          dispatch({ type: "CREDIT_AUTO_RESUMED", orderId: gate.orderId });
-        }
       } catch {
         // Treat fetch failure as no-credit/no-pending so the user can
         // still place an order — better than blocking on a transient RPC

@@ -271,19 +271,22 @@ error, and "merchant didn't accept in time" states are handled automatically.
 Some integrators (e.g. `LotPotCheckoutIntegrator`) accumulate redeemable
 USDC on a user's per-user proxy from previously-skipped fulfillments. The
 widget surfaces this credit on the pre-order screen and enforces a
-**concurrency rule** so a user can't accidentally place a second order
-while one is still in flight (which would race the credit accounting).
+**concurrency rule** so a user can't place a second order while one is
+still in flight.
 
 ### The rule
 
-| Credit | Pending order on chain | Widget behavior |
-|---|---|---|
-| 0     | none                    | normal flow                                |
-| 0     | same `usdcAmount`        | auto-flip to tracking-only mode for that order (prevents duplicate placement) |
-| 0     | different `usdcAmount`   | normal flow (concurrent orders ok — no credit to race) |
-| > 0   | none                    | render "Credit applied: −X" row, bill `max(usdcAmount − credit, 0)` |
-| > 0   | same `usdcAmount`        | auto-flip to tracking-only mode for that order |
-| > 0   | different `usdcAmount`   | render rejection screen — user must finish the pending order first |
+One in-flight order at a time: **any** pending order blocks a new
+placement, regardless of amount or credit.
+
+| Pending order on chain | Widget behavior |
+|---|---|
+| none                                 | normal flow (credit, if any, applies as a `Credit applied: −X` row, billing `max(usdcAmount − credit, 0)`) |
+| any (same or different `usdcAmount`) | render the **"Finish your pending order first"** screen — the user must complete or cancel the pending order before placing another; a **Resume that order** button (when `onResumeRequest` is wired) takes them back to it |
+
+Credit no longer affects the block / allow decision — it only drives the
+pre-order breakdown. Stale legacy retail orders are filtered out so a
+"pending forever" order can't permanently lock the user out.
 
 When credit fully covers the order, the CTA changes to **Redeem credit**
 and the host's integrator is expected to skip the Diamond entirely (LotPot's
@@ -335,7 +338,7 @@ async function fetchPendingOrders(user: `0x${string}`): Promise<PendingOrderSumm
   fetchCredit={fetchCredit}
   fetchPendingOrders={fetchPendingOrders}
   onResumeRequest={(orderId) => {
-    // Mismatched pending: user clicked "Resume that order". Re-open the
+    // Pending order exists: user clicked "Resume that order". Re-open the
     // widget in tracking-only mode by passing `orderId={orderId}` next time.
     setResumeOrderId(orderId);
   }}

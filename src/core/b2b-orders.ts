@@ -95,10 +95,10 @@ export function filterPendingToB2B<T extends { orderId: string }>(
  *
  * Returns the list unchanged when there's nothing to filter, no `subgraphUrl`
  * is configured, or the subgraph lookup fails. Failing toward the widget's
- * prior behaviour (rather than dropping everything) keeps the same-amount
- * auto-resume / proxy-credit-race protection intact during a transient
- * subgraph blip — the host's `fetchPendingOrders` reads the same subgraph, so
- * a full outage already yields an empty pending list upstream.
+ * prior behaviour (rather than dropping everything) keeps the pending-order
+ * concurrency gate intact during a transient subgraph blip — the host's
+ * `fetchPendingOrders` reads the same subgraph, so a full outage already
+ * yields an empty pending list upstream.
  */
 export async function keepOnlyB2BPending<T extends { orderId: string }>(
   pending: readonly T[],
