@@ -48,12 +48,14 @@ interface OfframpState {
   currency: CurrencyOption | null;
   paymentAddress: string | null;
   usdcAmount: bigint | null;
+  /** Small-order fee retained so a retry-from-cancelled can recompute the charge. */
+  feeUsdc: bigint | null;
   fiatAmount: bigint | null;
   error: string | null;
 }
 
 type OfframpAction =
-  | { type: "PLACING"; currency: CurrencyOption; paymentAddress: string; usdcAmount: bigint }
+  | { type: "PLACING"; currency: CurrencyOption; paymentAddress: string; usdcAmount: bigint; feeUsdc: bigint }
   | { type: "PLACED"; orderId: string; txHash: string }
   | { type: "ACCEPTED" }
   | { type: "ENCRYPTING" }
@@ -66,12 +68,12 @@ type OfframpAction =
 const INITIAL: OfframpState = {
   phase: "form",
   orderId: null, txHash: null, currency: null, paymentAddress: null,
-  usdcAmount: null, fiatAmount: null, error: null,
+  usdcAmount: null, feeUsdc: null, fiatAmount: null, error: null,
 };
 
 function reducer(s: OfframpState, a: OfframpAction): OfframpState {
   switch (a.type) {
-    case "PLACING": return { ...s, phase: "placing", currency: a.currency, paymentAddress: a.paymentAddress, usdcAmount: a.usdcAmount, error: null };
+    case "PLACING": return { ...s, phase: "placing", currency: a.currency, paymentAddress: a.paymentAddress, usdcAmount: a.usdcAmount, feeUsdc: a.feeUsdc, orderId: null, txHash: null, fiatAmount: null, error: null };
     case "PLACED": return { ...s, phase: "placed", orderId: a.orderId, txHash: a.txHash };
     case "ACCEPTED": return { ...s, phase: "accepted" };
     case "ENCRYPTING": return { ...s, phase: "encrypting" };
@@ -139,7 +141,7 @@ export function useOfframpMachine(opts: UseOfframpMachineOpts) {
       // SDK routing, host's approve+place txs) can each take several seconds
       // and would otherwise leave the user staring at a disabled button
       // with no feedback.
-      dispatch({ type: "PLACING", currency, paymentAddress, usdcAmount });
+      dispatch({ type: "PLACING", currency, paymentAddress, usdcAmount, feeUsdc });
 
       const errorCtx: P2PErrorContext = {
         flow: "place-sell",
@@ -346,11 +348,24 @@ export function useOfframpMachine(opts: UseOfframpMachineOpts) {
     }
   }, [state.orderId, publicClient, opts, encryptAndDeliver]);
 
+  /**
+   * Re-place a fresh SELL after a CANCELLED order. For allocation-funded
+   * offramps (TradeStars) the cancelled order's USDC is back in the user's
+   * proxy, so re-placing draws from the same balance — self-serve retry with
+   * no relayer/owner. Reuses the retained currency / paymentAddress / amount.
+   */
+  const retryPlace = useCallback(() => {
+    if (!state.currency || state.paymentAddress === null || state.usdcAmount === null) return;
+    return submit(state.currency, state.paymentAddress, state.usdcAmount, state.feeUsdc ?? 0n);
+  }, [state.currency, state.paymentAddress, state.usdcAmount, state.feeUsdc, submit]);
+
   return {
     state,
     submit,
     retryDeliver,
+    retryPlace,
     canRetry: state.phase === "error" && state.orderId !== null,
+    canRetryPlace: state.phase === "cancelled" && state.currency !== null,
     reset: () => dispatch({ type: "RESET" }),
   };
 }
