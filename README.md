@@ -575,6 +575,88 @@ For a different integrator (e.g., a custom one not following the LotPot
 shape), the contract above is the same — only the ABI fragments and event
 parser change. The widget never knows the difference.
 
+### TradeStars offramp v2 (allocation-funded)
+
+The TradeStars offramp funds the SELL from a **per-user-proxy allocation** (a
+relayer moves vault USDC into the user's proxy after a Solana burn), not the
+user's wallet USDC. Three differences vs the LotPot recipe:
+
+1. **No USDC approve** — the proxy already holds the funds; `placeCashout` just
+   calls `userStartOfframp(allocationId, …)`.
+2. **`fetchAvailableOfframp`** sources the "Max" amount from the integrator's
+   `availableOfframp(user)` view instead of the wallet balance.
+3. **History** merges the user's per-user proxy (where `order.user` lives for
+   offramps) via `<PaymentHistory resolveExtraAddresses=…>`.
+
+```ts
+const TRADESTARS_ABI = [
+  { name: "userStartOfframp", type: "function", stateMutability: "nonpayable",
+    inputs: [
+      { name: "allocationId", type: "uint256" }, { name: "currency", type: "bytes32" },
+      { name: "fiatAmount", type: "uint256" }, { name: "circleId", type: "uint256" },
+      { name: "preferredPaymentChannelConfigId", type: "uint256" }, { name: "userPubKey", type: "string" },
+    ], outputs: [{ name: "orderId", type: "uint256" }] },
+  { name: "userDeliverOfframpUpi", type: "function", stateMutability: "nonpayable",
+    inputs: [{ name: "orderId", type: "uint256" }, { name: "encUpi", type: "string" }], outputs: [] },
+  { name: "syncOfframp", type: "function", stateMutability: "nonpayable",
+    inputs: [{ name: "orderId", type: "uint256" }], outputs: [] },
+  { name: "availableOfframp", type: "function", stateMutability: "view",
+    inputs: [{ name: "user", type: "address" }], outputs: [{ type: "uint256" }] },
+  { name: "pendingAllocations", type: "function", stateMutability: "view",
+    inputs: [{ name: "user", type: "address" }], outputs: [{ type: "uint256[]" }] },
+  { name: "proxyAddress", type: "function", stateMutability: "view",
+    inputs: [{ name: "user", type: "address" }], outputs: [{ type: "address" }] },
+  { type: "event", name: "OfframpOrderPlaced", inputs: [
+    { name: "allocationId", type: "uint256", indexed: true },
+    { name: "orderId", type: "uint256", indexed: true },
+    { name: "user", type: "address", indexed: true },
+    { name: "amount", type: "uint256", indexed: false } ] },
+] as const;
+
+// Host picks an allocationId from pendingAllocations(user) before mounting <Cashout>.
+const allocationId = /* selected pending allocation (a bigint) */;
+
+<Cashout
+  /* …usdcAddress, diamondAddress, signer, currencies, subgraphUrl… */
+  fetchAvailableOfframp={(user) =>
+    publicClient.readContract({ address: INTEGRATOR, abi: TRADESTARS_ABI,
+      functionName: "availableOfframp", args: [user] }) as Promise<bigint>}
+  placeCashout={async (ctx) => {                 // NO approve — proxy already funded
+    const data = encodeFunctionData({ abi: TRADESTARS_ABI, functionName: "userStartOfframp",
+      args: [allocationId, stringToHex(ctx.currency.symbol, { size: 32 }), 0n,
+             ctx.currency.circleId!, ctx.currency.paymentChannelConfigId ?? 0n, ctx.userPubKey] });
+    const { hash } = await signer.sendTransaction({ to: INTEGRATOR, data, gasLimit: 1_000_000 });
+    const receipt = await publicClient.waitForTransactionReceipt({ hash });
+    return { orderId: parseTradeStarsOrderId(receipt) /* OfframpOrderPlaced */, txHash: hash };
+  }}
+  deliverUpi={async (ctx) => {
+    const data = encodeFunctionData({ abi: TRADESTARS_ABI, functionName: "userDeliverOfframpUpi",
+      args: [BigInt(ctx.orderId), ctx.encryptedUpi] });
+    const { hash } = await signer.sendTransaction({ to: INTEGRATOR, data, gasLimit: 500_000 });
+    await publicClient.waitForTransactionReceipt({ hash });
+    return { txHash: hash };
+  }}
+  reconcile={async (ctx) => {                     // permissionless syncOfframp
+    const data = encodeFunctionData({ abi: TRADESTARS_ABI, functionName: "syncOfframp",
+      args: [BigInt(ctx.orderId)] });
+    const { hash } = await signer.sendTransaction({ to: INTEGRATOR, data, gasLimit: 200_000 });
+    await publicClient.waitForTransactionReceipt({ hash });
+    return { txHash: hash };
+  }}
+/>
+
+// Offramps are attributed to the user's proxy — merge it into history:
+<PaymentHistory signer={signer} subgraphUrl={SUBGRAPH} usdcAddress={USDC}
+  resolveExtraAddresses={async (user) => [
+    (await publicClient.readContract({ address: INTEGRATOR, abi: TRADESTARS_ABI,
+      functionName: "proxyAddress", args: [user] })) as `0x${string}`,
+  ]} />
+```
+
+A cancelled offramp leaves the USDC in the user's proxy, so the `<Cashout>`
+"Try again" button re-places from the same balance — self-serve retry, no
+relayer/owner. See `payment-integrators/docs/OFFRAMP-V2.md` for the contract side.
+
 > **Tip:** `userPubKey` is auto-generated from the SDK's relay identity
 > (lazily persisted in localStorage). Hosts that already use `<Checkout>`
 > share the same identity — no extra wiring required.
