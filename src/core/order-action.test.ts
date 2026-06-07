@@ -150,6 +150,25 @@ test("paid BUY: status escalates by elapsed, no action (chain requires CANCELLED
   }
 });
 
+test("paid BUY: live flag is set only for the 'will resolve within' countdown tier", () => {
+  // Guards the OrderActionState.live flag on this branch: it drives the 1s
+  // ticker, and a silent drop would freeze a long-pending paid-BUY countdown.
+  const cases: ReadonlyArray<{ elapsed: number; live: boolean }> = [
+    { elapsed: 60 * 1000, live: false }, // < 5min: plain
+    { elapsed: 10 * 60 * 1000, live: false }, // 5-30min: taking longer
+    { elapsed: 30 * 60 * 1000, live: true }, // >= 30min: live countdown begins
+    { elapsed: 10 * 60 * 60 * 1000, live: true }, // mid-countdown
+    { elapsed: BUY_DISPUTE_CLOSE_MS + 1, live: false }, // past 24h close: clamped to plain
+  ];
+  for (const { elapsed, live } of cases) {
+    const out = computeOrderAction(
+      baseOrder({ status: "paid", type: "buy", paidAt: 1n }),
+      PLACED_AT_MS + elapsed,
+    );
+    assert.strictEqual(out.live === true, live, `elapsed=${elapsed}ms`);
+  }
+});
+
 // ─── cancelled BUY (the real dispute path) ─────────────────────────────
 
 test("cancelled BUY before window opens (paidAt > 0): countdown in status, no action", () => {
