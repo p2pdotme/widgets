@@ -71,6 +71,14 @@ export interface OrderActionState {
   statusText: string;
   action: ActionVariant;
   disputeState: DisputeState;
+  /** True when the row changes purely from the passage of time and must
+   *  re-render to stay correct: a live countdown (report-problem chip, the
+   *  pre-window "review opens in", the BUY/PAID "will resolve within"), or a
+   *  dispute-window open/close boundary the row will cross. Drives the
+   *  per-row 1s ticker (OrderAction.useCountdownTicker) so these rows stay
+   *  live even on an all-terminal screen where the parent poll is idle (the
+   *  poll only re-renders pending statuses). Static/terminal rows omit it. */
+  live?: boolean;
 }
 
 const MIN = 60 * 1000;
@@ -161,6 +169,7 @@ export function computeOrderAction(
           if (remaining > 0) {
             return noAction(
               `Paid · processing payment · will resolve within ${formatRemaining(remaining)}`,
+              true,
             );
           }
           return noAction("Paid · processing payment");
@@ -223,8 +232,8 @@ export function computeOrderAction(
   }
 }
 
-function noAction(statusText: string): OrderActionState {
-  return { statusText, action: { kind: "none" }, disputeState: "none" };
+function noAction(statusText: string, live = false): OrderActionState {
+  return { statusText, action: { kind: "none" }, disputeState: "none", live };
 }
 
 /** Is this past-window order still worth showing in an "actionable only"
@@ -271,6 +280,10 @@ function computeDisputeWindow(input: DisputeWindowInput): OrderActionState {
       statusText: `${beforeOpenLabel} · review opens in ${formatRemaining(remaining)}`,
       action: { kind: "none" },
       disputeState: "none",
+      // Live: ticking the countdown also re-renders the row the instant it
+      // crosses into the disputable window, surfacing the report-problem
+      // recovery chip. Terminal-status pre-window rows have no parent poll.
+      live: true,
     };
   }
   if (elapsed <= closeMs) {
@@ -281,6 +294,7 @@ function computeDisputeWindow(input: DisputeWindowInput): OrderActionState {
       statusText: insideLabel,
       action: { kind: "report-problem", remainingMs: remaining, filled },
       disputeState: "none",
+      live: true,
     };
   }
   return {
