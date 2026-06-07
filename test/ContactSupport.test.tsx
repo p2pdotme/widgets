@@ -149,4 +149,34 @@ describe("ContactSupport chat-open lifecycle (stuck-loader regression)", () => {
     await waitFor(() => expect(sdk.openChatwoot).toHaveBeenCalledTimes(1));
     expect(bridge.signInWithBridge).toHaveBeenCalledTimes(2);
   });
+
+  it("does not force chat open if the user dismisses the loader mid sign-in", async () => {
+    // Defer the sign-in so we can dismiss while it is in flight.
+    let resolveSignIn!: (s: unknown) => void;
+    bridge.signInWithBridge.mockReturnValueOnce(
+      new Promise((r) => {
+        resolveSignIn = r as (s: unknown) => void;
+      }),
+    );
+    render(
+      <ContactSupport
+        orderId="227"
+        state={disputeOpen}
+        signer={signer}
+        bridgeUrl="https://bridge.local"
+        originApp="test-app"
+        chatEnabled
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /contact support/i }));
+    // Loader is up (sign-in pending). The user backs out via the backdrop.
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(dialog.parentElement!);
+    // Sign-in now resolves with a good session — but the user already left, so
+    // the chat must NOT be force-opened on top of whatever they navigated to.
+    resolveSignIn(session);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(sdk.openChatwoot).not.toHaveBeenCalled();
+  });
 });
