@@ -22,7 +22,7 @@
 // `dispute-raised` immediately and the click target switches from
 // "open report flow" to "open chat".
 
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPublicClient, http } from "viem";
 import { base, baseSepolia } from "viem/chains";
 import { color, font, weight, themeToCssVars } from "../ui/theme";
@@ -118,6 +118,12 @@ export function ContactSupport(props: ContactSupportProps) {
     kind: "closed",
   });
   const [chatAttempt, setChatAttempt] = useState(0);
+  // Set when the user dismisses the modal (Escape / backdrop / Close). The
+  // chat-open effect is keyed only on `chatAttempt`, so closing the modal
+  // mid-flight no longer tears the effect down — this ref carries the cancel
+  // intent into the in-flight async so a backed-out user is never force-shown
+  // the chat or an error. Cleared at the start of each open/retry.
+  const userDismissedRef = useRef(false);
 
   useEffect(injectKeyframes, []);
 
@@ -151,6 +157,7 @@ export function ContactSupport(props: ContactSupportProps) {
       setModalState({ kind: "registered" });
       return;
     }
+    userDismissedRef.current = false;
     setModalState({ kind: "chat-signing" });
     setChatAttempt((a) => a + 1);
   }, [inWindow, txSigner, chatEnabled]);
@@ -190,14 +197,27 @@ export function ContactSupport(props: ContactSupportProps) {
   );
 
   const closeModal = useCallback(() => {
+    // Treat dismissal as a cancel signal for any in-flight sign-in/boot.
+    userDismissedRef.current = true;
     setModalState({ kind: "closed" });
   }, []);
 
   // Chat-open effect: signs in against the bridge, boots Chatwoot's
   // iframe, then auto-dismisses our modal (Chatwoot is now the
   // foreground surface).
+  //
+  // Keyed SOLELY on `chatAttempt` (incremented by handleClick/retryChat).
+  // This effect reacts to a user-intent signal, not to prop changes, so:
+  //  - it must NOT depend on `modalState.kind` (the effect SETS it to
+  //    "chat-loading" mid-flight; depending on it would cancel the in-flight
+  //    async before openChatwoot() and strand the loader forever); and
+  //  - it must NOT depend on `signer`/`signer.address`/`bridgeUrl`/`orderId`:
+  //    an in-place wallet switch or a fresh inline signer object would
+  //    otherwise re-fire the whole sign-in + boot and pop the chat open with
+  //    no click. Those are read fresh from the closure each time chatAttempt
+  //    advances (on every click/retry), which is the current value.
   useEffect(() => {
-    if (modalState.kind !== "chat-signing") return;
+    if (chatAttempt === 0) return;
     let cancelled = false;
     (async () => {
       try {
@@ -216,7 +236,7 @@ export function ContactSupport(props: ContactSupportProps) {
             writeCachedSession(bridgeUrl, signer.address, session, orderId);
           }
         }
-        if (cancelled) return;
+        if (cancelled || userDismissedRef.current) return;
         if (!session.chatwoot) {
           // Bridge says no chatwoot session yet (typically post-dispute
           // before the listener has seeded the conversation). User can
@@ -229,11 +249,11 @@ export function ContactSupport(props: ContactSupportProps) {
         }
         setModalState({ kind: "chat-loading" });
         await bootChatwoot(session.chatwoot);
-        if (cancelled) return;
+        if (cancelled || userDismissedRef.current) return;
         openChatwoot();
         setModalState({ kind: "closed" });
       } catch (err) {
-        if (cancelled) return;
+        if (cancelled || userDismissedRef.current) return;
         const reason = err instanceof Error ? err.message : String(err);
         setModalState({ kind: "chat-error", reason });
       }
@@ -241,17 +261,20 @@ export function ContactSupport(props: ContactSupportProps) {
     return () => {
       cancelled = true;
     };
-  }, [modalState.kind, chatAttempt, bridgeUrl, signer, orderId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally
+    // keyed only on chatAttempt (the click/retry signal); see note above.
+  }, [chatAttempt]);
 
   const retryChat = useCallback(() => {
     if (orderId) clearCachedSession(bridgeUrl, signer.address, orderId);
+    userDismissedRef.current = false;
     setChatAttempt((a) => a + 1);
     setModalState({ kind: "chat-signing" });
   }, [bridgeUrl, signer.address, orderId]);
 
-  if (!shouldRender) return null;
+  const themeStyle = useMemo(() => themeToCssVars(theme), [theme]);
 
-  const themeStyle = themeToCssVars(theme);
+  if (!shouldRender) return null;
 
   return (
     <div style={themeStyle} data-contact-support-root>

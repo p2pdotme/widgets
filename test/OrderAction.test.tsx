@@ -137,4 +137,77 @@ describe("OrderAction", () => {
     expect(contactSupportProps.state.disputeState).toBe("open");
     expect(contactSupportProps.state.action.kind).toBe("none");
   });
+
+  // CPU-loop regression: a row with no live countdown must NOT arm a
+  // per-second interval. The old useNowTick ran setInterval unconditionally
+  // in every row forever, re-rendering all of (typically terminal) order
+  // history once a second.
+  it("does not arm a per-second interval for a row with no live countdown", () => {
+    const spy = vi.spyOn(globalThis, "setInterval");
+    render(<OrderAction {...baseProps(baseOrder({ status: "placed" }))} />);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("arms the countdown interval only while a report-problem countdown is live", () => {
+    vi.spyOn(Date, "now").mockReturnValue((NOW_SEC + 60 * 60) * 1000);
+    const spy = vi.spyOn(globalThis, "setInterval");
+    render(
+      <OrderAction
+        {...baseProps(
+          baseOrder({ status: "cancelled", type: "buy", paidAt: 1n }),
+        )}
+      />,
+    );
+    expect(spy).toHaveBeenCalled();
+  });
+
+  it("tears down the armed interval when the row crosses out of its window", () => {
+    const setSpy = vi.spyOn(globalThis, "setInterval");
+    const clearSpy = vi.spyOn(globalThis, "clearInterval");
+    // In-window report-problem row (BUY cancelled, paid, 1h elapsed).
+    vi.spyOn(Date, "now").mockReturnValue((NOW_SEC + 60 * 60) * 1000);
+    const order = baseOrder({ status: "cancelled", type: "buy", paidAt: 1n });
+    const { rerender } = render(<OrderAction {...baseProps(order)} />);
+    expect(setSpy).toHaveBeenCalledTimes(1);
+    const armedId = setSpy.mock.results[0].value;
+    // Advance past the 24h BUY close → action.kind flips to "none", live
+    // false → the prior interval is cleared and none re-armed.
+    vi.spyOn(Date, "now").mockReturnValue((NOW_SEC + 25 * 60 * 60) * 1000);
+    rerender(<OrderAction {...baseProps(order)} />);
+    expect(clearSpy).toHaveBeenCalledWith(armedId);
+    expect(setSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a pre-window dispute row live so the recovery chip appears when its window opens", () => {
+    // BUY cancelled (paid), 10 min elapsed — before the 15-min review window.
+    // Terminal status, so the parent poll never re-renders it; the row must
+    // self-tick to catch the boundary.
+    vi.spyOn(Date, "now").mockReturnValue((NOW_SEC + 10 * 60) * 1000);
+    const setSpy = vi.spyOn(globalThis, "setInterval");
+    const order = baseOrder({ status: "cancelled", type: "buy", paidAt: 1n });
+    const { rerender } = render(<OrderAction {...baseProps(order)} />);
+    // Pre-window: no recovery chip yet, but the ticker IS armed.
+    expect(contactSupportProps.state.action.kind).toBe("none");
+    expect(setSpy).toHaveBeenCalled();
+    // Cross into the window → the report-problem recovery chip appears.
+    vi.spyOn(Date, "now").mockReturnValue((NOW_SEC + 20 * 60) * 1000);
+    rerender(<OrderAction {...baseProps(order)} />);
+    expect(contactSupportProps.state.action.kind).toBe("report-problem");
+  });
+
+  it("ticks the paid-BUY 'will resolve within' countdown, then tears down at the 24h close", () => {
+    const setSpy = vi.spyOn(globalThis, "setInterval");
+    const clearSpy = vi.spyOn(globalThis, "clearInterval");
+    // Paid BUY, 1h elapsed — past the 30min mark, inside the live countdown.
+    vi.spyOn(Date, "now").mockReturnValue((NOW_SEC + 60 * 60) * 1000);
+    const order = baseOrder({ status: "paid", type: "buy", paidAt: 1n });
+    const { rerender } = render(<OrderAction {...baseProps(order)} />);
+    expect(setSpy).toHaveBeenCalledTimes(1);
+    const armedId = setSpy.mock.results[0].value;
+    // Past the 24h dispute close → countdown clamps, live false → torn down.
+    vi.spyOn(Date, "now").mockReturnValue((NOW_SEC + 25 * 60 * 60) * 1000);
+    rerender(<OrderAction {...baseProps(order)} />);
+    expect(clearSpy).toHaveBeenCalledWith(armedId);
+    expect(setSpy).toHaveBeenCalledTimes(1);
+  });
 });
