@@ -22,7 +22,7 @@
 // `dispute-raised` immediately and the click target switches from
 // "open report flow" to "open chat".
 
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { createPublicClient, http } from "viem";
 import { base, baseSepolia } from "viem/chains";
 import { color, font, weight, themeToCssVars } from "../ui/theme";
@@ -196,8 +196,19 @@ export function ContactSupport(props: ContactSupportProps) {
   // Chat-open effect: signs in against the bridge, boots Chatwoot's
   // iframe, then auto-dismisses our modal (Chatwoot is now the
   // foreground surface).
+  //
+  // Keyed SOLELY on `chatAttempt` (incremented by handleClick/retryChat).
+  // This effect reacts to a user-intent signal, not to prop changes, so:
+  //  - it must NOT depend on `modalState.kind` (the effect SETS it to
+  //    "chat-loading" mid-flight; depending on it would cancel the in-flight
+  //    async before openChatwoot() and strand the loader forever); and
+  //  - it must NOT depend on `signer`/`signer.address`/`bridgeUrl`/`orderId`:
+  //    an in-place wallet switch or a fresh inline signer object would
+  //    otherwise re-fire the whole sign-in + boot and pop the chat open with
+  //    no click. Those are read fresh from the closure each time chatAttempt
+  //    advances (on every click/retry), which is the current value.
   useEffect(() => {
-    if (modalState.kind !== "chat-signing") return;
+    if (chatAttempt === 0) return;
     let cancelled = false;
     (async () => {
       try {
@@ -241,7 +252,9 @@ export function ContactSupport(props: ContactSupportProps) {
     return () => {
       cancelled = true;
     };
-  }, [modalState.kind, chatAttempt, bridgeUrl, signer, orderId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally
+    // keyed only on chatAttempt (the click/retry signal); see note above.
+  }, [chatAttempt]);
 
   const retryChat = useCallback(() => {
     if (orderId) clearCachedSession(bridgeUrl, signer.address, orderId);
@@ -249,9 +262,9 @@ export function ContactSupport(props: ContactSupportProps) {
     setModalState({ kind: "chat-signing" });
   }, [bridgeUrl, signer.address, orderId]);
 
-  if (!shouldRender) return null;
+  const themeStyle = useMemo(() => themeToCssVars(theme), [theme]);
 
-  const themeStyle = themeToCssVars(theme);
+  if (!shouldRender) return null;
 
   return (
     <div style={themeStyle} data-contact-support-root>
