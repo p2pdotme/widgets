@@ -7,6 +7,72 @@ and the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format. While
 the package is `0.x`, minor releases may introduce additive prop changes;
 patch releases stay backward-compatible.
 
+## [1.2.1] — 2026-06-07
+
+### Fixed — Support widget (`<ContactSupport>` / `<OrderAction>`)
+
+- `ContactSupport`: the chat-open effect listed `modalState.kind` in its
+  own deps and set it mid-flight, cancelling the in-flight async before
+  `openChatwoot` — so the "Loading chat" overlay never dismissed (chat
+  opened underneath). The effect is now keyed solely on `chatAttempt`, so
+  neither a self-set state nor a prop change re-fires it.
+- `OrderAction`: `useNowTick` armed an unconditional 1s `setInterval` in
+  every row forever (a per-second render storm across order history). The
+  ticker now arms only for time-live rows via a new `OrderActionState.live`
+  flag; static / terminal rows never tick. `themeToCssVars` is memoized.
+
+### Changed — Checkout concurrency gate: one in-flight order at a time
+
+- The `<Checkout>` (onramp) pending-order gate now blocks a new placement
+  whenever **any** order is pending, regardless of amount or credit. The
+  user lands on the "Finish your pending order first" screen and must
+  complete or cancel the pending order (with a **Resume that order**
+  affordance when `onResumeRequest` is wired) before placing another.
+- Removed the previous same-amount **auto-resume** and the credit-gated
+  different-amount allowance. Credit still drives the pre-order breakdown
+  but no longer affects the block / allow decision. Stale legacy retail
+  orders are still filtered out (`keepOnlyB2BPending`) so a "pending
+  forever" order can't permanently lock the user out. No public API
+  change; internal `computeGateDecision` no longer takes a `credit` arg.
+
+### Changed — Screening rejection copy
+
+- The `user_restricted` screening rejection now surfaces a generic
+  "We saw unusual activity — please wait for some time as a minor update"
+  message instead of disclosing the repeated-cancellation reason and an
+  exact retry countdown. `restrictedUntil` is still carried on the error
+  context; the internal `formatRestrictionTime` helper was removed.
+
+## [1.2.0] — 2026-06-06
+
+### Added — Offramp v2 (allocation-funded cashout)
+
+- Opt-in, backward-compatible support for the TradeStars offramp v2
+  (per-user-proxy allocation). New `CashoutProps.fetchAvailableOfframp`
+  sources the Max / insufficient-amount affordance from an integrator
+  allocation instead of the wallet's `balanceOf`.
+- Retry-from-cancelled: the offramp machine retains `feeUsdc` and exposes
+  `retryPlace` / `canRetryPlace`; the cancelled screen gains a Try-again
+  button that re-places a fresh SELL for the same amount.
+- `<PaymentHistory>` gains optional `resolveExtraAddresses`, which merges
+  the user's per-user-proxy offramp orders (`order.user`) with the EOA's,
+  de-duped and re-sorted, bypassing the B2B intersection.
+
+### Changed — chainId-bound multi-signer support sign-in
+
+- Support sign-in (`<Support>` / bridge) is now multi-signer aware
+  (EOA + ERC-1271 + ERC-6492). The signed message and `POST /auth/sign-in`
+  body bind the wallet's `chainId`
+  (`${purpose}:${address}:${chainId}:${timestamp}`) so an ERC-1271
+  signature can't be replayed across chains.
+- `SupportSigner` gains a `getChainId` resolver; the chainId is resolved
+  **live** from the connected wallet at sign time (Privy parses its CAIP-2
+  id; Thirdweb reads the active chain). It is **mandatory** — sign-in
+  throws before signing/POSTing if it can't be resolved (no default).
+  Privy + Thirdweb adapters carry it through.
+- **Lockstep / breaking:** must ship together with the companion bridge
+  multi-signer release, or sign-in 401s on a message-format mismatch.
+
 ## [1.1.2] — 2026-05-27
 
 ### Added — B2B order filtering (`<PaymentHistory>`)
