@@ -121,4 +121,32 @@ describe("ContactSupport chat-open lifecycle (stuck-loader regression)", () => {
     expect(bridge.signInWithBridge).toHaveBeenCalledTimes(1);
     expect(sdk.openChatwoot).toHaveBeenCalledTimes(1);
   });
+
+  it("shows the not-ready error and re-fires sign-in on Try again", async () => {
+    // First sign-in: bridge has no chatwoot session yet -> graceful error,
+    // chat NOT opened. (Default mock resolves a good session for the retry.)
+    bridge.signInWithBridge.mockResolvedValueOnce({ ...session, chatwoot: null });
+    render(
+      <ContactSupport
+        orderId="227"
+        state={disputeOpen}
+        signer={signer}
+        bridgeUrl="https://bridge.local"
+        originApp="test-app"
+        chatEnabled
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /contact support/i }));
+    await waitFor(() =>
+      expect(screen.getByText(/Could not open support/i)).toBeInTheDocument(),
+    );
+    expect(sdk.openChatwoot).not.toHaveBeenCalled();
+    expect(bridge.signInWithBridge).toHaveBeenCalledTimes(1);
+
+    // Try again must re-fire sign-in (the effect's only retry trigger is the
+    // chatAttempt bump now) and, on success, open the chat.
+    fireEvent.click(screen.getByRole("button", { name: /try again/i }));
+    await waitFor(() => expect(sdk.openChatwoot).toHaveBeenCalledTimes(1));
+    expect(bridge.signInWithBridge).toHaveBeenCalledTimes(2);
+  });
 });
