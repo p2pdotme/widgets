@@ -15,7 +15,7 @@
 //   · dispute raised / resolved → opens chat
 //   · otherwise                  → not rendered
 
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import type { Order } from "@p2pdotme/sdk/orders";
 import type { Address } from "viem";
 import { color, font, weight, S, themeToCssVars } from "../ui/theme";
@@ -26,16 +26,21 @@ import {
 import { ContactSupport } from "./ContactSupport";
 import type { RaiseDisputeSigner } from "./ReportProblemStep";
 
-/** 1s tick to keep countdowns + doughnut fill live. One per
- *  <OrderAction> instance; cheap (just setState), reads `Date.now()`
- *  at each tick. */
-function useNowTick(intervalMs = 1000): number {
-  const [now, setNow] = useState<number>(() => Date.now());
+/** Force a re-render once per second ONLY while `active` — i.e. while a
+ *  live countdown (the report-problem doughnut + remaining time) is on
+ *  screen. Idle rows never arm a timer, which avoids a per-row 1s render
+ *  storm across long order histories where most rows are terminal
+ *  (completed / cancelled / resolved) and have nothing to animate. The
+ *  clock itself is read fresh in render via `Date.now()`, so a row that
+ *  crosses into its dispute window reflects it on the next render without
+ *  every row polling every second. */
+function useCountdownTicker(active: boolean, intervalMs = 1000): void {
+  const [, setTick] = useState(0);
   useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), intervalMs);
+    if (!active) return;
+    const id = setInterval(() => setTick((n) => (n + 1) % 1_000_000), intervalMs);
     return () => clearInterval(id);
-  }, [intervalMs]);
-  return now;
+  }, [active, intervalMs]);
 }
 
 export interface OrderActionProps {
@@ -82,14 +87,18 @@ export function OrderAction(props: OrderActionProps) {
     theme,
   } = props;
 
-  const now = useNowTick();
-  const state = computeOrderAction(order, now);
+  const state = computeOrderAction(order, Date.now());
+  // Tick only rows that change with time: a live countdown (report-problem
+  // chip, "review opens in", "will resolve within") or a dispute-window
+  // boundary the row will cross. `state.live` is set by computeOrderAction
+  // for exactly those; static/terminal rows never arm a timer.
+  useCountdownTicker(state.live === true);
 
   const handleResume = useCallback(() => {
     onResumeOrder?.(orderId);
   }, [onResumeOrder, orderId]);
 
-  const themeStyle = themeToCssVars(theme);
+  const themeStyle = useMemo(() => themeToCssVars(theme), [theme]);
   const showResume =
     state.action.kind === "resume" && typeof onResumeOrder === "function";
 
