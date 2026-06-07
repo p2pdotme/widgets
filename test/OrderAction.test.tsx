@@ -194,4 +194,20 @@ describe("OrderAction", () => {
     rerender(<OrderAction {...baseProps(order)} />);
     expect(contactSupportProps.state.action.kind).toBe("report-problem");
   });
+
+  it("ticks the paid-BUY 'will resolve within' countdown, then tears down at the 24h close", () => {
+    const setSpy = vi.spyOn(globalThis, "setInterval");
+    const clearSpy = vi.spyOn(globalThis, "clearInterval");
+    // Paid BUY, 1h elapsed — past the 30min mark, inside the live countdown.
+    vi.spyOn(Date, "now").mockReturnValue((NOW_SEC + 60 * 60) * 1000);
+    const order = baseOrder({ status: "paid", type: "buy", paidAt: 1n });
+    const { rerender } = render(<OrderAction {...baseProps(order)} />);
+    expect(setSpy).toHaveBeenCalledTimes(1);
+    const armedId = setSpy.mock.results[0].value;
+    // Past the 24h dispute close → countdown clamps, live false → torn down.
+    vi.spyOn(Date, "now").mockReturnValue((NOW_SEC + 25 * 60 * 60) * 1000);
+    rerender(<OrderAction {...baseProps(order)} />);
+    expect(clearSpy).toHaveBeenCalledWith(armedId);
+    expect(setSpy).toHaveBeenCalledTimes(1);
+  });
 });
