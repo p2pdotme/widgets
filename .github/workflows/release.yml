@@ -1,0 +1,58 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions: {}            # least privilege; each job opts in to exactly what it needs
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write        # tag + create the GitHub Release
+      pull-requests: write    # open / update the release PR
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          # config-file (release-please-config.json) and
+          # manifest-file (.release-please-manifest.json) use default names
+
+  publish:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write          # OIDC token for npm trusted publishing
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'                      # >= 22.14.0 covers OIDC + strip-types tests
+          registry-url: 'https://registry.npmjs.org'
+          cache: npm
+
+      - name: Upgrade npm for OIDC trusted publishing
+        run: npm install -g npm@latest             # need >= 11.5.1
+
+      - run: npm ci
+
+      - name: Verify (typecheck, examples typecheck, tests, build)
+        run: npm run verify
+
+      - name: Publish to npm (OIDC + provenance)
+        run: |
+          v=$(node -p "require('./package.json').version")
+          if [[ "$v" == *-* ]]; then tag="${v#*-}"; tag="${tag%%.*}"; else tag="latest"; fi
+          npm publish --provenance --access public --tag "$tag"
