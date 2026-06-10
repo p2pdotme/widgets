@@ -20,6 +20,7 @@ const ORDER = "0xabc123";
 const signer: SupportSigner = {
   address: ADDR,
   signMessage: async () => "0xsig",
+  getChainId: async () => 84532,
 };
 
 function opsSession(): SignInResponse {

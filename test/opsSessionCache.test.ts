@@ -79,6 +79,7 @@ describe("opsSessionCache", () => {
     const signer: SupportSigner = {
       address: ADDR,
       signMessage: async () => "0xsig",
+      getChainId: async () => 84532,
     };
 
     it("returns the cached session without signing when valid", async () => {
