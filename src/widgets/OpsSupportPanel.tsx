@@ -47,12 +47,18 @@ const POLL_INTERVAL_MS = 7_000;
  *  once the POST resolves, and is what reconcile matches the polled thread on. */
 type OptimisticMessage = OpsThreadMessage & { serverId?: number };
 
-const TAG_OPTIONS: Array<{ value: SupportP2PTag; label: string }> = [
-  { value: "awaiting_user", label: "Awaiting user" },
-  { value: "reviewing", label: "Reviewing" },
-  { value: "evidence", label: "Evidence" },
-  { value: "escalated", label: "Escalated" },
-];
+// Operator-facing labels as a Record over SupportP2PTag so adding a tag to
+// the union forces a label here — and TAG_OPTIONS (the dropdown, derived
+// below) can't silently ship missing the new tag.
+const TAG_LABELS: Record<SupportP2PTag, string> = {
+  awaiting_user: "Awaiting user",
+  reviewing: "Reviewing",
+  evidence: "Evidence",
+  escalated: "Escalated",
+};
+const TAG_OPTIONS: Array<{ value: SupportP2PTag; label: string }> = (
+  Object.keys(TAG_LABELS) as SupportP2PTag[]
+).map((value) => ({ value, label: TAG_LABELS[value] }));
 
 const STATUS_STYLE: Record<SupportChatStatus, { bg: string; fg: string }> = {
   open: { bg: color.successSoft, fg: color.success },
