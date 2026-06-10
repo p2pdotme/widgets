@@ -4,12 +4,14 @@ import type { Order } from "@p2pdotme/sdk/orders";
 import { PaymentHistory, type PaymentHistoryProps } from "./PaymentHistory";
 import { Support } from "./Support";
 import { OrderAction } from "./OrderAction";
+import { P2PTagBanner } from "./P2PTagBanner";
 import type { RaiseDisputeSigner } from "./ReportProblemStep";
 import type {
   SupportProps,
   SupportTheme,
   SupportSigner,
   SupportStatus,
+  SupportP2PTag,
 } from "../types";
 import {
   readCachedSession,
@@ -109,7 +111,7 @@ export function PaymentHistoryWithSupport(
   props: PaymentHistoryWithSupportProps,
 ) {
   const { support, actionMode = "smart", ...orderHistoryProps } = props;
-  const activeOrderIds = useActiveSupportTickets(support);
+  const { activeOrderIds, tagByOrder } = useActiveSupportTickets(support);
 
   if (!support) {
     return <PaymentHistory {...orderHistoryProps} />;
@@ -131,13 +133,29 @@ export function PaymentHistoryWithSupport(
       <PaymentHistory
         {...orderHistoryProps}
         onResume={undefined}
+        // Same customer-facing decoration as the legacy chat path: the
+        // active-support pip plus the D-027-v2 P2P tag / resolved banner.
+        // Without this the friendly tag copy and "Chat closed by support"
+        // lock are unreachable under the default smart layout.
+        renderRowBadge={(order: { orderId: { toString(): string } }) => {
+          const id = order.orderId.toString();
+          const tagged = tagByOrder.get(id);
+          return (
+            <>
+              {activeOrderIds.has(id) ? <ActiveSupportPip /> : null}
+              {tagged ? (
+                <P2PTagBanner tag={tagged.p2pTag} status={tagged.status} />
+              ) : null}
+            </>
+          );
+        }}
         renderRowAction={(order: Order) => (
           <OrderAction
             orderId={order.orderId.toString()}
             order={order}
             signer={support.signer}
             bridgeUrl={support.bridgeUrl}
-            originApp={support.originApp}
+            originApp={support.originApp ?? "this app"}
             txSigner={support.txSigner}
             diamondAddress={
               support.diamondAddress ?? orderHistoryProps.diamondAddress
@@ -159,9 +177,21 @@ export function PaymentHistoryWithSupport(
   return (
     <PaymentHistory
       {...orderHistoryProps}
-      renderRowBadge={(order: { orderId: { toString(): string } }) =>
-        activeOrderIds.has(order.orderId.toString()) ? <ActiveSupportPip /> : null
-      }
+      renderRowBadge={(order: { orderId: { toString(): string } }) => {
+        const id = order.orderId.toString();
+        const tagged = tagByOrder.get(id);
+        return (
+          <>
+            {activeOrderIds.has(id) ? <ActiveSupportPip /> : null}
+            {/* Customer-facing P2P tag / resolved banner (D-027-v2). Only
+                renders once `/tickets/me` surfaces `p2p_tag` / a resolved
+                status; otherwise tagByOrder has no entry and this is null. */}
+            {tagged ? (
+              <P2PTagBanner tag={tagged.p2pTag} status={tagged.status} />
+            ) : null}
+          </>
+        );
+      }}
       renderRowAction={(order: { orderId: { toString(): string }; disputeStatus?: string }) => (
         <Support
           orderId={order.orderId.toString()}
@@ -210,16 +240,30 @@ function ActiveSupportPip() {
   );
 }
 
+interface TicketDecoration {
+  /** Operator-set P2P tag, when the bridge surfaces it. */
+  p2pTag?: SupportP2PTag;
+  /** Chatwoot conversation status (drives the resolved banner). */
+  status?: string;
+}
+
 /**
  * On mount, ensure the wallet has a valid bridge session (silently
  * refreshing via signature when the cached token is missing or expired)
- * and then fetch the user's open Chatwoot conversations. The returned
- * Set is keyed by `orderId` so per-row decoration is O(1).
+ * and then fetch the user's open Chatwoot conversations. Returns:
+ *  - `activeOrderIds`: set of orderIds with an open (non-resolved) thread,
+ *     keyed for O(1) per-row decoration.
+ *  - `tagByOrder`: per-order `{ p2pTag, status }` used to render the
+ *     customer-facing `P2PTagBanner`. Only populated for rows whose ticket
+ *     carries a `p2pTag` or a resolved status (D-027-v2).
  */
 function useActiveSupportTickets(
   support: PaymentHistoryWithSupportProps["support"],
-): Set<string> {
+): { activeOrderIds: Set<string>; tagByOrder: Map<string, TicketDecoration> } {
   const [activeIds, setActiveIds] = useState<Set<string>>(() => new Set());
+  const [tagByOrder, setTagByOrder] = useState<Map<string, TicketDecoration>>(
+    () => new Map(),
+  );
 
   useEffect(() => {
     if (!support) return;
@@ -248,6 +292,7 @@ function useActiveSupportTickets(
         });
         if (cancelled) return;
         setActiveIds(buildActiveOrderSet(tickets));
+        setTagByOrder(buildTagByOrder(tickets));
       } catch {
         // Silent: the indicator is best-effort. If the bridge is down or
         // Chatwoot is not configured, rows render without the pip.
@@ -259,7 +304,7 @@ function useActiveSupportTickets(
     };
   }, [support?.bridgeUrl, support?.signer, support?.chatEnabled]);
 
-  return activeIds;
+  return { activeOrderIds: activeIds, tagByOrder };
 }
 
 function buildActiveOrderSet(tickets: TicketSummary[]): Set<string> {
@@ -271,6 +316,24 @@ function buildActiveOrderSet(tickets: TicketSummary[]): Set<string> {
     // resolved is a closed thread.
     if (t.status === "resolved") continue;
     out.add(t.orderId);
+  }
+  return out;
+}
+
+/**
+ * Per-order `{ p2pTag, status }` for rows whose ticket carries a P2P tag or
+ * a resolved status. Rows with neither are omitted so the banner stays
+ * absent until the bridge surfaces the field (D-027-v2).
+ */
+function buildTagByOrder(
+  tickets: TicketSummary[],
+): Map<string, TicketDecoration> {
+  const out = new Map<string, TicketDecoration>();
+  for (const t of tickets) {
+    if (!t.orderId) continue;
+    const resolved = t.status === "resolved";
+    if (!t.p2pTag && !resolved) continue;
+    out.set(t.orderId, { p2pTag: t.p2pTag, status: t.status });
   }
   return out;
 }

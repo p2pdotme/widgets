@@ -11,6 +11,7 @@ import {
   clearCachedSession,
   type SignInResponse,
 } from "../state/sessionCache";
+import { OpsSupportPanel } from "./OpsSupportPanel";
 
 type ErrorKind = "userRejected" | "network" | "auth" | "chatwoot" | "unknown";
 
@@ -69,6 +70,111 @@ function classifyError(err: unknown): { kind: ErrorKind; reason: string } {
 }
 
 export function Support(props: SupportProps) {
+  // Ops surface (D-027-v2). Always-live operator panel; `chatEnabled` is a
+  // customer-mode-only gate and does not apply here. The customer launcher
+  // path below is untouched when `mode` is absent or "customer".
+  if (props.mode === "ops") {
+    return <OpsSupport {...props} />;
+  }
+  return <CustomerSupport {...props} />;
+}
+
+/** Operator surface wrapper. Honors the `layout` prop:
+ *  - "modal"      → wrapped in the dialog `<Modal>` (default for ops).
+ *  - "inline"     → rendered in flow.
+ *  - "side-rail"  → fixed-width right rail that collapses to inline below lg.
+ */
+function OpsSupport(props: SupportProps) {
+  const {
+    orderId,
+    signer,
+    bridgeUrl,
+    theme,
+    onClose,
+    onChatResolved,
+    layout = "modal",
+  } = props;
+  const themeStyle = useMemo(() => themeToCssVars(theme), [theme]);
+  const [open, setOpen] = useState(true);
+
+  useEffect(injectKeyframes, []);
+
+  const handleClose = useCallback(() => {
+    setOpen(false);
+    onClose?.();
+  }, [onClose]);
+
+  if (!orderId) {
+    // Ops surface is per-order; without an orderId there is nothing to load.
+    return null;
+  }
+
+  const panel = (
+    <OpsSupportPanel
+      orderId={orderId}
+      signer={signer}
+      bridgeUrl={bridgeUrl}
+      onChatResolved={onChatResolved}
+    />
+  );
+
+  if (layout === "modal") {
+    return (
+      <Modal
+        open={open}
+        onClose={handleClose}
+        ariaLabel="Order support"
+        themeStyle={themeStyle}
+      >
+        <div style={{ height: "70vh", maxHeight: 640, display: "flex" }}>
+          {panel}
+        </div>
+      </Modal>
+    );
+  }
+
+  if (layout === "side-rail") {
+    return (
+      <div
+        style={themeStyle}
+        data-support-root
+        className="p2p-support-side-rail"
+      >
+        <div
+          style={{
+            height: "100%",
+            border: `1px solid ${color.border}`,
+            borderRadius: radius.lg,
+            overflow: "hidden",
+            background: color.surface,
+          }}
+        >
+          {panel}
+        </div>
+      </div>
+    );
+  }
+
+  // inline
+  return (
+    <div style={themeStyle} data-support-root>
+      <div
+        style={{
+          height: "100%",
+          minHeight: 360,
+          border: `1px solid ${color.border}`,
+          borderRadius: radius.lg,
+          overflow: "hidden",
+          background: color.surface,
+        }}
+      >
+        {panel}
+      </div>
+    </div>
+  );
+}
+
+function CustomerSupport(props: SupportProps) {
   const {
     orderId,
     originApp,
@@ -193,7 +299,7 @@ export function Support(props: SupportProps) {
       >
         <DialogContent
           orderId={orderId}
-          originApp={originApp}
+          originApp={originApp ?? "this app"}
           phase={phase}
           onClose={handleClose}
           onRetry={handleRetry}
