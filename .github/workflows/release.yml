@@ -55,4 +55,4 @@ jobs:
         run: |
           v=$(node -p "require('./package.json').version")
           if [[ "$v" == *-* ]]; then tag="${v#*-}"; tag="${tag%%.*}"; else tag="latest"; fi
-          npm publish --provenance --access public --tag "$tag"
+          npm publish --access public --tag "$tag"   # provenance is automatic under trusted publishing
