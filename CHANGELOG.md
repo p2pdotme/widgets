@@ -7,6 +7,13 @@ and the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format. While
 the package is `0.x`, minor releases may introduce additive prop changes;
 patch releases stay backward-compatible.
 
+## [1.3.1](https://github.com/p2pdotme/widgets/compare/v1.3.0...v1.3.1) (2026-06-10)
+
+
+### Bug Fixes
+
+* build before typecheck:examples in verify ([#23](https://github.com/p2pdotme/widgets/issues/23)) ([5ae57bf](https://github.com/p2pdotme/widgets/commit/5ae57bf89b6da88fb503a7038a94840c2a396b77))
+
 ## [1.3.0](https://github.com/p2pdotme/widgets/compare/v1.2.1...v1.3.0) (2026-06-10)
 
 
