@@ -15,6 +15,15 @@
 
 export { Support } from "./widgets/Support";
 export {
+  OpsSupportPanel,
+  type OpsSupportPanelProps,
+} from "./widgets/OpsSupportPanel";
+export {
+  P2PTagBanner,
+  type P2PTagBannerProps,
+} from "./widgets/P2PTagBanner";
+export { friendlyP2PTagCopy } from "./core/p2p-tag";
+export {
   PaymentHistoryWithSupport,
   type PaymentHistoryWithSupportProps,
 } from "./widgets/PaymentHistoryWithSupport";
@@ -61,4 +70,6 @@ export type {
   SupportStatus,
   SupportSession,
   SupportSessionChatwoot,
+  SupportP2PTag,
+  SupportChatStatus,
 } from "./types";

@@ -257,6 +257,12 @@ export function injectKeyframes() {
         .p2p-stepper-cell { gap: 0 !important; }
         .p2p-stepper-line { margin: 0 8px !important; }
       }
+      /* Ops side-rail: a fixed-width right column at lg+, collapsing to a
+         full-width inline block below the lg breakpoint (1024px). */
+      .p2p-support-side-rail { width: 380px; max-width: 100%; height: 100%; }
+      @media (max-width: 1023px) {
+        .p2p-support-side-rail { width: 100%; height: auto; }
+      }
     `;
     document.head.appendChild(style);
   }
