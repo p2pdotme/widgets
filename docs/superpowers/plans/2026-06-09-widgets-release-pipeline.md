@@ -239,23 +239,20 @@ gh api /repos/p2pdotme/widgets/actions/permissions/workflow   # verify can_appro
 ```
 If the org (`p2pdotme`) enforces this off at the org level, it must be enabled by an org admin first.
 
-### R2: Register the OIDC trusted publisher (one-time, before merging the first release PR)
+### R2: Register the OIDC trusted publisher -- DONE 2026-06-10
 
-`npm trust` needs npm >= 11.10.0; local npm is 10.9.2, so run via `npx` (no global upgrade).
+Done via the **npmjs.com web UI**, not the CLI. Sequence as executed:
 
-```bash
-# 1. dry-run to confirm exact flags + intended config (writes nothing)
-npx -y npm@latest trust github @p2pdotme/widgets \
-  --repository p2pdotme/widgets \
-  --workflow release.yml \
-  --allow-publish \
-  --dry-run
+1. Hard prerequisite discovered: account-level 2FA must be enabled, or the trust POST returns 403 with no
+   OTP prompt. The `p2pmedev` account had 2FA disabled; enabled it (`auth-and-writes`, via a passkey).
+2. Because the 2FA method is a passkey (no typeable code for the CLI `--otp`), registered the trusted
+   publisher in the web UI: npmjs.com/package/@p2pdotme/widgets/access -> Trusted Publisher -> GitHub
+   Actions, with org `p2pdotme`, repository `widgets`, workflow `release.yml`, environment blank, action publish.
+3. Verified against the values shown in the web UI (the CLI `npm trust list` read-back needs interactive 2FA).
 
-# 2. same command without --dry-run; supply the email OTP at the prompt
-```
-Auth for this single run: a short-lived granular access token with write access to the package, held in macOS Keychain under an always-prompt ACL per the secret-handling policy, used only here and revoked afterward. The trust operation itself still demands an OTP (a 2FA-bypass token is rejected for trust), read from email at the prompt. `--workflow release.yml` must match the workflow filename exactly.
-
-Verify: `npx -y npm@latest trust list` shows the GitHub trusted publisher for `@p2pdotme/widgets`.
+Notes: the CLI flag is `--file`, not `--workflow`. CLI registration is possible with a passkey via npm's
+browser-handoff 2FA (`npx -y npm@latest trust github @p2pdotme/widgets --repository p2pdotme/widgets --file
+release.yml --allow-publish`, run interactively), but the web UI was simpler.
 
 ### R3: First release (proves A1, A2, A4, A5)
 

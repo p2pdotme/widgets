@@ -38,7 +38,7 @@ The existing `.github/workflows/ci.yml` (verify on push/PR to `main`) stays as t
 | #  | Decision | Rationale |
 |----|----------|-----------|
 | D1 | npm auth = **OIDC trusted publishing** (keyless) | No stored secret, automatic provenance, npm's best practice for public repos. Nothing to rotate. |
-| D2 | One-time trust registration via the **`npm trust` CLI**, email OTP supplied by user | Scriptable path; account 2FA is email-based, so the single interactive step is easy. |
+| D2 | One-time trust registration via the **npmjs.com web UI** | The publishing account uses a passkey for 2FA, which has no typeable code for the CLI's `--otp`. The web UI completes the passkey challenge in the browser. Account-level 2FA must be enabled (a hard requirement for trust). |
 | D3 | **release-please** drives version bump + `CHANGELOG.md` + tag + GitHub Release | Commits are already conventional; one tool does bump, changelog, and release. Chosen over changesets (which needs per-PR changeset files, a new habit with no payoff for a single package). |
 | D4 | Publish wired as a **gated job in the same workflow** (`if: release_created`), not a literal `on: release` trigger | A literal release trigger would need a bot PAT to fire from release-please's bot-created release. Gating inside one workflow keeps the OIDC no-secrets win. |
 | D5 | **No Environment approval gate** | Merging the release PR is the single human gate. Publish stays hands-off afterward. |
@@ -168,25 +168,21 @@ matches the existing `v1.2.1` tag.
 
 1. **Enable PR creation by Actions.** Repo Settings -> Actions -> General -> "Allow GitHub Actions to
    create and approve pull requests". Without this, release-please cannot open its release PR.
-2. **Register the OIDC trusted publisher** (`npm trust` needs npm `>= 11.10.0`; local npm is `10.9.2`,
-   so run it via `npx`, no global upgrade):
+2. **Register the OIDC trusted publisher.** Hard prerequisite: account-level 2FA must be enabled on the
+   publishing account, or the trust operation is forbidden (403) regardless of any code supplied. Register
+   at **npmjs.com -> package `@p2pdotme/widgets` -> Settings (`/access`) -> Trusted Publisher -> GitHub
+   Actions**:
 
-   ```bash
-   # confirm exact flags + intended config first, writing nothing
-   npx -y npm@latest trust github @p2pdotme/widgets \
-     --repository p2pdotme/widgets \
-     --workflow release.yml \
-     --allow-publish \
-     --dry-run
+   - Organization or user: `p2pdotme`
+   - Repository: `widgets`
+   - Workflow filename: `release.yml` (case-sensitive, must match the workflow file)
+   - Environment: blank
+   - Allowed action: publish
 
-   # then the same command without --dry-run; supply the email OTP at the prompt
-   ```
-
-   `--workflow release.yml` must match the workflow filename exactly (case-sensitive). Auth for this single
-   run uses a short-lived granular access token held in macOS Keychain under an always-prompt ACL per the
-   secret-handling policy, used only for this command and revoked afterward; the trust operation still
-   demands an OTP (a 2FA-bypass token is rejected for trust), which the user reads from email. Exact flag
-   names are confirmed by the `--dry-run` first.
+   The web UI is used because the account's 2FA is a passkey, which has no typeable OTP for the CLI. The
+   CLI equivalent is `npx -y npm@latest trust github @p2pdotme/widgets --repository p2pdotme/widgets --file
+   release.yml --allow-publish` (the flag is `--file`, not `--workflow`); with a passkey it requires npm's
+   browser-handoff 2FA, so it must be run in an interactive terminal.
 
 ## 7. Acceptance criteria (the "tests")
 
@@ -207,8 +203,10 @@ WITHOUT merging (A5). Only merge once it looks right; that merge is the first re
 - Anchoring: with zero existing GitHub Releases, confirm the first release-please PR does not over-reach.
   The seeded manifest (`1.2.1`) plus the matching `v1.2.1` tag should anchor it; add `bootstrap-sha` to the
   config only if the first PR pulls in pre-`1.2.1` history.
-- `npm trust github` exact flag names confirmed at execution via `--dry-run` / `--help`.
-- Email-OTP acceptance for the trust operation confirmed at execution (user reports account 2FA is email).
+- Trust registered via the web UI on 2026-06-10 (account 2FA was disabled; enabled as a passkey,
+  `auth-and-writes`). The CLI flag is `--file`, not `--workflow` as this draft originally said.
+- `npm trust list` read-back needs interactive 2FA, so registration was verified against the web UI values
+  (GitHub Actions, p2pdotme/widgets, release.yml, publish). Final proof is the first OIDC publish (R3).
 - Version bumps depend on Conventional Commit discipline on `main` (already the team's habit).
 - Local `main` was stale vs `origin/main`; this branch is based on fresh `origin/main` (`225c2a7`).
 
