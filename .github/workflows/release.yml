@@ -20,7 +20,7 @@ jobs:
       release_created: ${{ steps.release.outputs.release_created }}
       tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
-      - uses: googleapis/release-please-action@v4
+      - uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4.4.1
         id: release
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -35,16 +35,16 @@ jobs:
       contents: read
       id-token: write          # OIDC token for npm trusted publishing
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'                      # >= 22.14.0 covers OIDC + strip-types tests
           registry-url: 'https://registry.npmjs.org'
           cache: npm
 
       - name: Upgrade npm for OIDC trusted publishing
-        run: npm install -g npm@latest             # need >= 11.5.1
+        run: npm install -g npm@^11.5.1            # >= 11.5.1 for OIDC; ^ pins below the next major
 
       - run: npm ci
 
