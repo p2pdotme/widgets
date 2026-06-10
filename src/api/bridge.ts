@@ -3,7 +3,7 @@
 // trim a trailing slash on `bridgeUrl` so consumers can pass either form.
 
 import type { SignInResponse } from "../state/sessionCache";
-import type { SupportSigner } from "../types";
+import type { SupportSigner, SupportP2PTag } from "../types";
 
 const SIGN_IN_PURPOSE = "support.p2p.me:sign-in";
 
@@ -101,6 +101,13 @@ export interface TicketSummary {
   orderId: string | null;
   status: string;
   updatedAt: number | null;
+  /**
+   * Operator-set P2P tag carried on the conversation's
+   * `custom_attributes.p2p_tag` (D-027-v2). Optional — only present once
+   * the `/tickets/me` bridge route surfaces the field. Drives the
+   * customer-facing `P2PTagBanner`.
+   */
+  p2pTag?: SupportP2PTag;
 }
 
 export async function fetchTicketsMe(opts: {
