@@ -7,6 +7,13 @@ and the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format. While
 the package is `0.x`, minor releases may introduce additive prop changes;
 patch releases stay backward-compatible.
 
+## [1.3.0](https://github.com/p2pdotme/widgets/compare/v1.2.1...v1.3.0) (2026-06-10)
+
+
+### Features
+
+* **support:** &lt;Support mode="ops"&gt; inline ops dispute panel + customer p2p_tag banner ([#17](https://github.com/p2pdotme/widgets/issues/17)) ([d03b238](https://github.com/p2pdotme/widgets/commit/d03b238350840075ed81aecf7886bb45bc62ccfd))
+
 ## [1.2.1] — 2026-06-07
 
 ### Fixed — Support widget (`<ContactSupport>` / `<OrderAction>`)
