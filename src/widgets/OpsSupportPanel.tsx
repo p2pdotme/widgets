@@ -141,8 +141,11 @@ export function OpsSupportPanel({
       setLoadError(null);
       // Reconcile optimism: drop a temp message once its real counterpart
       // (matched on the server id stamped after POST) appears in the polled
-      // thread, and clear the tag override once the server agrees. A temp
-      // whose POST hasn't resolved yet (no `serverId`) is kept until it does.
+      // thread. A temp whose POST hasn't resolved yet (no `serverId`) is
+      // kept until it does. The tag override is owned by handleTagChange
+      // (set on click, cleared after its own confirmed write), so the poll
+      // does not touch it — otherwise a concurrent operator's tag would be
+      // masked by a stale local override that never clears.
       setOptimistic((prev) =>
         prev.filter(
           (t) =>
@@ -150,7 +153,6 @@ export function OpsSupportPanel({
             !next.messages.some((m) => m.id === t.serverId),
         ),
       );
-      setTagOverride((ov) => (ov === undefined ? undefined : ov === next.p2pTag ? undefined : ov));
     } catch (err) {
       if (!mountedRef.current) return;
       setLoadError(err instanceof Error ? err.message : String(err));
@@ -223,7 +225,12 @@ export function OpsSupportPanel({
         await withAuth((token) =>
           patchOpsP2pTag({ bridgeUrl, sessionToken: token, orderId, tag }),
         );
-        void loadThread();
+        // Write landed: pull the canonical thread and hand the dropdown
+        // back to server truth. Clearing unconditionally (not on value
+        // match) means a concurrent operator's different tag is shown,
+        // not masked indefinitely by our optimistic override.
+        await loadThread();
+        if (mountedRef.current) setTagOverride(undefined);
       } catch {
         if (mountedRef.current) setTagOverride(prev);
       }
