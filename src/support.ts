@@ -19,6 +19,10 @@ export {
   type OpsSupportPanelProps,
 } from "./widgets/OpsSupportPanel";
 export {
+  UserSupportPanel,
+  type UserSupportPanelProps,
+} from "./widgets/UserSupportPanel";
+export {
   P2PTagBanner,
   type P2PTagBannerProps,
 } from "./widgets/P2PTagBanner";

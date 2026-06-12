@@ -22,23 +22,13 @@
 // `dispute-raised` immediately and the click target switches from
 // "open report flow" to "open chat".
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { createPublicClient, http } from "viem";
 import { base, baseSepolia } from "viem/chains";
 import { color, font, weight, themeToCssVars } from "../ui/theme";
 import { Modal } from "../ui/Modal";
-import { signInWithBridge } from "../api/bridge";
-import {
-  bootChatwoot,
-  openChatwoot,
-} from "../chatwoot/sdk";
-import {
-  readCachedSession,
-  writeCachedSession,
-  clearCachedSession,
-  type SignInResponse,
-} from "../state/sessionCache";
-import { Spinner, injectKeyframes } from "../ui/components";
+import { injectKeyframes } from "../ui/components";
+import { UserSupportPanel } from "./UserSupportPanel";
 import {
   ReportProblemStep,
   type RaiseDisputeSigner,
@@ -87,9 +77,7 @@ type Modal_State =
   | { kind: "closed" }
   | { kind: "report" }
   | { kind: "registered" }
-  | { kind: "chat-signing" }
-  | { kind: "chat-loading" }
-  | { kind: "chat-error"; reason: string };
+  | { kind: "chat" };
 
 export function ContactSupport(props: ContactSupportProps) {
   const {
@@ -117,13 +105,6 @@ export function ContactSupport(props: ContactSupportProps) {
   const [modalState, setModalState] = useState<Modal_State>({
     kind: "closed",
   });
-  const [chatAttempt, setChatAttempt] = useState(0);
-  // Set when the user dismisses the modal (Escape / backdrop / Close). The
-  // chat-open effect is keyed only on `chatAttempt`, so closing the modal
-  // mid-flight no longer tears the effect down — this ref carries the cancel
-  // intent into the in-flight async so a backed-out user is never force-shown
-  // the chat or an error. Cleared at the start of each open/retry.
-  const userDismissedRef = useRef(false);
 
   useEffect(injectKeyframes, []);
 
@@ -151,15 +132,13 @@ export function ContactSupport(props: ContactSupportProps) {
     // normally open chat. When `chatEnabled` is off (v1.1.1-bridge
     // default) we short-circuit to a static "support request registered"
     // modal — the bridge / Chatwoot stack is the unstable piece we're
-    // temporarily routing around. When `chatEnabled` is on, the original
-    // chat flow runs.
+    // temporarily routing around. When `chatEnabled` is on, the embedded
+    // chat panel opens (it manages its own bridge sign-in + thread).
     if (!chatEnabled) {
       setModalState({ kind: "registered" });
       return;
     }
-    userDismissedRef.current = false;
-    setModalState({ kind: "chat-signing" });
-    setChatAttempt((a) => a + 1);
+    setModalState({ kind: "chat" });
   }, [inWindow, txSigner, chatEnabled]);
 
   const handleReportSubmitted = useCallback(
@@ -197,80 +176,8 @@ export function ContactSupport(props: ContactSupportProps) {
   );
 
   const closeModal = useCallback(() => {
-    // Treat dismissal as a cancel signal for any in-flight sign-in/boot.
-    userDismissedRef.current = true;
     setModalState({ kind: "closed" });
   }, []);
-
-  // Chat-open effect: signs in against the bridge, boots Chatwoot's
-  // iframe, then auto-dismisses our modal (Chatwoot is now the
-  // foreground surface).
-  //
-  // Keyed SOLELY on `chatAttempt` (incremented by handleClick/retryChat).
-  // This effect reacts to a user-intent signal, not to prop changes, so:
-  //  - it must NOT depend on `modalState.kind` (the effect SETS it to
-  //    "chat-loading" mid-flight; depending on it would cancel the in-flight
-  //    async before openChatwoot() and strand the loader forever); and
-  //  - it must NOT depend on `signer`/`signer.address`/`bridgeUrl`/`orderId`:
-  //    an in-place wallet switch or a fresh inline signer object would
-  //    otherwise re-fire the whole sign-in + boot and pop the chat open with
-  //    no click. Those are read fresh from the closure each time chatAttempt
-  //    advances (on every click/retry), which is the current value.
-  useEffect(() => {
-    if (chatAttempt === 0) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        let session: SignInResponse | null = readCachedSession(
-          bridgeUrl,
-          signer.address,
-          orderId,
-        );
-        if (!session) {
-          session = await signInWithBridge({
-            signer,
-            bridgeUrl,
-            orderId,
-          });
-          if (session.chatwoot) {
-            writeCachedSession(bridgeUrl, signer.address, session, orderId);
-          }
-        }
-        if (cancelled || userDismissedRef.current) return;
-        if (!session.chatwoot) {
-          // Bridge says no chatwoot session yet (typically post-dispute
-          // before the listener has seeded the conversation). User can
-          // retry.
-          setModalState({
-            kind: "chat-error",
-            reason: "Support is not ready yet. Try again in a moment.",
-          });
-          return;
-        }
-        setModalState({ kind: "chat-loading" });
-        await bootChatwoot(session.chatwoot);
-        if (cancelled || userDismissedRef.current) return;
-        openChatwoot();
-        setModalState({ kind: "closed" });
-      } catch (err) {
-        if (cancelled || userDismissedRef.current) return;
-        const reason = err instanceof Error ? err.message : String(err);
-        setModalState({ kind: "chat-error", reason });
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally
-    // keyed only on chatAttempt (the click/retry signal); see note above.
-  }, [chatAttempt]);
-
-  const retryChat = useCallback(() => {
-    if (orderId) clearCachedSession(bridgeUrl, signer.address, orderId);
-    userDismissedRef.current = false;
-    setChatAttempt((a) => a + 1);
-    setModalState({ kind: "chat-signing" });
-  }, [bridgeUrl, signer.address, orderId]);
 
   const themeStyle = useMemo(() => themeToCssVars(theme), [theme]);
 
@@ -303,12 +210,7 @@ export function ContactSupport(props: ContactSupportProps) {
             ? "report-problem-title"
             : modalState.kind === "registered"
               ? "support-registered-title"
-              : modalState.kind === "chat-error"
-                ? "contact-support-chat-error-title"
-                : modalState.kind === "chat-signing" ||
-                    modalState.kind === "chat-loading"
-                  ? "contact-support-chat-loading-title"
-                  : undefined
+              : undefined
         }
         ariaLabel="Contact Support"
       >
@@ -325,15 +227,14 @@ export function ContactSupport(props: ContactSupportProps) {
           />
         ) : modalState.kind === "registered" ? (
           <RegisteredView onClose={closeModal} />
-        ) : modalState.kind === "chat-signing" ||
-          modalState.kind === "chat-loading" ? (
-          <ChatLoadingView phase={modalState.kind} />
-        ) : modalState.kind === "chat-error" ? (
-          <ChatErrorView
-            reason={modalState.reason}
-            onRetry={retryChat}
-            onClose={closeModal}
-          />
+        ) : modalState.kind === "chat" ? (
+          <div style={{ height: 560, maxHeight: "80vh" }}>
+            <UserSupportPanel
+              orderId={orderId}
+              signer={signer}
+              bridgeUrl={bridgeUrl}
+            />
+          </div>
         ) : null}
       </Modal>
     </div>
@@ -478,130 +379,6 @@ function Doughnut({ filled }: { filled: number }) {
         strokeLinecap="butt"
       />
     </svg>
-  );
-}
-
-function ChatLoadingView({
-  phase,
-}: {
-  phase: "chat-signing" | "chat-loading";
-}) {
-  return (
-    <div
-      aria-busy="true"
-      style={{
-        padding: 24,
-        background: color.surface,
-        color: color.text,
-        fontFamily: "var(--p2p-font, inherit)",
-      }}
-    >
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 12,
-        }}
-      >
-        <Spinner />
-        <div>
-          <h3
-            id="contact-support-chat-loading-title"
-            style={{ margin: 0, fontSize: 16, color: color.text }}
-          >
-            {phase === "chat-signing" ? "Signing in" : "Loading chat"}
-          </h3>
-          <p
-            style={{
-              margin: "4px 0 0 0",
-              color: color.textMuted,
-              fontSize: 12,
-            }}
-          >
-            {phase === "chat-signing"
-              ? "Approve the message request to open support."
-              : "Connecting to the support thread..."}
-          </p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ChatErrorView({
-  reason,
-  onRetry,
-  onClose,
-}: {
-  reason: string;
-  onRetry: () => void;
-  onClose: () => void;
-}) {
-  return (
-    <div
-      style={{
-        padding: 24,
-        background: color.surface,
-        color: color.text,
-        fontFamily: "var(--p2p-font, inherit)",
-      }}
-    >
-      <h3
-        id="contact-support-chat-error-title"
-        style={{ margin: 0, fontSize: 16, color: color.text }}
-      >
-        Could not open support
-      </h3>
-      <p
-        style={{
-          color: color.textMuted,
-          fontSize: 13,
-          lineHeight: 1.5,
-          marginTop: 8,
-        }}
-      >
-        {reason}
-      </p>
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "flex-end",
-          gap: 8,
-          marginTop: 16,
-        }}
-      >
-        <button
-          type="button"
-          onClick={onClose}
-          style={{
-            padding: "8px 14px",
-            fontSize: 14,
-            background: "transparent",
-            color: color.text,
-            border: `1px solid ${color.border}`,
-            borderRadius: "var(--p2p-radius-button, 8px)",
-            cursor: "pointer",
-          }}
-        >
-          Close
-        </button>
-        <button
-          type="button"
-          onClick={onRetry}
-          style={{
-            padding: "8px 14px",
-            fontSize: 14,
-            background: color.accent,
-            color: color.accentText,
-            border: "none",
-            borderRadius: "var(--p2p-radius-button, 8px)",
-            cursor: "pointer",
-          }}
-        >
-          Try again
-        </button>
-      </div>
-    </div>
   );
 }
 
