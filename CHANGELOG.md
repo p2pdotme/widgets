@@ -7,6 +7,34 @@ and the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format. While
 the package is `0.x`, minor releases may introduce additive prop changes;
 patch releases stay backward-compatible.
 
+## [Unreleased]
+
+### Changed — Support user chat moves off the Chatwoot website SDK onto the bridge proxy
+
+- `<ContactSupport>`: the chat path no longer boots the Chatwoot website
+  SDK (`bootChatwoot` / `openChatwoot` + the HMAC `setUser` handshake). It
+  now renders the embedded `UserSupportPanel`, which reads and writes the
+  user's own per-order conversation through the bridge `/me/*` routes
+  (`api/userBridge.ts`), authenticated by wallet sign-in and gated on
+  on-chain ownership. This removes the silent-anonymous-visitor failure
+  that occurred when the bridge `hmacSecret` drifted from the Chatwoot
+  inbox `hmac_token` (user couldn't see ops replies; own messages spawned
+  a new anonymous conversation).
+
+### Added
+
+- `UserSupportPanel` (+ `UserSupportPanelProps`) exported from
+  `@p2pdotme/widgets/support`: a standalone customer-side per-order chat
+  panel (the user-side mirror of `OpsSupportPanel`) that any p2p product
+  can drop in without re-implementing the website-SDK/HMAC path.
+  Sign-in is routed through `ensureUserSession`, whose in-flight guard
+  collapses the mount + first-poll race into a single wallet prompt; send
+  failures surface a reason (instead of the bubble silently vanishing), a
+  declined signature offers an explicit retry rather than re-prompting on a
+  loop, post-load poll blips show a quiet reconnecting hint, and the other
+  side always renders as a neutral "Support" so a per-operator identity
+  cannot leak to the customer.
+
 ## [1.3.1](https://github.com/p2pdotme/widgets/compare/v1.3.0...v1.3.1) (2026-06-10)
 
 
