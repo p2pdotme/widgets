@@ -17,7 +17,9 @@
 // Both lanes refresh on a 60s expiry buffer to dodge clock skew between
 // the bridge and the browser.
 
+import { signInWithBridge } from "../api/bridge";
 import type { ChatwootSession } from "../chatwoot/sdk";
+import type { SupportSigner } from "../types";
 
 export interface SignInResponse {
   ok: true;
@@ -96,5 +98,64 @@ export function clearCachedSession(
     window.localStorage.removeItem(cacheKey(bridgeUrl, address, orderId));
   } catch {
     // ignore
+  }
+}
+
+// Flight guard: collapse concurrent sign-ins for the same
+// (bridgeUrl, address, orderId) into one `/auth/sign-in` round-trip. The
+// customer twin of `ensureOpsSession` — a panel mount and its own first poll
+// (or a 401 retry racing a poll tick) both request a session before the first
+// sign-in settles; without this each would call `signInWithBridge` and pop a
+// SEPARATE wallet signature prompt. Keyed by the full per-order cache key so
+// sign-ins for different orders do NOT collapse into each other.
+const inFlight = new Map<string, Promise<SignInResponse | null>>();
+
+/** Test-only: drop any in-flight sign-in promises between cases. */
+export function __resetUserFlightForTests(): void {
+  inFlight.clear();
+}
+
+/**
+ * Return a valid per-order user session for the signer. Reads the customer
+ * cache first; on a miss, signs in (binding the `orderId` so the bridge
+ * resolves the per-side conversation), writes the cache, and returns.
+ * Concurrent calls for the same (bridgeUrl, address, orderId) share one
+ * in-flight sign-in, so a single wallet prompt covers them all. Returns null
+ * when the signer cannot sign and nothing is cached.
+ */
+export async function ensureUserSession(opts: {
+  signer: SupportSigner;
+  bridgeUrl: string;
+  orderId: string;
+}): Promise<SignInResponse | null> {
+  const cached = readCachedSession(
+    opts.bridgeUrl,
+    opts.signer.address,
+    opts.orderId,
+  );
+  if (cached) return cached;
+
+  const key = cacheKey(opts.bridgeUrl, opts.signer.address, opts.orderId);
+  const existing = inFlight.get(key);
+  if (existing) return existing;
+
+  if (!opts.signer.signMessage) return null;
+
+  const promise = (async () => {
+    const fresh = await signInWithBridge({
+      signer: opts.signer,
+      bridgeUrl: opts.bridgeUrl,
+      orderId: opts.orderId,
+    });
+    writeCachedSession(opts.bridgeUrl, opts.signer.address, fresh, opts.orderId);
+    return fresh;
+  })();
+
+  // Track the raw promise; clear on settle so a later sign-in can run.
+  inFlight.set(key, promise);
+  try {
+    return await promise;
+  } finally {
+    inFlight.delete(key);
   }
 }
