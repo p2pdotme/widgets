@@ -7,6 +7,13 @@ and the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format. While
 the package is `0.x`, minor releases may introduce additive prop changes;
 patch releases stay backward-compatible.
 
+## [1.4.0](https://github.com/p2pdotme/widgets/compare/v1.3.1...v1.4.0) (2026-06-14)
+
+
+### Features
+
+* **support:** bridge-proxied user chat via UserSupportPanel ([#26](https://github.com/p2pdotme/widgets/issues/26)) ([7174fbb](https://github.com/p2pdotme/widgets/commit/7174fbb64e60038a18c9650311f2da4ca27370ae))
+
 ## [Unreleased]
 
 ### Changed — Support user chat moves off the Chatwoot website SDK onto the bridge proxy
