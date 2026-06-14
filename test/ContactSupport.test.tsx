@@ -28,7 +28,15 @@ import type { OrderActionState } from "../src/core/order-action";
 import type { SupportSigner } from "../src/types";
 
 const USER = "0xe35DccC12404638B4e733881Df6D57D07B5d70E2" as `0x${string}`;
-const signer: SupportSigner = { address: USER };
+// A realistic wallet signer: chat sign-in goes through `ensureUserSession`,
+// which (like `ensureOpsSession`) short-circuits to null without a real
+// `signMessage`. `signInWithBridge` is mocked below, so these are only probed
+// by the session layer, never actually invoked against a wallet.
+const signer: SupportSigner = {
+  address: USER,
+  signMessage: async () => "0xsig",
+  getChainId: async () => 84532,
+};
 
 const session = {
   ok: true,

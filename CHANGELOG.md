@@ -27,6 +27,13 @@ patch releases stay backward-compatible.
   `@p2pdotme/widgets/support`: a standalone customer-side per-order chat
   panel (the user-side mirror of `OpsSupportPanel`) that any p2p product
   can drop in without re-implementing the website-SDK/HMAC path.
+  Sign-in is routed through `ensureUserSession`, whose in-flight guard
+  collapses the mount + first-poll race into a single wallet prompt; send
+  failures surface a reason (instead of the bubble silently vanishing), a
+  declined signature offers an explicit retry rather than re-prompting on a
+  loop, post-load poll blips show a quiet reconnecting hint, and the other
+  side always renders as a neutral "Support" so a per-operator identity
+  cannot leak to the customer.
 
 ## [1.3.1](https://github.com/p2pdotme/widgets/compare/v1.3.0...v1.3.1) (2026-06-10)
 
