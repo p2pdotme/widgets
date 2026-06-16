@@ -617,10 +617,10 @@ export function Checkout(props: CheckoutProps) {
                         Android, client-side QR on desktop. The copy-VPA row above
                         is the universal fallback. INR-only because other rails need
                         PSP-generated payloads the widget can't synthesize. */}
-                    {state.decryptedUpi && state.currency === "INR" && (
+                    {state.decryptedUpi && state.currency === "INR" && fiatDisplay && (
                       <UpiPay
                         vpa={state.decryptedUpi}
-                        amount={fiatDisplay ?? ""}
+                        amount={fiatDisplay}
                         orderId={state.orderId ?? ""}
                         payeeName={productName}
                         onAppLaunch={() => setLaunchedUpiApp(true)}
