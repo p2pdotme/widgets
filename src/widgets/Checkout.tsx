@@ -11,6 +11,7 @@ import {
   Spinner, PulseDot, CenterStatus, SuccessIcon, XIcon,
   CopyRow, Stepper, CountdownRing, Skeleton, injectKeyframes,
 } from "../ui/components";
+import { UpiPay } from "../ui/UpiPay";
 
 // Window the user has to pay after a merchant accepts before auto-cancellation.
 // Mirrors user-app's 5-minute window.
@@ -39,6 +40,7 @@ export function Checkout(props: CheckoutProps) {
   const [isMarkingPaid, setIsMarkingPaid] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
   const [timerExpired, setTimerExpired] = useState(false);
+  const [launchedUpiApp, setLaunchedUpiApp] = useState(false);
   const [breakdownExpanded, setBreakdownExpanded] = useState(false);
   const [selectedCurrency, setSelectedCurrency] = useState(currencies?.[0]);
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -611,17 +613,23 @@ export function Checkout(props: CheckoutProps) {
                         <p style={S.muted}>Decrypting payment details…</p>
                       )}
                     </div>
-                    {/* QR is INR-only — mirrors user-app behavior. Mercado
-                        Pago / PIX QRs require PSP-generated payloads that
-                        the widget can't synthesize from the bare address. */}
+                    {/* INR pay surface: per-app buttons on iOS, system chooser on
+                        Android, client-side QR on desktop. The copy-VPA row above
+                        is the universal fallback. INR-only because other rails need
+                        PSP-generated payloads the widget can't synthesize. */}
                     {state.decryptedUpi && state.currency === "INR" && (
-                      <div style={{ display: "flex", justifyContent: "center", marginTop: 16 }}>
-                        <div style={{ padding: 12, background: "#fff", borderRadius: radius.md, border: `1px solid ${color.border}` }}>
-                          <img src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&margin=0&data=${encodeURIComponent(
-                            `upi://pay?pa=${state.decryptedUpi}&am=${fiatDisplay}&cu=INR&tr=${state.orderId}`
-                          )}`} alt="QR" style={{ width: 180, height: 180, display: "block" }} />
-                        </div>
-                      </div>
+                      <UpiPay
+                        vpa={state.decryptedUpi}
+                        amount={fiatDisplay ?? ""}
+                        orderId={state.orderId ?? ""}
+                        payeeName={productName}
+                        onAppLaunch={() => setLaunchedUpiApp(true)}
+                      />
+                    )}
+                    {launchedUpiApp && state.currency === "INR" && (
+                      <p style={{ ...S.faint, textAlign: "center", marginTop: 10 }}>
+                        Finished paying? Tap "I've paid" below.
+                      </p>
                     )}
                   </div>
 
