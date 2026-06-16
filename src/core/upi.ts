@@ -38,9 +38,13 @@ export function buildUpiIntent(p: UpiParams): string {
  * takes the shared query string from `buildUpiQuery`.
  *
  * NOTE: these scheme prefixes are vendor conventions, not NPCI standard, and
- * vary by app/version. They MUST be validated on a real iPhone (Task 7) before
- * merge. Known alternates to try if one fails: gpay -> `tez://upi/pay?`,
- * phonepe -> `phonepe://upi/pay?`.
+ * vary by app/version. They MUST be validated on a real iPhone before merge —
+ * no simulator or device-cloud can do it, since the UPI apps can't be installed
+ * there. Documented alternates to try if one fails (from PSP iOS docs —
+ * PayU / Cashfree / NTT Data):
+ *   phonepe -> `phonepe://upi/pay?`
+ *   gpay    -> `tez://upi/pay?`
+ *   paytm   -> `paytm://upi/pay?`
  */
 export const UPI_APPS = [
   { id: "phonepe", label: "PhonePe", href: (q: string) => `phonepe://pay?${q}` },
