@@ -1,6 +1,6 @@
 import React from "react";
 import { QRCodeSVG } from "qrcode.react";
-import { buildUpiQuery, UPI_APPS } from "../core/upi";
+import { buildUpiQuery, buildUpiIntent, UPI_APPS } from "../core/upi";
 import { isIOS, isAndroid } from "../core/platform";
 import { color, radius, S } from "./theme";
 import { UPI_APP_LOGOS } from "./upi-app-icons";
@@ -33,7 +33,7 @@ const logoTileStyle: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
-  height: 46,
+  height: 48,
   padding: "0 14px",
   boxSizing: "border-box",
   background: "#ffffff",
@@ -56,13 +56,15 @@ const logoImgStyle: React.CSSProperties = {
  * component is the universal fallback and is unaffected.
  */
 export function UpiPay({ vpa, amount, orderId, payeeName, onAppLaunch }: UpiPayProps) {
-  const q = buildUpiQuery({
+  const params = {
     pa: vpa,
     pn: payeeName ?? "P2P Payment",
     am: amount,
     tn: `Order ${orderId}`,
     tr: orderId,
-  });
+  };
+  const q = buildUpiQuery(params);
+  const intentUrl = buildUpiIntent(params);
 
   if (isIOS()) {
     // No scheme chooser on iOS -> explicit per-app buttons, laid out 2x2 so
@@ -81,7 +83,7 @@ export function UpiPay({ vpa, amount, orderId, payeeName, onAppLaunch }: UpiPayP
               aria-label={`Pay with ${a.label}`}
             >
               {logo ? (
-                <img src={logo.src} alt={logo.alt} style={logoImgStyle} />
+                <img src={logo.src} alt="" style={logoImgStyle} />
               ) : (
                 <span>{a.label}</span>
               )}
@@ -94,7 +96,7 @@ export function UpiPay({ vpa, amount, orderId, payeeName, onAppLaunch }: UpiPayP
 
   if (isAndroid()) {
     return (
-      <a href={`upi://pay?${q}`} onClick={onAppLaunch} style={{ ...linkStyle, marginTop: 16 }}>
+      <a href={intentUrl} onClick={onAppLaunch} style={{ ...linkStyle, marginTop: 16 }}>
         Pay with UPI app
       </a>
     );
@@ -103,7 +105,7 @@ export function UpiPay({ vpa, amount, orderId, payeeName, onAppLaunch }: UpiPayP
   return (
     <div style={{ display: "flex", justifyContent: "center", marginTop: 16 }}>
       <div style={{ padding: 12, background: "#fff", borderRadius: radius.md, border: `1px solid ${color.border}` }}>
-        <QRCodeSVG value={`upi://pay?${q}`} size={180} level="L" />
+        <QRCodeSVG value={intentUrl} size={180} level="L" />
       </div>
     </div>
   );
