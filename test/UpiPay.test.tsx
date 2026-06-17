@@ -15,15 +15,20 @@ const baseProps = { vpa: "merchant@okhdfc", amount: "125.00", orderId: "169", pa
 afterEach(() => vi.restoreAllMocks());
 
 describe("UpiPay", () => {
-  it("renders four per-app deep links on iOS, no QR", () => {
+  it("renders four per-app deep links on iOS, each with the app's official logo", () => {
     setUA(IPHONE);
     const { container } = render(<UpiPay {...baseProps} />);
-    const hrefs = Array.from(container.querySelectorAll("a")).map((a) => a.getAttribute("href") ?? "");
+    const anchors = Array.from(container.querySelectorAll("a"));
+    expect(anchors).toHaveLength(4);
+    const hrefs = anchors.map((a) => a.getAttribute("href") ?? "");
     expect(hrefs.some((h) => h.startsWith("phonepe://pay?"))).toBe(true);
     expect(hrefs.some((h) => h.startsWith("gpay://upi/pay?"))).toBe(true);
     expect(hrefs.some((h) => h.startsWith("paytmmp://pay?"))).toBe(true);
     expect(hrefs.some((h) => h.startsWith("bhim://upi/pay?"))).toBe(true);
-    expect(container.querySelector("svg")).toBeNull();
+    // each app button shows its official logo as an <img> data-URI; QR is desktop-only
+    const imgs = Array.from(container.querySelectorAll("a img"));
+    expect(imgs).toHaveLength(4);
+    expect(imgs.every((i) => (i.getAttribute("src") ?? "").startsWith("data:image/svg+xml"))).toBe(true);
   });
 
   it("renders a single generic UPI intent link on Android", () => {
