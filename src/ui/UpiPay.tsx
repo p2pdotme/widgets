@@ -1,9 +1,9 @@
-import React from "react";
+import React, { useState, useEffect } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import { buildUpiQuery, buildUpiIntent, UPI_APPS } from "../core/upi";
 import { isIOS, isAndroid } from "../core/platform";
 import { color, radius, S } from "./theme";
-import { UPI_APP_LOGOS } from "./upi-app-icons";
+import type { UpiAppLogo } from "./upi-app-icons";
 
 export interface UpiPayProps {
   /** Decrypted counterparty VPA. */
@@ -49,6 +49,13 @@ const logoImgStyle: React.CSSProperties = {
   display: "block",
 };
 
+// Shown in a tile until the lazy logo chunk resolves (and if it ever fails).
+const logoFallbackStyle: React.CSSProperties = {
+  fontSize: 13,
+  fontWeight: 600,
+  color: "#1a1a1a",
+};
+
 /**
  * The INR payment surface on the accepted screen. iOS gets explicit per-app
  * buttons (no scheme chooser on iOS); Android gets the generic intent link
@@ -56,6 +63,24 @@ const logoImgStyle: React.CSSProperties = {
  * component is the universal fallback and is unaffected.
  */
 export function UpiPay({ vpa, amount, orderId, payeeName, onAppLaunch }: UpiPayProps) {
+  const ios = isIOS();
+  // The official app logos (~25 KB of data-URI SVGs) are this component's only
+  // heavy part and are needed solely on the iOS per-app grid, so load them
+  // lazily: the dynamic import keeps them out of the main /checkout chunk for
+  // Android, desktop, and non-INR consumers. Until they resolve each tile shows
+  // its text label, and taps work throughout (the <a href> never needs the logo).
+  const [logos, setLogos] = useState<Record<string, UpiAppLogo> | null>(null);
+  useEffect(() => {
+    if (!ios) return;
+    let alive = true;
+    import("./upi-app-icons").then((m) => {
+      if (alive) setLogos(m.UPI_APP_LOGOS);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [ios]);
+
   const params = {
     pa: vpa,
     pn: payeeName ?? "P2P Payment",
@@ -66,14 +91,14 @@ export function UpiPay({ vpa, amount, orderId, payeeName, onAppLaunch }: UpiPayP
   const q = buildUpiQuery(params);
   const intentUrl = buildUpiIntent(params);
 
-  if (isIOS()) {
+  if (ios) {
     // No scheme chooser on iOS -> explicit per-app buttons, laid out 2x2 so
     // four apps stay within a short iPhone / Android viewport. Each tile shows
     // the app's official logo; the copy-VPA row above is the universal fallback.
     return (
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 16 }}>
         {UPI_APPS.map((a) => {
-          const logo = UPI_APP_LOGOS[a.id];
+          const logo = logos?.[a.id];
           return (
             <a
               key={a.id}
@@ -86,7 +111,7 @@ export function UpiPay({ vpa, amount, orderId, payeeName, onAppLaunch }: UpiPayP
               {logo ? (
                 <img src={logo.src} alt="" style={logoImgStyle} />
               ) : (
-                <span>{a.label}</span>
+                <span style={logoFallbackStyle}>{a.label}</span>
               )}
             </a>
           );

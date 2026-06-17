@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render } from "@testing-library/react";
+import { render, waitFor } from "@testing-library/react";
 import { UpiPay } from "../src/ui/UpiPay";
 
 const IPHONE = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15";
@@ -15,7 +15,7 @@ const baseProps = { vpa: "merchant@okhdfc", amount: "125.00", orderId: "169", pa
 afterEach(() => vi.restoreAllMocks());
 
 describe("UpiPay", () => {
-  it("renders four per-app deep links on iOS, each with the app's official logo", () => {
+  it("renders four per-app deep links on iOS, each with the app's official logo", async () => {
     setUA(IPHONE);
     const { container } = render(<UpiPay {...baseProps} />);
     const anchors = Array.from(container.querySelectorAll("a"));
@@ -25,9 +25,12 @@ describe("UpiPay", () => {
     expect(hrefs.some((h) => h.startsWith("gpay://upi/pay?"))).toBe(true);
     expect(hrefs.some((h) => h.startsWith("paytmmp://pay?"))).toBe(true);
     expect(hrefs.some((h) => h.startsWith("bhim://upi/pay?"))).toBe(true);
-    // each app button shows its official logo as an <img> data-URI; QR is desktop-only
+    // before the lazy logo chunk loads, tiles fall back to the text label and
+    // taps already work (the <a href> never depends on the logo)
+    expect(container.textContent).toContain("PhonePe");
+    // logos load lazily (dynamic import) -> each tile then shows its official <img>
+    await waitFor(() => expect(container.querySelectorAll("a img")).toHaveLength(4));
     const imgs = Array.from(container.querySelectorAll("a img"));
-    expect(imgs).toHaveLength(4);
     expect(imgs.every((i) => (i.getAttribute("src") ?? "").startsWith("data:image/svg+xml"))).toBe(true);
   });
 
