@@ -3,6 +3,7 @@ import { QRCodeSVG } from "qrcode.react";
 import { buildUpiQuery, UPI_APPS } from "../core/upi";
 import { isIOS, isAndroid } from "../core/platform";
 import { color, radius, S } from "./theme";
+import { UPI_APP_LOGOS } from "./upi-app-icons";
 
 export interface UpiPayProps {
   /** Decrypted counterparty VPA. */
@@ -24,6 +25,30 @@ const linkStyle: React.CSSProperties = {
   textDecoration: "none",
 };
 
+// A logo "tile" for the per-app grid. The official brand logos are designed for
+// a light background, so the tile stays white on every integrator theme to keep
+// them legible; only the border + radius follow the theme. The logo scales to
+// fit (object-contain), so nothing can overflow regardless of logo width.
+const logoTileStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  height: 46,
+  padding: "0 14px",
+  boxSizing: "border-box",
+  background: "#ffffff",
+  border: `1px solid ${color.border}`,
+  borderRadius: radius.md,
+  cursor: "pointer",
+};
+
+const logoImgStyle: React.CSSProperties = {
+  maxHeight: 18,
+  maxWidth: "100%",
+  objectFit: "contain",
+  display: "block",
+};
+
 /**
  * The INR payment surface on the accepted screen. iOS gets explicit per-app
  * buttons (no scheme chooser on iOS); Android gets the generic intent link
@@ -40,13 +65,29 @@ export function UpiPay({ vpa, amount, orderId, payeeName, onAppLaunch }: UpiPayP
   });
 
   if (isIOS()) {
+    // No scheme chooser on iOS -> explicit per-app buttons, laid out 2x2 so
+    // four apps stay within a short iPhone / Android viewport. Each tile shows
+    // the app's official logo; the copy-VPA row above is the universal fallback.
     return (
-      <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 16 }}>
-        {UPI_APPS.map((a) => (
-          <a key={a.id} href={a.href(q)} onClick={onAppLaunch} style={linkStyle}>
-            Pay with {a.label}
-          </a>
-        ))}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 16 }}>
+        {UPI_APPS.map((a) => {
+          const logo = UPI_APP_LOGOS[a.id];
+          return (
+            <a
+              key={a.id}
+              href={a.href(q)}
+              onClick={onAppLaunch}
+              style={logoTileStyle}
+              aria-label={`Pay with ${a.label}`}
+            >
+              {logo ? (
+                <img src={logo.src} alt={logo.alt} style={logoImgStyle} />
+              ) : (
+                <span>{a.label}</span>
+              )}
+            </a>
+          );
+        })}
       </div>
     );
   }
