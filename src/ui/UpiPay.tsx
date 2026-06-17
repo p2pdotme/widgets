@@ -73,9 +73,14 @@ export function UpiPay({ vpa, amount, orderId, payeeName, onAppLaunch }: UpiPayP
   useEffect(() => {
     if (!ios) return;
     let alive = true;
-    import("./upi-app-icons").then((m) => {
-      if (alive) setLogos(m.UPI_APP_LOGOS);
-    });
+    import("./upi-app-icons")
+      .then((m) => {
+        if (alive) setLogos(m.UPI_APP_LOGOS);
+      })
+      .catch(() => {
+        // Chunk fetch failed (offline / CDN purge after a redeploy): keep the
+        // text-label fallback. Taps already work; the logo is decorative.
+      });
     return () => {
       alive = false;
     };
