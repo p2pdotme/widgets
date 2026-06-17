@@ -12,8 +12,8 @@ export interface UpiPayProps {
   amount: string;
   /** Order id, used as the note + reference. */
   orderId: string;
-  /** Payee name shown in the UPI app; from the host productName. */
-  payeeName?: string;
+  /** Payee name shown in the UPI app; from the host productName (required). */
+  payeeName: string;
   /** Fired when a UPI app link is tapped (mobile), so the host can nudge "I've paid". */
   onAppLaunch?: () => void;
 }
@@ -83,7 +83,7 @@ export function UpiPay({ vpa, amount, orderId, payeeName, onAppLaunch }: UpiPayP
 
   const params = {
     pa: vpa,
-    pn: payeeName ?? "P2P Payment",
+    pn: payeeName,
     am: amount,
     tn: `Order ${orderId}`,
     tr: orderId,

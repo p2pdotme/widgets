@@ -504,7 +504,7 @@ export function Checkout(props: CheckoutProps) {
                         {state.currency} {fiatDisplay}
                       </h1>
                       <p style={{ ...S.muted, marginTop: 4, marginBottom: 0 }}>
-                        for {productName ?? (usdcDisplay ? `${usdcDisplay} USDC` : "your order")}
+                        for {productName}
                       </p>
                       {orderBreakdown && (
                         <button
