@@ -25,6 +25,11 @@ test("buildUpiQuery includes pn, tn, tr when provided", () => {
   assert.strictEqual(p.get("tr"), "42");
 });
 
+test("buildUpiQuery caps pn at 40 characters", () => {
+  const p = new URLSearchParams(buildUpiQuery({ pa: "a@b", am: "1.00", pn: "A".repeat(60) }));
+  assert.strictEqual(p.get("pn"), "A".repeat(40));
+});
+
 test("buildUpiQuery url-encodes reserved characters", () => {
   const q = buildUpiQuery({ pa: "a@b", am: "1.00", pn: "Tom & Jerry" });
   assert.ok(q.includes("pn=Tom+%26+Jerry"));
