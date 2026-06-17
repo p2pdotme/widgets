@@ -16,7 +16,3 @@ export function isIOS(s: string = ua()): boolean {
 export function isAndroid(s: string = ua()): boolean {
   return /Android/i.test(s);
 }
-
-export function isMobile(s: string = ua()): boolean {
-  return isAndroid(s) || isIOS(s);
-}

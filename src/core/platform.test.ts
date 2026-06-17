@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert";
-import { isIOS, isAndroid, isMobile } from "./platform.ts";
+import { isIOS, isAndroid } from "./platform.ts";
 
 const IPHONE = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15";
 const ANDROID = "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36";
@@ -15,10 +15,4 @@ test("isIOS detects iPhone, rejects Android and desktop", () => {
 test("isAndroid detects Android, rejects iPhone", () => {
   assert.strictEqual(isAndroid(ANDROID), true);
   assert.strictEqual(isAndroid(IPHONE), false);
-});
-
-test("isMobile is true for iOS and Android, false for desktop", () => {
-  assert.strictEqual(isMobile(IPHONE), true);
-  assert.strictEqual(isMobile(ANDROID), true);
-  assert.strictEqual(isMobile(DESKTOP), false);
 });
