@@ -263,6 +263,7 @@ export function injectKeyframes() {
       @media (max-width: 1023px) {
         .p2p-support-side-rail { width: 100%; height: auto; }
       }
+      .p2p-upi-tile:focus-visible { outline: 2px solid var(--p2p-color-accent, #7c3aed); outline-offset: 2px; }
     `;
     document.head.appendChild(style);
   }
