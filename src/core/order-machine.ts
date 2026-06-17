@@ -43,6 +43,7 @@ interface OrderState {
   fiatAmount: bigint | null;
   currency: string;
   decryptedUpi: string | null;
+  decryptError: string | null;
   error: string | null;
   // Pre-order quote — `buyPrice` is fiat-per-USDC at 6 decimals, fetched from
   // the diamond's `getPriceConfig`. Used to derive the routing `fiatAmount`
@@ -85,6 +86,7 @@ type OrderAction =
   | { type: "PLACED"; orderId: string; txHash: string }
   | { type: "ACCEPTED"; fiatAmount: bigint; usdcAmount: bigint; currency: string; fee: bigint; actualUsdcAmount: bigint; acceptedTimestamp: bigint }
   | { type: "DECRYPTED_UPI"; upi: string }
+  | { type: "DECRYPT_FAILED"; message: string }
   | { type: "PAID" }
   | { type: "COMPLETED" }
   | { type: "CANCELLED" }
@@ -101,10 +103,10 @@ type OrderAction =
   | { type: "CREDIT_LOADED"; credit: bigint; pending: PendingOrderSummary[]; gate: GateDecision }
   | { type: "CREDIT_ONLY_PLACED"; orderId: string; txHash: string };
 
-const INITIAL: OrderState = {
+export const INITIAL: OrderState = {
   phase: "checkout", orderId: null, txHash: null,
   usdcAmount: null, fiatAmount: null, currency: "INR",
-  decryptedUpi: null, error: null,
+  decryptedUpi: null, decryptError: null, error: null,
   buyPrice: null, smallOrderThreshold: null, smallOrderFixedFee: null,
   fee: null, actualUsdcAmount: null,
   acceptedTimestamp: null,
@@ -113,7 +115,7 @@ const INITIAL: OrderState = {
   creditOnly: false,
 };
 
-function reducer(state: OrderState, action: OrderAction): OrderState {
+export function reducer(state: OrderState, action: OrderAction): OrderState {
   switch (action.type) {
     case "PLACING": return { ...state, phase: "placing", error: null };
     case "PLACED": return { ...state, phase: "placed", orderId: action.orderId, txHash: action.txHash };
@@ -123,7 +125,8 @@ function reducer(state: OrderState, action: OrderAction): OrderState {
       fee: action.fee, actualUsdcAmount: action.actualUsdcAmount,
       acceptedTimestamp: action.acceptedTimestamp,
     };
-    case "DECRYPTED_UPI": return { ...state, decryptedUpi: action.upi };
+    case "DECRYPTED_UPI": return { ...state, decryptedUpi: action.upi, decryptError: null };
+    case "DECRYPT_FAILED": return { ...state, decryptError: action.message };
     case "PAID": return { ...state, phase: "paid", error: null };
     case "COMPLETED": return { ...state, phase: "completed" };
     case "CANCELLED": return { ...state, phase: "cancelled", error: null };
@@ -273,7 +276,8 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
         });
         const recipientIdentity = await resolveIdentity();
         const result = await decryptPaymentAddress({ encrypted: o.encUpi, recipientIdentity });
-        dispatch({ type: "DECRYPTED_UPI", upi: result.isOk() ? result.value : "Session changed" });
+        if (result.isOk()) dispatch({ type: "DECRYPTED_UPI", upi: result.value });
+        else dispatch({ type: "DECRYPT_FAILED", message: "Couldn't load payment details" });
       }
 
       if (status === OrderStatus.PAID && state.phase !== "paid" && state.phase !== "completed") {
@@ -479,7 +483,8 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
         });
         const recipientIdentity = await resolveIdentity();
         const dec = await decryptPaymentAddress({ encrypted: o.encUpi, recipientIdentity });
-        dispatch({ type: "DECRYPTED_UPI", upi: dec.isOk() ? dec.value : "Session changed" });
+        if (dec.isOk()) dispatch({ type: "DECRYPTED_UPI", upi: dec.value });
+        else dispatch({ type: "DECRYPT_FAILED", message: "Couldn't load payment details" });
 
         if (status === OrderStatus.PAID) dispatch({ type: "PAID" });
         if (status === OrderStatus.COMPLETED) {
