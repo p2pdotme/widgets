@@ -719,6 +719,7 @@ export function HomePage({ signer }: { signer: CheckoutSigner }) {
       {resumeOrderId && (
         <Checkout
           orderId={resumeOrderId}      // tracking-only — no placeOrder needed
+          productName="Your order"     // required for all modes since v2.0.0
           signer={signer}
           chainId={84532}
           onClose={() => setResumeOrderId(null)}
@@ -1403,7 +1404,7 @@ flows through the three host callbacks. That's the bright line.
 | `orderId` | `string` | one of these | Tracking-only mode: widget skips placement and polls chain status. Walks forward from any phase, so resuming an already-`PAID` or `COMPLETED` order works. |
 | `currencies` | `CurrencyOption[]` | — | Renders the in-widget currency picker. |
 | `amount` | `string` | — | Display string e.g. `"5 USDC"`. |
-| `productName` | `string` | — | Display string. Also used as the "for {productName}" subtitle on the accepted screen. |
+| `productName` | `string` | — | **Required (v2.0.0), all modes incl. tracking-only.** Display string + UPI payee name (`pn`); shown as the "for {productName}" subtitle on the accepted screen. |
 | `paymentNotice` | `ReactNode` | — | Caller-controlled banner above "Pay now" (e.g. "gas sponsored"). |
 | `subgraphUrl` | `string` | conditional | Required when any `CurrencyOption` omits `circleId` — used for SDK circle routing. |
 | `usdcAddress` | `0x…` | conditional | Same — required for SDK routing. |
