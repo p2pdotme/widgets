@@ -128,9 +128,12 @@ export interface CheckoutProps {
   // registered merchant on the Diamond (circleId must match).
   currencies?: CurrencyOption[];
 
-  // Display hints (used in mode B's pre-order screen)
+  // Display hint (used in mode B's pre-order screen)
   amount?: string;
-  productName?: string;
+  // Required: the product/order name. Shown in the summary and used as the
+  // payee name (pn) on the UPI/INR pay screen, so integrators must always
+  // supply it. (Made required 2026-06-17, PR #29 review #30.)
+  productName: string;
 
   // Optional notice rendered above the "Pay now" button on the pre-order
   // screen. Use for caller-specific context such as "wallet will be charged
