@@ -37,7 +37,7 @@ const logoTileStyle: React.CSSProperties = {
   padding: "0 14px",
   boxSizing: "border-box",
   background: "#ffffff",
-  border: `1px solid ${color.border}`,
+  border: "1px solid #e5e5e5",
   borderRadius: radius.md,
   cursor: "pointer",
 };
@@ -101,27 +101,33 @@ export function UpiPay({ vpa, amount, orderId, payeeName, onAppLaunch }: UpiPayP
     // four apps stay within a short iPhone / Android viewport. Each tile shows
     // the app's official logo; the copy-VPA row above is the universal fallback.
     return (
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 16 }}>
-        {UPI_APPS.map((a) => {
-          const logo = logos?.[a.id];
-          return (
-            <a
-              key={a.id}
-              href={a.href(q)}
-              onClick={onAppLaunch}
-              rel="noopener noreferrer"
-              style={logoTileStyle}
-              aria-label={`Pay with ${a.label}`}
-            >
-              {logo ? (
-                <img src={logo.src} alt="" style={logoImgStyle} />
-              ) : (
-                <span style={logoFallbackStyle}>{a.label}</span>
-              )}
-            </a>
-          );
-        })}
-      </div>
+      <>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 16 }}>
+          {UPI_APPS.map((a) => {
+            const logo = logos?.[a.id];
+            return (
+              <a
+                key={a.id}
+                className="p2p-upi-tile"
+                href={a.href(q)}
+                onClick={onAppLaunch}
+                rel="noopener noreferrer"
+                style={logoTileStyle}
+                aria-label={`Pay with ${a.label}`}
+              >
+                {logo ? (
+                  <img src={logo.src} alt="" style={logoImgStyle} />
+                ) : (
+                  <span style={logoFallbackStyle}>{a.label}</span>
+                )}
+              </a>
+            );
+          })}
+        </div>
+        <p style={{ ...S.faint, textAlign: "center", marginTop: 10 }}>
+          Didn't open? Copy the UPI ID above.
+        </p>
+      </>
     );
   }
 

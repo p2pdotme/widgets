@@ -32,6 +32,8 @@ describe("UpiPay", () => {
     await waitFor(() => expect(container.querySelectorAll("a img")).toHaveLength(4));
     const imgs = Array.from(container.querySelectorAll("a img"));
     expect(imgs.every((i) => (i.getAttribute("src") ?? "").startsWith("data:image/svg+xml"))).toBe(true);
+    expect(container.querySelectorAll(".p2p-upi-tile")).toHaveLength(4);
+    expect(container.textContent).toContain("Didn't open?");
   });
 
   it("renders a single generic UPI intent link on Android", () => {
