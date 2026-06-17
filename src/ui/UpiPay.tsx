@@ -79,6 +79,7 @@ export function UpiPay({ vpa, amount, orderId, payeeName, onAppLaunch }: UpiPayP
               key={a.id}
               href={a.href(q)}
               onClick={onAppLaunch}
+              rel="noopener noreferrer"
               style={logoTileStyle}
               aria-label={`Pay with ${a.label}`}
             >
@@ -96,7 +97,7 @@ export function UpiPay({ vpa, amount, orderId, payeeName, onAppLaunch }: UpiPayP
 
   if (isAndroid()) {
     return (
-      <a href={intentUrl} onClick={onAppLaunch} style={{ ...linkStyle, marginTop: 16 }}>
+      <a href={intentUrl} onClick={onAppLaunch} rel="noopener noreferrer" style={{ ...linkStyle, marginTop: 16 }}>
         Pay with UPI app
       </a>
     );
@@ -105,7 +106,9 @@ export function UpiPay({ vpa, amount, orderId, payeeName, onAppLaunch }: UpiPayP
   return (
     <div style={{ display: "flex", justifyContent: "center", marginTop: 16 }}>
       <div style={{ padding: 12, background: "#fff", borderRadius: radius.md, border: `1px solid ${color.border}` }}>
-        <QRCodeSVG value={intentUrl} size={180} level="L" />
+        {/* level="L" is deliberate: an on-screen QR has no damage to recover from,
+            so the lowest ECC maximizes capacity -> a lower, easier-to-scan version. */}
+        <QRCodeSVG value={intentUrl} size={200} level="L" />
       </div>
     </div>
   );
