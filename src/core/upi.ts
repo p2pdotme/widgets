@@ -20,7 +20,9 @@ export interface UpiParams {
 export function buildUpiQuery(p: UpiParams): string {
   const q = new URLSearchParams();
   q.set("pa", p.pa);
-  if (p.pn) q.set("pn", p.pn);
+  // Cap the payee name: UPI apps show only a short name, and a long pn inflates
+  // the desktop QR to a denser version that is harder to scan.
+  if (p.pn) q.set("pn", p.pn.slice(0, 40));
   q.set("am", p.am);
   q.set("cu", "INR");
   if (p.tn) q.set("tn", p.tn);
