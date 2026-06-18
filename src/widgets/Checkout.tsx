@@ -665,9 +665,9 @@ export function Checkout(props: CheckoutProps) {
                   )}
 
                   <button
-                    style={{ ...S.primaryBtn, marginTop: 20, opacity: isMarkingPaid || timerExpired ? 0.5 : 1, cursor: timerExpired ? "not-allowed" : "pointer" }}
+                    style={{ ...S.primaryBtn, marginTop: 20, opacity: isMarkingPaid || timerExpired || addrView === "error" ? 0.5 : 1, cursor: timerExpired || addrView === "error" ? "not-allowed" : "pointer" }}
                     onClick={handleMarkPaid}
-                    disabled={isMarkingPaid || timerExpired || isCancelling}
+                    disabled={isMarkingPaid || timerExpired || isCancelling || addrView === "error"}
                   >
                     {timerExpired ? "Payment window expired" : isMarkingPaid ? "Confirming…" : "I've paid"}
                   </button>
