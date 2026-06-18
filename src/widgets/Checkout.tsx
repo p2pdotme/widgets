@@ -610,7 +610,7 @@ export function Checkout(props: CheckoutProps) {
                       ) : state.decryptedUpi ? (
                         <CopyRow value={state.decryptedUpi} copied={copied === "upi"} onCopy={() => copy(state.decryptedUpi!, "upi")} />
                       ) : state.decryptError ? (
-                        <p style={{ ...S.muted, color: color.danger }}>{state.decryptError}. Please refresh.</p>
+                        <p style={{ ...S.muted, color: color.danger }}>{state.decryptError}. Please contact support.</p>
                       ) : (
                         <p style={S.muted}>Decrypting payment details…</p>
                       )}
