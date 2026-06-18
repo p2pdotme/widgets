@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { formatUnits } from "viem";
 import type { CheckoutProps } from "../types";
-import { useOrderMachine } from "../core/order-machine";
+import { useOrderMachine, DECRYPT_FAILED_SENTINEL } from "../core/order-machine";
 import { resolveCurrencyMeta } from "../core/currency-meta";
 import { CurrencyRow } from "../ui/CurrencyRow";
 import { DEFAULT_DIAMOND_ADDRESS, USDC_DECIMALS } from "../core/contracts";
@@ -11,6 +11,31 @@ import {
   Spinner, PulseDot, CenterStatus, SuccessIcon, XIcon,
   CopyRow, Stepper, CountdownRing, Skeleton, injectKeyframes,
 } from "../ui/components";
+
+// Client-side UPI QR. Replaces the third-party api.qrserver.com image, which
+// leaked the counterparty VPA + amount + order id to a third party on every INR
+// accepted screen. Lazy so qrcode.react stays out of the main /checkout chunk.
+const LazyQR = React.lazy(() => import("qrcode.react").then((m) => ({ default: m.QRCodeSVG })));
+
+// Which payment-address view the accepted screen shows. Pure + exported so the
+// branch logic (incl. the decrypt-failure case) is unit-testable without a full
+// Checkout render. "error" wins over everything, so the failure sentinel can
+// never render as a copyable / QR-able address.
+export function paymentAddressView(
+  decryptedUpi: string | null,
+  hasCompound: boolean,
+): "error" | "compound" | "address" | "decrypting" {
+  if (decryptedUpi === DECRYPT_FAILED_SENTINEL) return "error";
+  if (hasCompound) return "compound";
+  if (decryptedUpi) return "address";
+  return "decrypting";
+}
+
+// Whether to render the INR pay QR: a resolved real VPA (contains "@", so never
+// the failure sentinel) on an INR order with a known amount.
+export function showInrQr(decryptedUpi: string | null, currency: string, hasAmount: boolean): boolean {
+  return !!decryptedUpi && decryptedUpi.includes("@") && currency === "INR" && hasAmount;
+}
 
 // Window the user has to pay after a merchant accepts before auto-cancellation.
 // Mirrors user-app's 5-minute window.
@@ -223,6 +248,8 @@ export function Checkout(props: CheckoutProps) {
   })();
   const compoundFields = acceptedMeta?.compoundFields ?? null;
   const compoundParts = state.decryptedUpi && compoundFields ? state.decryptedUpi.split("|") : [];
+  const addrView = paymentAddressView(state.decryptedUpi, !!compoundFields);
+  const showQr = showInrQr(state.decryptedUpi, state.currency, !!fiatDisplay);
 
   const stepIndex = state.phase === "completed" ? 3 : state.phase === "paid" ? 2 : state.phase === "accepted" ? 1 : 0;
   const hasPlaceOrder = Boolean(placeOrder);
@@ -596,30 +623,33 @@ export function Checkout(props: CheckoutProps) {
                       <span style={S.faint}>Order #{state.orderId}</span>
                     </div>
                     <div style={{ marginTop: 12 }}>
-                      {compoundFields ? (
+                      {addrView === "error" ? (
+                        <p style={{ ...S.muted, color: color.danger }}>Couldn't load payment details. Please contact support.</p>
+                      ) : addrView === "compound" ? (
                         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                          {compoundFields.map((field, i) => (
+                          {compoundFields!.map((field, i) => (
                             <div key={field.key}>
                               <p style={{ ...S.label, marginBottom: 4 }}>{field.label}</p>
                               <CopyRow value={compoundParts[i] ?? "…"} copied={copied === field.key} onCopy={() => copy(compoundParts[i], field.key)} />
                             </div>
                           ))}
                         </div>
-                      ) : state.decryptedUpi ? (
-                        <CopyRow value={state.decryptedUpi} copied={copied === "upi"} onCopy={() => copy(state.decryptedUpi!, "upi")} />
+                      ) : addrView === "address" ? (
+                        <CopyRow value={state.decryptedUpi!} copied={copied === "upi"} onCopy={() => copy(state.decryptedUpi!, "upi")} />
                       ) : (
                         <p style={S.muted}>Decrypting payment details…</p>
                       )}
                     </div>
                     {/* QR is INR-only — mirrors user-app behavior. Mercado
-                        Pago / PIX QRs require PSP-generated payloads that
-                        the widget can't synthesize from the bare address. */}
-                    {state.decryptedUpi && state.currency === "INR" && (
+                        Pago / PIX QRs require PSP-generated payloads that the
+                        widget can't synthesize from the bare address. Client-side
+                        (qrcode.react), gated (showInrQr) on a resolved VPA + amount. */}
+                    {showQr && (
                       <div style={{ display: "flex", justifyContent: "center", marginTop: 16 }}>
                         <div style={{ padding: 12, background: "#fff", borderRadius: radius.md, border: `1px solid ${color.border}` }}>
-                          <img src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&margin=0&data=${encodeURIComponent(
-                            `upi://pay?pa=${state.decryptedUpi}&am=${fiatDisplay}&cu=INR&tr=${state.orderId}`
-                          )}`} alt="QR" style={{ width: 180, height: 180, display: "block" }} />
+                          <React.Suspense fallback={<div style={{ width: 180, height: 180 }} />}>
+                            <LazyQR value={`upi://pay?pa=${state.decryptedUpi}&am=${fiatDisplay}&cu=INR&tr=${state.orderId}`} size={180} level="L" />
+                          </React.Suspense>
                         </div>
                       </div>
                     )}
