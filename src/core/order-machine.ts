@@ -1,4 +1,5 @@
 import { useReducer, useCallback, useEffect, useMemo, useRef } from "react";
+import type { Dispatch } from "react";
 import { createPublicClient, http, encodeFunctionData, fromHex, stringToHex } from "viem";
 import { baseSepolia, base } from "viem/chains";
 import {
@@ -20,6 +21,24 @@ async function resolveIdentity(): Promise<RelayIdentity> {
   cachedIdentity = id;
   return id;
 }
+
+// Decrypt the counterparty VPA and dispatch the outcome. Shared by the poll loop
+// and the resume path. resolveIdentity() reads localStorage directly, which can
+// THROW (corrupt identity JSON, or storage blocked in a sandboxed / partitioned
+// iframe). Both call sites swallow throws in their own catch{}, so without this
+// guard a throw would leave the accepted screen stuck on "Decrypting…" forever.
+// On any failure (Result-Err or a thrown error) fall back to the "Session
+// changed" sentinel so the screen progresses.
+export async function decryptAndDispatch(encUpi: string, dispatch: Dispatch<OrderAction>) {
+  try {
+    const recipientIdentity = await resolveIdentity();
+    const result = await decryptPaymentAddress({ encrypted: encUpi, recipientIdentity });
+    dispatch({ type: "DECRYPTED_UPI", upi: result.isOk() ? result.value : "Session changed" });
+  } catch {
+    dispatch({ type: "DECRYPTED_UPI", upi: "Session changed" });
+  }
+}
+
 import type { CheckoutSigner, CheckoutPhase, PlaceOrderResult, PlaceOrderContext, CurrencyOption, PendingOrderSummary, ScreeningConfig } from "../types";
 import { OrderStatus } from "../types";
 import { DIAMOND_ABI, readSmallOrderFixedFee } from "./contracts";
@@ -271,9 +290,7 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
           actualUsdcAmount: actualUsdc,
           acceptedTimestamp: acceptedTs,
         });
-        const recipientIdentity = await resolveIdentity();
-        const result = await decryptPaymentAddress({ encrypted: o.encUpi, recipientIdentity });
-        dispatch({ type: "DECRYPTED_UPI", upi: result.isOk() ? result.value : "Session changed" });
+        await decryptAndDispatch(o.encUpi, dispatch);
       }
 
       if (status === OrderStatus.PAID && state.phase !== "paid" && state.phase !== "completed") {
@@ -477,9 +494,7 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
           actualUsdcAmount: actualUsdc,
           acceptedTimestamp: acceptedTs,
         });
-        const recipientIdentity = await resolveIdentity();
-        const dec = await decryptPaymentAddress({ encrypted: o.encUpi, recipientIdentity });
-        dispatch({ type: "DECRYPTED_UPI", upi: dec.isOk() ? dec.value : "Session changed" });
+        await decryptAndDispatch(o.encUpi, dispatch);
 
         if (status === OrderStatus.PAID) dispatch({ type: "PAID" });
         if (status === OrderStatus.COMPLETED) {
