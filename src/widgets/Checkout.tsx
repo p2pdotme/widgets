@@ -624,7 +624,12 @@ export function Checkout(props: CheckoutProps) {
                     </div>
                     <div style={{ marginTop: 12 }}>
                       {addrView === "error" ? (
-                        <p style={{ ...S.muted, color: color.danger }}>Couldn't load payment details. Please contact support.</p>
+                        <div style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "10px 12px", background: color.dangerSoft, border: `1px solid ${color.danger}22`, borderRadius: radius.md, color: color.danger, fontSize: font.md }}>
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true" style={{ flexShrink: 0, marginTop: 1 }}>
+                            <path d="M12 9v4m0 4h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                          </svg>
+                          <span>Couldn't load payment details. Please contact support.</span>
+                        </div>
                       ) : addrView === "compound" ? (
                         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                           {compoundFields!.map((field, i) => (
