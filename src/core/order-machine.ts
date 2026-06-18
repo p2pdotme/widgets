@@ -1,4 +1,5 @@
 import { useReducer, useCallback, useEffect, useMemo, useRef } from "react";
+import type { Dispatch } from "react";
 import { createPublicClient, http, encodeFunctionData, fromHex, stringToHex } from "viem";
 import { baseSepolia, base } from "viem/chains";
 import {
@@ -20,6 +21,18 @@ async function resolveIdentity(): Promise<RelayIdentity> {
   cachedIdentity = id;
   return id;
 }
+
+// Decrypt the counterparty VPA and dispatch the outcome. Shared by the poll
+// loop and the resume path. NOTE: each caller runs this at most once per mount
+// (gated by needsAcceptedData = acceptedTimestamp === null), so a decrypt
+// failure is NOT auto-retried in-session; the UI surfaces decryptError instead.
+async function decryptAndDispatch(encUpi: string, dispatch: Dispatch<OrderAction>) {
+  const recipientIdentity = await resolveIdentity();
+  const result = await decryptPaymentAddress({ encrypted: encUpi, recipientIdentity });
+  if (result.isOk()) dispatch({ type: "DECRYPTED_UPI", upi: result.value });
+  else dispatch({ type: "DECRYPT_FAILED", message: "Couldn't load payment details" });
+}
+
 import type { CheckoutSigner, CheckoutPhase, PlaceOrderResult, PlaceOrderContext, CurrencyOption, PendingOrderSummary, ScreeningConfig } from "../types";
 import { OrderStatus } from "../types";
 import { DIAMOND_ABI, readSmallOrderFixedFee } from "./contracts";
@@ -274,10 +287,7 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
           actualUsdcAmount: actualUsdc,
           acceptedTimestamp: acceptedTs,
         });
-        const recipientIdentity = await resolveIdentity();
-        const result = await decryptPaymentAddress({ encrypted: o.encUpi, recipientIdentity });
-        if (result.isOk()) dispatch({ type: "DECRYPTED_UPI", upi: result.value });
-        else dispatch({ type: "DECRYPT_FAILED", message: "Couldn't load payment details" });
+        await decryptAndDispatch(o.encUpi, dispatch);
       }
 
       if (status === OrderStatus.PAID && state.phase !== "paid" && state.phase !== "completed") {
@@ -481,10 +491,7 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
           actualUsdcAmount: actualUsdc,
           acceptedTimestamp: acceptedTs,
         });
-        const recipientIdentity = await resolveIdentity();
-        const dec = await decryptPaymentAddress({ encrypted: o.encUpi, recipientIdentity });
-        if (dec.isOk()) dispatch({ type: "DECRYPTED_UPI", upi: dec.value });
-        else dispatch({ type: "DECRYPT_FAILED", message: "Couldn't load payment details" });
+        await decryptAndDispatch(o.encUpi, dispatch);
 
         if (status === OrderStatus.PAID) dispatch({ type: "PAID" });
         if (status === OrderStatus.COMPLETED) {

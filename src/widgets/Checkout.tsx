@@ -598,7 +598,9 @@ export function Checkout(props: CheckoutProps) {
                       <span style={S.faint}>Order #{state.orderId}</span>
                     </div>
                     <div style={{ marginTop: 12 }}>
-                      {compoundFields ? (
+                      {state.decryptError ? (
+                        <p style={{ ...S.muted, color: color.danger }}>{state.decryptError}. Please contact support.</p>
+                      ) : compoundFields ? (
                         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                           {compoundFields.map((field, i) => (
                             <div key={field.key}>
@@ -609,8 +611,6 @@ export function Checkout(props: CheckoutProps) {
                         </div>
                       ) : state.decryptedUpi ? (
                         <CopyRow value={state.decryptedUpi} copied={copied === "upi"} onCopy={() => copy(state.decryptedUpi!, "upi")} />
-                      ) : state.decryptError ? (
-                        <p style={{ ...S.muted, color: color.danger }}>{state.decryptError}. Please contact support.</p>
                       ) : (
                         <p style={S.muted}>Decrypting payment details…</p>
                       )}
