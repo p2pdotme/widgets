@@ -26,11 +26,20 @@ async function resolveIdentity(): Promise<RelayIdentity> {
 // loop and the resume path. NOTE: each caller runs this at most once per mount
 // (gated by needsAcceptedData = acceptedTimestamp === null), so a decrypt
 // failure is NOT auto-retried in-session; the UI surfaces decryptError instead.
-async function decryptAndDispatch(encUpi: string, dispatch: Dispatch<OrderAction>) {
-  const recipientIdentity = await resolveIdentity();
-  const result = await decryptPaymentAddress({ encrypted: encUpi, recipientIdentity });
-  if (result.isOk()) dispatch({ type: "DECRYPTED_UPI", upi: result.value });
-  else dispatch({ type: "DECRYPT_FAILED", message: "Couldn't load payment details" });
+export async function decryptAndDispatch(encUpi: string, dispatch: Dispatch<OrderAction>) {
+  try {
+    const recipientIdentity = await resolveIdentity();
+    const result = await decryptPaymentAddress({ encrypted: encUpi, recipientIdentity });
+    if (result.isOk()) dispatch({ type: "DECRYPTED_UPI", upi: result.value });
+    else dispatch({ type: "DECRYPT_FAILED", message: "Couldn't load payment details" });
+  } catch {
+    // resolveIdentity() reads localStorage directly, which THROWS on corrupt
+    // identity JSON or when storage is blocked (sandboxed / partitioned iframe).
+    // The poll-loop and resume call sites swallow throws in their own `catch {}`,
+    // so without this the accepted screen would hang on "Decrypting…" forever
+    // with decryptError never set. Surface the error state instead.
+    dispatch({ type: "DECRYPT_FAILED", message: "Couldn't load payment details" });
+  }
 }
 
 import type { CheckoutSigner, CheckoutPhase, PlaceOrderResult, PlaceOrderContext, CurrencyOption, PendingOrderSummary, ScreeningConfig } from "../types";
