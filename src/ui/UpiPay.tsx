@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from "react";
-import { QRCodeSVG } from "qrcode.react";
 import { buildUpiQuery, buildUpiIntent, UPI_APPS } from "../core/upi";
 import { isIOS, isAndroid } from "../core/platform";
 import { color, radius, S } from "./theme";
 import type { UpiAppLogo } from "./upi-app-icons";
+
+const LazyQR = React.lazy(() => import("qrcode.react").then((m) => ({ default: m.QRCodeSVG })));
 
 export interface UpiPayProps {
   /** Decrypted counterparty VPA. */
@@ -144,7 +145,9 @@ export function UpiPay({ vpa, amount, orderId, payeeName, onAppLaunch }: UpiPayP
       <div style={{ padding: 12, background: "#fff", borderRadius: radius.md, border: `1px solid ${color.border}` }}>
         {/* level="L" is deliberate: an on-screen QR has no damage to recover from,
             so the lowest ECC maximizes capacity -> a lower, easier-to-scan version. */}
-        <QRCodeSVG value={intentUrl} size={200} level="L" />
+        <React.Suspense fallback={<div style={{ width: 200, height: 200 }} />}>
+          <LazyQR value={intentUrl} size={200} level="L" />
+        </React.Suspense>
       </div>
     </div>
   );

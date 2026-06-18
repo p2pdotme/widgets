@@ -44,10 +44,10 @@ describe("UpiPay", () => {
     expect(links[0].getAttribute("href")).toMatch(/^upi:\/\/pay\?/);
   });
 
-  it("renders a client-side QR (no upi:// anchor) on desktop", () => {
+  it("renders a client-side QR (no upi:// anchor) on desktop", async () => {
     setUA(DESKTOP);
     const { container } = render(<UpiPay {...baseProps} />);
-    expect(container.querySelector("svg")).not.toBeNull();
+    await waitFor(() => expect(container.querySelector("svg")).not.toBeNull());
     expect(container.querySelector('a[href^="upi://"]')).toBeNull();
   });
 
