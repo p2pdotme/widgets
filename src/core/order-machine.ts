@@ -22,20 +22,26 @@ async function resolveIdentity(): Promise<RelayIdentity> {
   return id;
 }
 
+// Sentinel value for `decryptedUpi` when the counterparty VPA can't be decrypted
+// (a Result-Err, or a thrown identity-resolution error). The accepted screen keys
+// on this EXACT value to show an error instead of a fake VPA, so producer (here)
+// and consumer (Checkout.tsx) share this constant rather than a bare literal.
+export const DECRYPT_FAILED_SENTINEL = "Session changed";
+
 // Decrypt the counterparty VPA and dispatch the outcome. Shared by the poll loop
 // and the resume path. resolveIdentity() reads localStorage directly, which can
 // THROW (corrupt identity JSON, or storage blocked in a sandboxed / partitioned
 // iframe). Both call sites swallow throws in their own catch{}, so without this
 // guard a throw would leave the accepted screen stuck on "Decrypting…" forever.
-// On any failure (Result-Err or a thrown error) fall back to the "Session
-// changed" sentinel so the screen progresses.
+// On any failure (Result-Err or a thrown error) fall back to the sentinel so the
+// screen progresses (Checkout then renders the failure state).
 export async function decryptAndDispatch(encUpi: string, dispatch: Dispatch<OrderAction>) {
   try {
     const recipientIdentity = await resolveIdentity();
     const result = await decryptPaymentAddress({ encrypted: encUpi, recipientIdentity });
-    dispatch({ type: "DECRYPTED_UPI", upi: result.isOk() ? result.value : "Session changed" });
+    dispatch({ type: "DECRYPTED_UPI", upi: result.isOk() ? result.value : DECRYPT_FAILED_SENTINEL });
   } catch {
-    dispatch({ type: "DECRYPTED_UPI", upi: "Session changed" });
+    dispatch({ type: "DECRYPTED_UPI", upi: DECRYPT_FAILED_SENTINEL });
   }
 }
 
