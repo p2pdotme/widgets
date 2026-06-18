@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { paymentAddressView, showInrQr } from "../src/widgets/Checkout";
+import { paymentAddressView, showInrQr, payableAddressShown } from "../src/widgets/Checkout";
 import { DECRYPT_FAILED_SENTINEL } from "../src/core/order-machine";
 
 // Covers the accepted-screen decrypt-failure rendering decision without a full
@@ -33,5 +33,16 @@ describe("showInrQr", () => {
     expect(showInrQr("merchant@okhdfc", "BRL", true)).toBe(false);
     expect(showInrQr("merchant@okhdfc", "INR", false)).toBe(false);
     expect(showInrQr(null, "INR", true)).toBe(false);
+  });
+});
+
+describe("payableAddressShown (drives the 'I've paid' enable)", () => {
+  it("true once a payable address/compound is shown", () => {
+    expect(payableAddressShown("address")).toBe(true);
+    expect(payableAddressShown("compound")).toBe(true);
+  });
+  it("false while decrypting or on a decrypt failure (I've paid disabled)", () => {
+    expect(payableAddressShown("decrypting")).toBe(false);
+    expect(payableAddressShown("error")).toBe(false);
   });
 });

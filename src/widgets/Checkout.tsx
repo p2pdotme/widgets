@@ -37,6 +37,13 @@ export function showInrQr(decryptedUpi: string | null, currency: string, hasAmou
   return !!decryptedUpi && decryptedUpi.includes("@") && currency === "INR" && hasAmount;
 }
 
+// "I've paid" is actionable only once a payable address (or compound fields) is
+// on screen — never while still decrypting or on a decrypt failure, since the
+// user can't have paid an address they were never shown.
+export function payableAddressShown(view: ReturnType<typeof paymentAddressView>): boolean {
+  return view === "address" || view === "compound";
+}
+
 // Window the user has to pay after a merchant accepts before auto-cancellation.
 // Mirrors user-app's 5-minute window.
 const AUTO_CANCEL_WINDOW_MS = 5 * 60 * 1000;
@@ -250,6 +257,7 @@ export function Checkout(props: CheckoutProps) {
   const compoundParts = state.decryptedUpi && compoundFields ? state.decryptedUpi.split("|") : [];
   const addrView = paymentAddressView(state.decryptedUpi, !!compoundFields);
   const showQr = showInrQr(state.decryptedUpi, state.currency, !!fiatDisplay);
+  const payableShown = payableAddressShown(addrView);
 
   const stepIndex = state.phase === "completed" ? 3 : state.phase === "paid" ? 2 : state.phase === "accepted" ? 1 : 0;
   const hasPlaceOrder = Boolean(placeOrder);
@@ -665,9 +673,9 @@ export function Checkout(props: CheckoutProps) {
                   )}
 
                   <button
-                    style={{ ...S.primaryBtn, marginTop: 20, opacity: isMarkingPaid || timerExpired || addrView === "error" ? 0.5 : 1, cursor: timerExpired || addrView === "error" ? "not-allowed" : "pointer" }}
+                    style={{ ...S.primaryBtn, marginTop: 20, opacity: isMarkingPaid || timerExpired || !payableShown ? 0.5 : 1, cursor: timerExpired || !payableShown ? "not-allowed" : "pointer" }}
                     onClick={handleMarkPaid}
-                    disabled={isMarkingPaid || timerExpired || isCancelling || addrView === "error"}
+                    disabled={isMarkingPaid || timerExpired || isCancelling || !payableShown}
                   >
                     {timerExpired ? "Payment window expired" : isMarkingPaid ? "Confirming…" : "I've paid"}
                   </button>
