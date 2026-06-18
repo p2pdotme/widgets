@@ -12,6 +12,11 @@ import {
   CopyRow, Stepper, CountdownRing, Skeleton, injectKeyframes,
 } from "../ui/components";
 
+// Client-side UPI QR. Replaces the third-party api.qrserver.com image, which
+// leaked the counterparty VPA + amount + order id to a third party on every INR
+// accepted screen. Lazy so qrcode.react stays out of the main /checkout chunk.
+const LazyQR = React.lazy(() => import("qrcode.react").then((m) => ({ default: m.QRCodeSVG })));
+
 // Window the user has to pay after a merchant accepts before auto-cancellation.
 // Mirrors user-app's 5-minute window.
 const AUTO_CANCEL_WINDOW_MS = 5 * 60 * 1000;
@@ -596,7 +601,13 @@ export function Checkout(props: CheckoutProps) {
                       <span style={S.faint}>Order #{state.orderId}</span>
                     </div>
                     <div style={{ marginTop: 12 }}>
-                      {compoundFields ? (
+                      {state.decryptedUpi === "Session changed" ? (
+                        // "Session changed" is the decrypt-failure sentinel from order-machine
+                        // (a Result-Err or a thrown identity-resolution error). Show a clear
+                        // error for any currency, instead of rendering the sentinel as a
+                        // copyable/QR-able VPA.
+                        <p style={{ ...S.muted, color: color.danger }}>Couldn't load payment details. Please contact support.</p>
+                      ) : compoundFields ? (
                         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                           {compoundFields.map((field, i) => (
                             <div key={field.key}>
@@ -613,13 +624,15 @@ export function Checkout(props: CheckoutProps) {
                     </div>
                     {/* QR is INR-only — mirrors user-app behavior. Mercado
                         Pago / PIX QRs require PSP-generated payloads that
-                        the widget can't synthesize from the bare address. */}
-                    {state.decryptedUpi && state.currency === "INR" && (
+                        the widget can't synthesize from the bare address.
+                        Client-side (qrcode.react), gated on a resolved VPA (not
+                        the "Session changed" sentinel) and a real amount. */}
+                    {state.decryptedUpi && state.decryptedUpi !== "Session changed" && state.currency === "INR" && fiatDisplay && (
                       <div style={{ display: "flex", justifyContent: "center", marginTop: 16 }}>
                         <div style={{ padding: 12, background: "#fff", borderRadius: radius.md, border: `1px solid ${color.border}` }}>
-                          <img src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&margin=0&data=${encodeURIComponent(
-                            `upi://pay?pa=${state.decryptedUpi}&am=${fiatDisplay}&cu=INR&tr=${state.orderId}`
-                          )}`} alt="QR" style={{ width: 180, height: 180, display: "block" }} />
+                          <React.Suspense fallback={<div style={{ width: 180, height: 180 }} />}>
+                            <LazyQR value={`upi://pay?pa=${state.decryptedUpi}&am=${fiatDisplay}&cu=INR&tr=${state.orderId}`} size={180} level="L" />
+                          </React.Suspense>
                         </div>
                       </div>
                     )}
