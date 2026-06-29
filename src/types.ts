@@ -115,6 +115,23 @@ export interface PlaceOrderContext {
   currency?: CurrencyOption;
 }
 
+/**
+ * Opt-in liveness gate. When set, the widget reads `livenessRequired()` on the
+ * integrator; if on and the user isn't `livenessVerified`, it runs a one-time
+ * simple-kyc liveness check (hosted wizard in a popup) and submits the
+ * attestation on-chain before allowing the order. Omit to disable entirely
+ * (every non-LotPot integration leaves this unset). The gate also self-disables
+ * if the integrator doesn't implement it, or once the user is verified.
+ */
+export interface LivenessConfig {
+  /** Integrator address to read `livenessRequired()` / `livenessVerified(user)` on. */
+  integratorAddress: `0x${string}`;
+  /** simple-kyc liveness proxy base URL (injects the service X-API-Key). */
+  proxyUrl: string;
+  /** simple-kyc tenant slug bound to `integratorAddress`. */
+  tenant: string;
+}
+
 export interface CheckoutProps {
   // --- Order source (pick one) ---
   // A: tracking only — client already placed the order
@@ -221,6 +238,12 @@ export interface CheckoutProps {
    *  mode against that order. Omit to hide the resume button on the
    *  rejection screen. */
   onResumeRequest?: (pendingOrderId: string) => void;
+
+  // ─── Liveness gate (optional, integrator-agnostic) ──────────────────
+  /** When set, the widget gates the order on a simple-kyc liveness check for
+   *  integrators that enable it on-chain — see `LivenessConfig`. Unset =
+   *  feature off (default; every other integration is unaffected). */
+  liveness?: LivenessConfig;
 
   // Events
   onOrderPlaced?: (orderId: string, txHash: string) => void;

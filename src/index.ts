@@ -39,7 +39,13 @@ export {
   DIAMOND_ABI,
   DEFAULT_DIAMOND_ADDRESS,
   USDC_DECIMALS,
+  LIVENESS_GATE_ABI,
+  fetchLivenessStatus,
 } from "./core/contracts";
+
+// ─── Liveness gate ─────────────────────────────────────────────────────
+export { computeLivenessGate } from "./core/liveness";
+export type { LivenessStatus, LivenessGate, LivenessAttestation } from "./core/liveness";
 
 // ─── Hooks ─────────────────────────────────────────────────────────────
 export { useUserTxLimit } from "./hooks/useUserTxLimit";
