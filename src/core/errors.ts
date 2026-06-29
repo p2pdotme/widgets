@@ -59,7 +59,8 @@ export type P2PErrorFlow =
   | "retry-deliver"
   | "credit-fetch"
   | "status-poll"
-  | "screening";
+  | "screening"
+  | "liveness";
 
 export interface P2PErrorContext {
   flow?: P2PErrorFlow;
