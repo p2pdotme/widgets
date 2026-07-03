@@ -11,6 +11,7 @@ import type {
 } from "../types";
 import {
   classifyError,
+  livenessRequiredError,
   logP2PError,
   screeningApiError,
   screeningRejectedError,
@@ -23,12 +24,19 @@ interface B2BScreeningResponse {
   reason?: string | null;
   message?: string | null;
   restricted_until?: string | null;
+  /** Backend flagged this buyer (sybil cluster / rapid cancellations):
+   *  the client must complete a liveness check before the order proceeds. */
+  liveliness_required?: boolean;
 }
 
 interface ProcessArgs {
   signer: CheckoutSigner;
   screening: ScreeningConfig;
   placeOrder: () => Promise<PlaceOrderResult>;
+  /** On-chain `livenessVerified(user)` (or gate-off) — when the caller has
+   *  already cleared the user, a `liveliness_required` response is honoured
+   *  without re-prompting, so the placed order proceeds. */
+  isLivenessVerified?: boolean;
 }
 
 export async function processB2BBuyOrder(
@@ -70,6 +78,17 @@ export async function processB2BBuyOrder(
 
   if (screeningResponse && screeningResponse.approved === false) {
     throw screeningRejectedError(screeningResponse, ctx);
+  }
+
+  // Screening may approve but require a liveness (proof-of-personhood)
+  // check first (sybil-cluster / rapid-cancellation suspects). Don't place
+  // the order — the caller surfaces the liveness step and retries once the
+  // user is verified. Already-verified users pass straight through.
+  if (
+    screeningResponse?.liveliness_required === true &&
+    args.isLivenessVerified !== true
+  ) {
+    throw livenessRequiredError(screeningResponse, ctx);
   }
 
   const activityLogId = screeningResponse?.activity_log_id ?? null;

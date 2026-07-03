@@ -689,6 +689,10 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
             signer: opts.signer,
             screening: opts.screening,
             placeOrder: runPlace,
+            // Already-cleared users pass a `liveliness_required` response
+            // through without re-prompting. (livenessGate === "ok" also
+            // covers the gate-off case.)
+            isLivenessVerified: state.livenessGate === "ok",
           })
         : await runPlace();
 
@@ -711,6 +715,13 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
       opts.onOrderPlaced?.(result.orderId, result.txHash);
     } catch (err: unknown) {
       const p2p = toP2PError(err, errorCtx);
+      if (p2p.code === "SCREENING_LIVENESS_REQUIRED") {
+        // Not an error: screening requires a one-time liveness check for
+        // this (suspect) buyer. Surface the gate and let the user retry the
+        // order once verified — the order was NOT placed.
+        dispatch({ type: "LIVENESS_LOADED", gate: "required" });
+        return;
+      }
       dispatch({ type: "ERROR", message: p2p.userMessage });
       opts.onError?.(p2p);
     }
