@@ -367,6 +367,72 @@ export async function fetchUserTxLimit(
   return { raw, formatted: formatUnits(raw, decimals) };
 }
 
+// ─── Liveness gate ───────────────────────────────────────────────────
+//
+// Read fragment for integrators that inherit `LivenessGate` (anti-sybil).
+// `livenessRequired()` is the on-chain switch; `livenessVerified(user)` is the
+// verify-once flag. `submitLivenessAttestation(...)` is included so the widget
+// can encode the on-chain submit. Integrators without the gate revert on the
+// read — callers treat that as "no gate" (see fetchLivenessStatus).
+
+export const LIVENESS_GATE_ABI = [
+  {
+    name: "livenessRequired",
+    type: "function",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "bool" }],
+  },
+  {
+    name: "livenessVerified",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "user", type: "address" }],
+    outputs: [{ name: "", type: "bool" }],
+  },
+  {
+    name: "submitLivenessAttestation",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "nullifier", type: "bytes32" },
+      { name: "limit", type: "uint256" },
+      { name: "expiry", type: "uint256" },
+      { name: "signature", type: "bytes" },
+    ],
+    outputs: [],
+  },
+] as const;
+
+/**
+ * Read whether an integrator requires liveness and whether `user` is verified.
+ * Multicalled in one round-trip. Throws if the integrator doesn't implement the
+ * gate (older integrator) — the caller maps that to "no gate".
+ */
+export async function fetchLivenessStatus(
+  integratorAddress: `0x${string}`,
+  user: `0x${string}`,
+  opts: { chainId?: number; rpcUrl?: string } = {},
+): Promise<{ required: boolean; verified: boolean }> {
+  const { chainId = 84532, rpcUrl } = opts;
+  const chain = chainId === 8453 ? base : baseSepolia;
+  const client = createPublicClient({ chain, transport: http(rpcUrl) });
+  const [required, verified] = await Promise.all([
+    client.readContract({
+      address: integratorAddress,
+      abi: LIVENESS_GATE_ABI,
+      functionName: "livenessRequired",
+    }) as Promise<boolean>,
+    client.readContract({
+      address: integratorAddress,
+      abi: LIVENESS_GATE_ABI,
+      functionName: "livenessVerified",
+      args: [user],
+    }) as Promise<boolean>,
+  ]);
+  return { required, verified };
+}
+
 // ─── ERC20 read fragment ─────────────────────────────────────────────
 //
 // Just the read selectors `balanceOf` + `decimals`. The widget uses this to

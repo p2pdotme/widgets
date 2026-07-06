@@ -26,6 +26,7 @@ export function Checkout(props: CheckoutProps) {
     subgraphUrl, usdcAddress, usdcAmount, fiatAmount,
     screening,
     fetchCredit, fetchPendingOrders, onResumeRequest,
+    liveness,
     mode = "modal", open = true, demo = false,
     theme,
     onClose, onOrderPlaced, onComplete, onError, onCancel,
@@ -56,13 +57,13 @@ export function Checkout(props: CheckoutProps) {
     return () => document.removeEventListener("mousedown", onClick);
   }, [dropdownOpen]);
 
-  const { state, handlePlaceOrder, markPaid, cancelOrder } = useOrderMachine({
+  const { state, handlePlaceOrder, markPaid, cancelOrder, startLivenessVerification } = useOrderMachine({
     orderId: initialOrderId, placeOrder,
     signer, chainId, diamondAddress, rpcUrl, demo,
     demoCurrency, selectedCurrency,
     subgraphUrl, usdcAddress, usdcAmount, fiatAmount,
     screening,
-    fetchCredit, fetchPendingOrders,
+    fetchCredit, fetchPendingOrders, liveness,
     onOrderPlaced, onComplete, onError, onCancel,
   });
 
@@ -177,7 +178,8 @@ export function Checkout(props: CheckoutProps) {
   const isQuotePending = Boolean(
     !demo && usdcAmount && selectedCurrency && (
       (!state.priceConfigFailed && (!preview || state.currency !== selectedCurrency.symbol)) ||
-      state.gate === "loading"
+      state.gate === "loading" ||
+      state.livenessGate === "loading"
     )
   );
 
@@ -233,6 +235,10 @@ export function Checkout(props: CheckoutProps) {
   const rejection =
     state.gate !== "loading" && state.gate.kind === "reject" ? state.gate.conflict : null;
 
+  // Liveness gate takes precedence over the pending-order gate and the form:
+  // a verified-human check is required, or a verification is in flight.
+  const livenessBlock = state.livenessGate === "required" || state.livenessGate === "verifying";
+
   const content = (
     <div style={{ ...themeStyle, fontFamily: "var(--p2p-font, inherit)", color: color.text }}>
       {/* Header */}
@@ -262,13 +268,44 @@ export function Checkout(props: CheckoutProps) {
       </div>
 
       <div style={{ padding: "24px" }}>
+        {/* LIVENESS GATE — a one-time "verify you're human" check for
+            integrators that enable it on-chain (anti-sybil). Takes precedence
+            over the pending-order gate and the pre-order form. Absent for every
+            integration that doesn't pass a `liveness` config. */}
+        {state.phase === "checkout" && hasPlaceOrder && livenessBlock && (
+          <div>
+            <CenterStatus
+              icon={<PulseDot />}
+              title="Quick human check"
+              subtitle="To keep things fair, verify you're a real person. It takes a few seconds and you only do it once."
+            />
+            {state.livenessError && (
+              <div style={{ ...S.cardFlat, padding: 12, marginTop: 16, background: color.surfaceAlt, fontSize: font.sm }}>
+                {state.livenessError}
+              </div>
+            )}
+            <button
+              style={{ ...S.primaryBtn, marginTop: 20 }}
+              disabled={state.livenessGate === "verifying"}
+              onClick={() => { void startLivenessVerification(); }}
+            >
+              {state.livenessGate === "verifying" ? "Verifying…" : "Verify I'm human"}
+            </button>
+            {onClose && (
+              <button style={{ ...S.ghostBtn, width: "100%", marginTop: 8, height: 40 }} onClick={onClose}>
+                Close
+              </button>
+            )}
+          </div>
+        )}
+
         {/* PENDING-ORDER GATE — any in-flight order blocks a new placement
             (regardless of amount or credit). The host can wire
             `onResumeRequest` to navigate the user to that order (typically
             re-opens the widget with `orderId={pendingOrderId}`). Hidden in
             tracking-only mode (initialOrderId set) since the host is already
             driving a specific order. */}
-        {state.phase === "checkout" && hasPlaceOrder && rejection && (
+        {state.phase === "checkout" && hasPlaceOrder && rejection && !livenessBlock && (
           <div>
             <CenterStatus
               icon={<PulseDot />}
@@ -304,7 +341,7 @@ export function Checkout(props: CheckoutProps) {
         )}
 
         {/* PRE-ORDER: client provides placeOrder callback */}
-        {state.phase === "checkout" && hasPlaceOrder && !rejection && (
+        {state.phase === "checkout" && hasPlaceOrder && !rejection && !livenessBlock && (
           <div>
             <p style={S.label}>Order Summary</p>
             {amount && <h1 style={{ ...S.h1, marginTop: 4, fontSize: font.display }}><span style={S.num}>{amount}</span></h1>}

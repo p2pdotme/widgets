@@ -42,6 +42,7 @@ export type P2PErrorCode =
   | "SCREENING_API_ERROR"
   | "SCREENING_SIGN_REJECTED"
   | "SCREENING_REJECTED"
+  | "SCREENING_LIVENESS_REQUIRED"
   | "ENCRYPTION_FAILED"
   | "ENCRYPTION_PREFLIGHT_FAILED"
   | "ORDER_BAD_STATUS"
@@ -59,7 +60,8 @@ export type P2PErrorFlow =
   | "retry-deliver"
   | "credit-fetch"
   | "status-poll"
-  | "screening";
+  | "screening"
+  | "liveness";
 
 export interface P2PErrorContext {
   flow?: P2PErrorFlow;
@@ -725,6 +727,27 @@ export function screeningRejectedError(
     devMessage: `Screening rejected (reason=${reason})`,
     retryable: false,
     context: { ...ctx, screeningReason: reason, restrictedUntil },
+  });
+}
+
+/**
+ * Screening determined this buyer must pass a one-time liveness
+ * (proof-of-personhood) check before the order can proceed. Not a
+ * rejection: the caller should surface the liveness step and retry the
+ * order once the user is verified.
+ */
+export function livenessRequiredError(
+  res: { message?: string | null },
+  ctx: P2PErrorContext,
+): P2PError {
+  return new P2PError({
+    code: "SCREENING_LIVENESS_REQUIRED",
+    category: "screening",
+    userMessage:
+      res.message || "Quick human check required before you can continue.",
+    devMessage: "Screening requires liveness verification",
+    retryable: true,
+    context: { ...ctx, screeningReason: "liveliness_required" },
   });
 }
 

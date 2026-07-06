@@ -20,14 +20,15 @@ async function resolveIdentity(): Promise<RelayIdentity> {
   cachedIdentity = id;
   return id;
 }
-import type { CheckoutSigner, CheckoutPhase, PlaceOrderResult, PlaceOrderContext, CurrencyOption, PendingOrderSummary, ScreeningConfig } from "../types";
+import type { CheckoutSigner, CheckoutPhase, PlaceOrderResult, PlaceOrderContext, CurrencyOption, PendingOrderSummary, ScreeningConfig, LivenessConfig } from "../types";
 import { OrderStatus } from "../types";
-import { DIAMOND_ABI, readSmallOrderFixedFee } from "./contracts";
+import { DIAMOND_ABI, readSmallOrderFixedFee, LIVENESS_GATE_ABI, fetchLivenessStatus } from "./contracts";
 import { DEMO_FIAT_RATE } from "./config";
 import { processB2BBuyOrder } from "./b2b-fraud-engine";
 import { getActiveOrder, setActiveOrder, removeActiveOrder, keyFor, type ActiveOrderKey } from "./active-orders-store";
 import { computeGateDecision, type GateDecision } from "./credit-math";
 import { keepOnlyB2BPending } from "./b2b-orders";
+import { computeLivenessGate, createLivenessSession, redeemLivenessAttestation, openVerifyPopup } from "./liveness";
 import {
   toP2PError,
   noEligibleMerchantsError,
@@ -78,6 +79,22 @@ interface OrderState {
   // True when the host's `placeOrder` returned `creditOnly: true`. Drives
   // the success-screen copy and tells the polling loop to short-circuit.
   creditOnly: boolean;
+
+  // ─── Liveness gate (host-supplied via `liveness` config) ────────────
+  // The prompt TRIGGER is the fraud engine's `liveliness_required` screening
+  // response (suspect-scoped) — NOT a blanket on-chain read. The on-chain read
+  // is verify-once only: it sets `livenessCleared` (user is already verified,
+  // or the integrator isn't enforcing), which lets an already-cleared suspect
+  // skip the prompt. `livenessGate` drives the UI: "loading" until the
+  // verify-once read resolves; "ok" = not currently gated; "required" = the
+  // screening flag fired (must verify); "verifying" = wizard + submit in
+  // flight. `livenessError` holds a user-facing message on a failed verify.
+  livenessGate: "loading" | "ok" | "required" | "verifying";
+  // True when the user needs no liveness check: already verified on-chain, or
+  // the integrator's gate is off. Passed to screening as `isLivenessVerified`
+  // so a cleared user bypasses a `liveliness_required` response.
+  livenessCleared: boolean;
+  livenessError: string | null;
 }
 
 type OrderAction =
@@ -99,9 +116,21 @@ type OrderAction =
   | { type: "RESUMABLE_CLEARED" }
   // Credit-accounting actions.
   | { type: "CREDIT_LOADED"; credit: bigint; pending: PendingOrderSummary[]; gate: GateDecision }
-  | { type: "CREDIT_ONLY_PLACED"; orderId: string; txHash: string };
+  | { type: "CREDIT_ONLY_PLACED"; orderId: string; txHash: string }
+  // Liveness-gate actions.
+  // Feature off (no config) → cleared, no gate. STATUS carries the verify-once
+  // read result. REQUIRED is the screening-flag trigger (resets phase so the
+  // block renders). VERIFYING/VERIFIED/VERIFY_FAILED drive the wizard.
+  | { type: "LIVENESS_OFF" }
+  | { type: "LIVENESS_STATUS"; cleared: boolean }
+  | { type: "LIVENESS_REQUIRED" }
+  | { type: "LIVENESS_VERIFYING" }
+  | { type: "LIVENESS_VERIFIED" }
+  | { type: "LIVENESS_VERIFY_FAILED"; message: string };
 
-const INITIAL: OrderState = {
+// Exported for unit tests (order-machine internals are not re-exported from the
+// package entrypoints, so this doesn't widen the public API).
+export const INITIAL: OrderState = {
   phase: "checkout", orderId: null, txHash: null,
   usdcAmount: null, fiatAmount: null, currency: "INR",
   decryptedUpi: null, error: null,
@@ -111,9 +140,10 @@ const INITIAL: OrderState = {
   priceConfigFailed: false,
   credit: null, pendingOrders: null, gate: "loading",
   creditOnly: false,
+  livenessGate: "loading", livenessCleared: false, livenessError: null,
 };
 
-function reducer(state: OrderState, action: OrderAction): OrderState {
+export function reducer(state: OrderState, action: OrderAction): OrderState {
   switch (action.type) {
     case "PLACING": return { ...state, phase: "placing", error: null };
     case "PLACED": return { ...state, phase: "placed", orderId: action.orderId, txHash: action.txHash };
@@ -145,6 +175,20 @@ function reducer(state: OrderState, action: OrderAction): OrderState {
       orderId: action.orderId, txHash: action.txHash,
       creditOnly: true,
     };
+    // No config → feature off: cleared, never gated.
+    case "LIVENESS_OFF": return { ...state, livenessGate: "ok", livenessCleared: true };
+    // Verify-once read resolved: record cleared status; release the button
+    // (loading → ok). Never sets "required" — the screening flag does that.
+    case "LIVENESS_STATUS": return {
+      ...state, livenessCleared: action.cleared,
+      livenessGate: state.livenessGate === "loading" ? "ok" : state.livenessGate,
+    };
+    // Screening returned `liveliness_required`. The order was NOT placed, so
+    // reset phase back to the form and surface the block.
+    case "LIVENESS_REQUIRED": return { ...state, phase: "checkout", livenessGate: "required", error: null };
+    case "LIVENESS_VERIFYING": return { ...state, livenessGate: "verifying", livenessError: null };
+    case "LIVENESS_VERIFIED": return { ...state, livenessGate: "ok", livenessCleared: true, livenessError: null };
+    case "LIVENESS_VERIFY_FAILED": return { ...state, livenessGate: "required", livenessError: action.message };
     default: return state;
   }
 }
@@ -168,6 +212,8 @@ export interface UseOrderMachineOpts {
   // Credit accounting (optional; both must be set for the gate to engage).
   fetchCredit?: (user: `0x${string}`) => Promise<bigint>;
   fetchPendingOrders?: (user: `0x${string}`) => Promise<PendingOrderSummary[]>;
+  // Liveness gate (optional). When set, gate the order on a simple-kyc check.
+  liveness?: LivenessConfig;
   onOrderPlaced?: (orderId: string, txHash: string) => void;
   onComplete?: (orderId: string) => void;
   onError?: (error: Error) => void;
@@ -434,6 +480,45 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fetchKeyStr, state.phase]);
 
+  // Liveness verify-once read. Reads livenessVerified(user) + livenessRequired()
+  // and records whether the user is CLEARED (already verified, or the gate is
+  // off) — it does NOT gate here. The prompt trigger is the fraud engine's
+  // `liveliness_required` screening response, which is suspect-scoped; blanket-
+  // gating on `livenessRequired()` would prompt every non-suspect user, since
+  // the NEW integrator (V2) enforces only against fraud-engine-flagged wallets.
+  //
+  // No config → cleared (feature off). A read that reverts (integrator without
+  // the gate) or an RPC blip → cleared=true (fail-open): the on-chain
+  // validateOrder is the authoritative backstop, and a suspect that can't route
+  // to the gate-less OLD integrator (no V1 credit) still reverts there. Re-reads
+  // only while phase=checkout.
+  const livenessKey = `${opts.liveness?.integratorAddress ?? ""}|${opts.signer?.address ?? ""}`;
+  useEffect(() => {
+    if (!opts.liveness || !opts.signer?.address) {
+      dispatch({ type: "LIVENESS_OFF" });
+      return;
+    }
+    if (state.phase !== "checkout") return;
+    const cfg = opts.liveness;
+    const userAddr = opts.signer.address;
+    let cancelled = false;
+    (async () => {
+      try {
+        const status = await fetchLivenessStatus(cfg.integratorAddress, userAddr, {
+          chainId: opts.chainId,
+          rpcUrl: opts.rpcUrl,
+        });
+        if (cancelled) return;
+        // Cleared ⟺ computeLivenessGate is "ok" (gate off OR already verified).
+        dispatch({ type: "LIVENESS_STATUS", cleared: computeLivenessGate(status, true) === "ok" });
+      } catch {
+        if (!cancelled) dispatch({ type: "LIVENESS_STATUS", cleared: true });
+      }
+    })();
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [livenessKey, state.phase]);
+
   // Inline fast-forward: when the user clicks Pay on a resumable order,
   // dispatch PLACED to flip out of the form, then read on-chain status
   // and walk the state machine forward to ACCEPTED / PAID / COMPLETED /
@@ -637,6 +722,9 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
             signer: opts.signer,
             screening: opts.screening,
             placeOrder: runPlace,
+            // Cleared users (already verified on-chain, or the gate is off)
+            // pass a `liveliness_required` response through without prompting.
+            isLivenessVerified: state.livenessCleared,
           })
         : await runPlace();
 
@@ -659,6 +747,14 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
       opts.onOrderPlaced?.(result.orderId, result.txHash);
     } catch (err: unknown) {
       const p2p = toP2PError(err, errorCtx);
+      if (p2p.code === "SCREENING_LIVENESS_REQUIRED") {
+        // Not an error: screening requires a one-time liveness check for
+        // this (suspect) buyer. Surface the gate and let the user retry the
+        // order once verified — the order was NOT placed. LIVENESS_REQUIRED
+        // resets phase from "placing" back to "checkout" so the block renders.
+        dispatch({ type: "LIVENESS_REQUIRED" });
+        return;
+      }
       dispatch({ type: "ERROR", message: p2p.userMessage });
       opts.onError?.(p2p);
     }
@@ -719,5 +815,53 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
     }
   }, [state.orderId, opts]);
 
-  return { state, handlePlaceOrder, markPaid, cancelOrder };
+  // Run the one-time liveness check: open the hosted wizard in a popup, redeem
+  // the returned code for an attestation, and submit it on-chain. Mirrors the
+  // markPaid write pattern (encodeFunctionData → signer.sendTransaction →
+  // wait). The on-chain `livenessVerified[user]` flag makes this verify-once.
+  const startLivenessVerification = useCallback(async () => {
+    const cfg = opts.liveness;
+    if (!cfg || !opts.signer?.address) return;
+    dispatch({ type: "LIVENESS_VERIFYING" });
+    try {
+      const verifyState = `lv-${Math.random().toString(36).slice(2)}`;
+      const returnUrl = window.location.origin + window.location.pathname;
+      const { widget_url } = await createLivenessSession(cfg.proxyUrl, {
+        wallet_pubkey: opts.signer.address,
+        redirect_uri: returnUrl,
+        tenant: cfg.tenant,
+        state: verifyState,
+      });
+      const code = await openVerifyPopup(widget_url, window.location.origin, verifyState);
+      if (!code) {
+        dispatch({
+          type: "LIVENESS_VERIFY_FAILED",
+          message: "Verification was not completed. Please try again.",
+        });
+        return;
+      }
+      const att = await redeemLivenessAttestation(cfg.proxyUrl, code);
+      const data = encodeFunctionData({
+        abi: LIVENESS_GATE_ABI,
+        functionName: "submitLivenessAttestation",
+        args: [att.nullifier, att.limit, att.expiry, att.signature],
+      });
+      const { hash } = await opts.signer.sendTransaction({
+        to: cfg.integratorAddress,
+        data,
+        gasLimit: 250000,
+      });
+      await publicClient.waitForTransactionReceipt({ hash });
+      dispatch({ type: "LIVENESS_VERIFIED" });
+    } catch (err: unknown) {
+      const p2p = toP2PError(err, {
+        flow: "liveness",
+        chainId: opts.chainId,
+        user: opts.signer?.address,
+      });
+      dispatch({ type: "LIVENESS_VERIFY_FAILED", message: p2p.userMessage });
+    }
+  }, [opts]);
+
+  return { state, handlePlaceOrder, markPaid, cancelOrder, startLivenessVerification };
 }
