@@ -124,12 +124,28 @@ export interface PlaceOrderContext {
  * if the integrator doesn't implement it, or once the user is verified.
  */
 export interface LivenessConfig {
-  /** Integrator address to read `livenessRequired()` / `livenessVerified(user)` on. */
+  /** Integrator address to read `livenessRequired()` / `livenessVerified(user)` on.
+   *  This is the integrator that ENFORCES liveness — the NEW integrator during a
+   *  two-integrator migration. */
   integratorAddress: `0x${string}`;
   /** simple-kyc liveness proxy base URL (injects the service X-API-Key). */
   proxyUrl: string;
   /** simple-kyc tenant slug bound to `integratorAddress`. */
   tenant: string;
+  /**
+   * Two-integrator migration exemption. When `true`, users with redeemable
+   * integrator credit (`fetchCredit` > 0) are exempt from the liveness gate —
+   * they route to the OLD integrator, which has no liveness check, so they
+   * never see the verify step. Zero-credit users (routed to the NEW
+   * `integratorAddress`) are gated normally. Also short-circuits the
+   * screening-triggered liveness prompt for exempt users.
+   *
+   * Requires the credit gate wired (`fetchCredit` + `fetchPendingOrders`);
+   * while credit is still loading the widget holds the Pay button rather than
+   * deciding on stale (zero) credit. With no credit gate, credit reads as 0n
+   * and every user is gated — a safe default. Defaults to `false`.
+   */
+  exemptWhenCreditPositive?: boolean;
 }
 
 export interface CheckoutProps {

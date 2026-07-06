@@ -28,7 +28,7 @@ import { processB2BBuyOrder } from "./b2b-fraud-engine";
 import { getActiveOrder, setActiveOrder, removeActiveOrder, keyFor, type ActiveOrderKey } from "./active-orders-store";
 import { computeGateDecision, type GateDecision } from "./credit-math";
 import { keepOnlyB2BPending } from "./b2b-orders";
-import { computeLivenessGate, createLivenessSession, redeemLivenessAttestation, openVerifyPopup } from "./liveness";
+import { computeLivenessGate, livenessCreditExemption, createLivenessSession, redeemLivenessAttestation, openVerifyPopup } from "./liveness";
 import {
   toP2PError,
   noEligibleMerchantsError,
@@ -459,7 +459,16 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
   // gate) or any RPC blip → "ok" too: fail-open, since the integrator's
   // validateOrder is the authoritative backstop. Verified users read "ok"
   // (verify-once). Re-reads only while phase=checkout, like the credit gate.
-  const livenessKey = `${opts.liveness?.integratorAddress ?? ""}|${opts.signer?.address ?? ""}`;
+  //
+  // Migration exemption (`exemptWhenCreditPositive`): liveness lives on the NEW
+  // integrator; credit>0 users route to the OLD integrator (no liveness) and
+  // are exempt. The credit bucket is folded into the key so the effect re-runs
+  // as credit resolves (null → pos/zero); while credit is `null` we hold
+  // "loading" instead of reading, so a stale zero never prompts or exempts.
+  const livenessExemptionBucket = opts.liveness?.exemptWhenCreditPositive
+    ? livenessCreditExemption(true, state.credit)
+    : "n/a";
+  const livenessKey = `${opts.liveness?.integratorAddress ?? ""}|${opts.signer?.address ?? ""}|${livenessExemptionBucket}`;
   useEffect(() => {
     if (!opts.liveness || !opts.signer?.address) {
       dispatch({ type: "LIVENESS_LOADED", gate: "ok" });
@@ -467,6 +476,14 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
     }
     if (state.phase !== "checkout") return;
     const cfg = opts.liveness;
+    // Skip the on-chain read for credit-exempt (OLD-integrator) users; hold
+    // while credit is still loading.
+    const exemption = livenessCreditExemption(!!cfg.exemptWhenCreditPositive, state.credit);
+    if (exemption === "wait") return;
+    if (exemption === "exempt") {
+      dispatch({ type: "LIVENESS_LOADED", gate: "ok" });
+      return;
+    }
     const userAddr = opts.signer.address;
     let cancelled = false;
     (async () => {

@@ -76,6 +76,46 @@ service signer) and `setLivenessRequired(true)`.
 slug / `contract_address`, and the page you embed `<Checkout>` on must be one of
 the tenant's `redirect_uris`.
 
+## Two-integrator migration (credit exemption)
+
+When you cut over from an OLD integrator to a NEW one and run **both live for a
+window** — routing users with redeemable credit to the OLD integrator and
+everyone else to the NEW one — liveness should apply to the NEW integrator only.
+Users still redeeming credit on the OLD integrator (which has no liveness gate)
+must never see the verify step.
+
+Set `exemptWhenCreditPositive: true` and point `integratorAddress` at the NEW
+integrator:
+
+```tsx
+<Checkout
+  /* … */
+  fetchCredit={readCreditOnOldIntegrator}        // > 0 → routed to OLD
+  fetchPendingOrders={readPendingOrders}
+  liveness={{
+    integratorAddress: "0xNEW_INTEGRATOR",        // the one that enforces liveness
+    proxyUrl: "https://liveness-proxy-production.up.railway.app",
+    tenant: "lotpot",
+    exemptWhenCreditPositive: true,               // credit>0 users skip the gate
+  }}
+/>
+```
+
+Behavior:
+- **credit > 0** (routed to OLD) → **exempt**: no on-chain liveness read, no
+  verify prompt, and a screening-triggered `liveliness_required` is honored as
+  already-cleared (they proceed).
+- **credit == 0** (routed to NEW) → **gated normally** against
+  `integratorAddress`.
+- **credit still loading** → the Pay button holds rather than deciding on stale
+  zero-credit, so a NEW-integrator user is never briefly exempted.
+
+Requires the credit gate wired (`fetchCredit` **and** `fetchPendingOrders`) —
+`exemptWhenCreditPositive` reuses the same credit read. Without it, credit reads
+as `0n` and **every** user is gated (safe default). Once the OLD integrator is
+fully drained you can drop the flag (post-migration everyone has zero credit, so
+it's a no-op either way).
+
 ## Backward compatibility
 
 - No `liveness` prop → feature off (default; every existing integration is
@@ -84,3 +124,4 @@ the tenant's `redirect_uris`.
   fails → treated as off (fail-open; the integrator's own `validateOrder` is the
   authoritative backstop).
 - Gate on but user already verified → no prompt.
+- `exemptWhenCreditPositive` defaults to `false` → no change unless you opt in.
