@@ -78,3 +78,34 @@ export function computeGateDecision(
   // ordering) as the conflict; the widget shows it with a Resume affordance.
   return { kind: "reject", conflict: pending[0] };
 }
+
+/**
+ * Gate status DERIVED from the loaded pending set and the resolved order
+ * amount. Kept pure (and out of the reducer) so it recomputes from the
+ * *current* `resolvedUsdcAmount` on every render — never from an amount
+ * captured when the credit/pending fetch fired.
+ *
+ * Why derive instead of computing the gate inside the fetch: the fetch is now
+ * keyed on the signer alone (credit and pending orders don't depend on the
+ * order amount), so it runs once. In `fiatChargeAmount` mode the amount isn't
+ * known until the on-chain rate resolves — after the fetch. Deriving folds that
+ * later-arriving amount into the decision with no refetch, so a user with a
+ * pending order goes straight from "loading" to "reject" and never sees an
+ * enabled Pay button on a stale/undefined amount.
+ *
+ *   - `gateWired` false (no fetchers / no signer) → allow (gate inactive).
+ *   - pending not yet fetched (`null`)            → "loading".
+ *   - otherwise → {@link computeGateDecision}(pending, resolvedUsdcAmount).
+ *     (While the fiat amount is still resolving `resolvedUsdcAmount` is
+ *     undefined and this is allow, but the widget holds the button on
+ *     `amountStatus === "pending"` in that window, so no enabled allow shows.)
+ */
+export function deriveGate(
+  gateWired: boolean,
+  pendingOrders: PendingOrderSummary[] | null,
+  resolvedUsdcAmount: bigint | undefined,
+): GateDecision | "loading" {
+  if (!gateWired) return { kind: "allow" };
+  if (pendingOrders === null) return "loading";
+  return computeGateDecision(pendingOrders, resolvedUsdcAmount);
+}
