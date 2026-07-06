@@ -7,6 +7,14 @@ and the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format. While
 the package is `0.x`, minor releases may introduce additive prop changes;
 patch releases stay backward-compatible.
 
+## [1.5.0](https://github.com/p2pdotme/widgets/compare/v1.4.0...v1.5.0) (2026-07-06)
+
+
+### Features
+
+* **checkout:** opt-in liveness gate (anti-sybil) handled by the widget ([#49](https://github.com/p2pdotme/widgets/issues/49)) ([bb8f1c3](https://github.com/p2pdotme/widgets/commit/bb8f1c39c49a8b29c2de8358f1f843539d80436b))
+* **checkout:** price the order in fiat via fiatChargeAmount ([#50](https://github.com/p2pdotme/widgets/issues/50)) ([7799e43](https://github.com/p2pdotme/widgets/commit/7799e43a2dbd64b040b033d4ea71c5c2fa94b19b))
+
 ## [1.4.0](https://github.com/p2pdotme/widgets/compare/v1.3.1...v1.4.0) (2026-06-14)
 
 
