@@ -116,36 +116,33 @@ export interface PlaceOrderContext {
 }
 
 /**
- * Opt-in liveness gate. When set, the widget reads `livenessRequired()` on the
- * integrator; if on and the user isn't `livenessVerified`, it runs a one-time
- * simple-kyc liveness check (hosted wizard in a popup) and submits the
- * attestation on-chain before allowing the order. Omit to disable entirely
- * (every non-LotPot integration leaves this unset). The gate also self-disables
- * if the integrator doesn't implement it, or once the user is verified.
+ * Opt-in liveness gate (anti-sybil). Works with `screening` (the fraud engine):
+ * the prompt is **triggered by the fraud engine's `liveliness_required`
+ * screening response**, which is scoped to flagged (suspect) wallets — NOT by a
+ * blanket on-chain read. When triggered, the widget runs a one-time simple-kyc
+ * liveness check (hosted wizard in a popup) and submits the attestation on-chain
+ * before allowing the order. This config supplies the verify wizard and the
+ * on-chain **verify-once** read (`livenessVerified(user)`), so an already-
+ * verified user is never re-prompted.
+ *
+ * Omit to disable entirely (every non-LotPot integration leaves this unset). The
+ * gate self-disables when the integrator's gate is off or the user is verified.
+ *
+ * Two-integrator migration: point `integratorAddress` at the NEW integrator (the
+ * one that enforces liveness). No credit-based exemption is needed — the fraud
+ * engine flags only suspects, and OLD-integrator (credit) users route to a
+ * gate-less contract. See `docs/liveness-gate.md`.
  */
 export interface LivenessConfig {
-  /** Integrator address to read `livenessRequired()` / `livenessVerified(user)` on.
-   *  This is the integrator that ENFORCES liveness — the NEW integrator during a
-   *  two-integrator migration. */
+  /** The integrator that ENFORCES liveness (the NEW integrator in a
+   *  two-integrator migration). Used for the verify-once
+   *  `livenessVerified(user)` read and as the `submitLivenessAttestation`
+   *  target. */
   integratorAddress: `0x${string}`;
   /** simple-kyc liveness proxy base URL (injects the service X-API-Key). */
   proxyUrl: string;
   /** simple-kyc tenant slug bound to `integratorAddress`. */
   tenant: string;
-  /**
-   * Two-integrator migration exemption. When `true`, users with redeemable
-   * integrator credit (`fetchCredit` > 0) are exempt from the liveness gate —
-   * they route to the OLD integrator, which has no liveness check, so they
-   * never see the verify step. Zero-credit users (routed to the NEW
-   * `integratorAddress`) are gated normally. Also short-circuits the
-   * screening-triggered liveness prompt for exempt users.
-   *
-   * Requires the credit gate wired (`fetchCredit` + `fetchPendingOrders`);
-   * while credit is still loading the widget holds the Pay button rather than
-   * deciding on stale (zero) credit. With no credit gate, credit reads as 0n
-   * and every user is gated — a safe default. Defaults to `false`.
-   */
-  exemptWhenCreditPositive?: boolean;
 }
 
 export interface CheckoutProps {
