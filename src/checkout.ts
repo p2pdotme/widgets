@@ -12,4 +12,5 @@ export type {
   PlaceOrderContext,
   PlaceOrderResult,
   PendingOrderSummary,
+  LivenessConfig,
 } from "./types";
