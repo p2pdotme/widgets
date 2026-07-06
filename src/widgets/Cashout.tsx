@@ -3,6 +3,7 @@ import { createPublicClient, http, formatUnits, parseUnits, stringToHex } from "
 import { baseSepolia, base } from "viem/chains";
 import type { CashoutProps, CurrencyOption } from "../types";
 import { useOfframpMachine } from "../core/offramp-machine";
+import { sellPrincipalFromFiat, usdcToFiat } from "../core/price-math";
 import { color, radius, font, weight, shadow, S, themeToCssVars } from "../ui/theme";
 import { Modal } from "../ui/Modal";
 import {
@@ -41,12 +42,25 @@ export function Cashout(props: CashoutProps) {
     usdcAddress, diamondAddress, signer, currencies,
     chainId = 84532, rpcUrl, subgraphUrl, fiatAmountLimit,
     placeCashout, deliverUpi, reconcile, fetchAvailableOfframp,
-    defaultAmountUsdc, mode = "modal", open = true, theme,
+    defaultAmountUsdc, fiatPayoutAmount, mode = "modal", open = true, theme,
     onClose, onOrderPlaced, onComplete, onCancelled, onError,
   } = props;
   const themeStyle = themeToCssVars(theme);
 
   useEffect(injectKeyframes, []);
+
+  // Fiat-denominated withdrawal: the integrator fixes the fiat the user
+  // receives; we derive the USDC principal to sell from the on-chain sellPrice.
+  // Hides the amount input. `fiatPayoutAmount` wins over `defaultAmountUsdc`.
+  const fiatMode = fiatPayoutAmount !== undefined;
+  useEffect(() => {
+    if (fiatPayoutAmount !== undefined && defaultAmountUsdc !== undefined) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        "[p2p-widget] <Cashout> received both `fiatPayoutAmount` and `defaultAmountUsdc` — using `fiatPayoutAmount`.",
+      );
+    }
+  }, [fiatPayoutAmount, defaultAmountUsdc]);
 
   const [selectedCurrency, setSelectedCurrency] = useState<CurrencyOption>(currencies[0]);
   const [paymentAddress, setPaymentAddress] = useState("");
@@ -102,9 +116,17 @@ export function Cashout(props: CashoutProps) {
     return () => { cancelled = true; };
   }, [selectedCurrency?.symbol, diamondAddress, chainId, rpcUrl]);
 
-  // Parse the amount input → 6-decimal bigint. Returns null on invalid input
-  // (empty / NaN / negative); the "Sell" button disables on null.
+  // The USDC principal to sell. In fiat mode it's derived from the target
+  // payout ÷ the selected currency's sellPrice (null until the rate lands, or
+  // when the payout is dust). Otherwise it's parsed from the amount input
+  // (null on empty / NaN / negative). The "Withdraw" button disables on null.
   const parsedAmount = useMemo((): bigint | null => {
+    if (fiatMode) {
+      // Wait for the sellPrice of the *selected* currency — a stale rate from a
+      // just-switched currency would misconvert.
+      if (!sellPrice || priceCurrency !== selectedCurrency.symbol) return null;
+      return sellPrincipalFromFiat(fiatPayoutAmount!, sellPrice);
+    }
     const trimmed = amountInput.trim();
     if (!trimmed) return null;
     try {
@@ -114,7 +136,7 @@ export function Cashout(props: CashoutProps) {
     } catch {
       return null;
     }
-  }, [amountInput]);
+  }, [fiatMode, fiatPayoutAmount, sellPrice, priceCurrency, selectedCurrency.symbol, amountInput]);
 
   // Source the cashout-able amount for the "Max" affordance + insufficient
   // hint. Default: the user's on-chain USDC balance (read-only ERC20 ABI, no
@@ -192,7 +214,7 @@ export function Cashout(props: CashoutProps) {
     : "10 USDC";
   const preview = (() => {
     if (!parsedAmount || !sellPrice) return null;
-    const subtotalFiat = (parsedAmount * sellPrice) / 1_000_000n;
+    const subtotalFiat = usdcToFiat(parsedAmount, sellPrice);
     return {
       receive: (Number(subtotalFiat) / 1e6).toFixed(2),
       fee: feeUsdc > 0n ? formatUnits(feeUsdc, USDC_DECIMALS) : null,
@@ -201,13 +223,15 @@ export function Cashout(props: CashoutProps) {
       symbol: selectedCurrency.symbol,
     };
   })();
-  // Pending = currency selected but on-chain quote not yet for that currency
-  // (initial load OR mid-switch). Drives the breakdown skeleton + gates
-  // the Withdraw button.
-  const isQuotePending = Boolean(
-    parsedAmount && !priceConfigFailed &&
-    (!sellPrice || priceCurrency !== selectedCurrency.symbol),
-  );
+  // Rate still loading for the selected currency (initial load OR mid-switch).
+  const ratePending = !priceConfigFailed && (!sellPrice || priceCurrency !== selectedCurrency.symbol);
+  // Pending gates the Withdraw button + drives the breakdown skeleton. In fiat
+  // mode the principal itself depends on the rate, so hold on the rate alone.
+  const isQuotePending = Boolean(fiatMode ? ratePending : (parsedAmount && ratePending));
+  // Fiat mode couldn't resolve a principal: the rate read failed, or the target
+  // payout is too small to sell any USDC.
+  const fiatRateUnavailable = fiatMode && priceConfigFailed;
+  const fiatTooSmall = fiatMode && !ratePending && !priceConfigFailed && parsedAmount === null;
 
   const canSubmit = paymentValid && parsedAmount !== null && !insufficientBalance && !isQuotePending;
 
@@ -248,37 +272,50 @@ export function Cashout(props: CashoutProps) {
         {/* ─── PRE-ORDER FORM ─────────────────────────────────────── */}
         {state.phase === "form" && (
           <div>
-            <p style={S.label}>Amount to withdraw</p>
-            <div style={{ position: "relative", marginTop: 6 }}>
-              <input
-                type="text"
-                inputMode="decimal"
-                value={amountInput}
-                onChange={(e) => setAmountInput(e.target.value)}
-                placeholder="0.00"
-                style={{
-                  width: "100%", boxSizing: "border-box",
-                  padding: "12px 60px 12px 14px", height: 52,
-                  border: `1px solid ${color.border}`, borderRadius: radius.md,
-                  background: color.surface, color: color.text,
-                  fontSize: font.xxl, fontWeight: weight.semibold, fontVariantNumeric: "tabular-nums",
-                  outline: "none",
-                }}
-                autoFocus
-              />
-              <span style={{
-                position: "absolute", right: 14, top: "50%", transform: "translateY(-50%)",
-                color: color.textMuted, fontSize: font.sm, fontWeight: weight.semibold,
-                letterSpacing: "0.04em",
-              }}>USDC</span>
-            </div>
+            {fiatMode ? (
+              // Fiat-denominated: the payout is integrator-fixed — show it as
+              // the headline, no editable amount input.
+              <div style={{ marginBottom: 2 }}>
+                <p style={{ ...S.label, marginBottom: 2 }}>You'll receive</p>
+                <h1 style={{ ...S.h1, fontSize: font.display, ...S.num, margin: 0 }}>
+                  {selectedCurrency.symbol} {(Number(fiatPayoutAmount) / 1e6).toFixed(2)}
+                </h1>
+              </div>
+            ) : (
+              <>
+                <p style={S.label}>Amount to withdraw</p>
+                <div style={{ position: "relative", marginTop: 6 }}>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={amountInput}
+                    onChange={(e) => setAmountInput(e.target.value)}
+                    placeholder="0.00"
+                    style={{
+                      width: "100%", boxSizing: "border-box",
+                      padding: "12px 60px 12px 14px", height: 52,
+                      border: `1px solid ${color.border}`, borderRadius: radius.md,
+                      background: color.surface, color: color.text,
+                      fontSize: font.xxl, fontWeight: weight.semibold, fontVariantNumeric: "tabular-nums",
+                      outline: "none",
+                    }}
+                    autoFocus
+                  />
+                  <span style={{
+                    position: "absolute", right: 14, top: "50%", transform: "translateY(-50%)",
+                    color: color.textMuted, fontSize: font.sm, fontWeight: weight.semibold,
+                    letterSpacing: "0.04em",
+                  }}>USDC</span>
+                </div>
+              </>
+            )}
             <div style={{ ...S.rowBetween, marginTop: 6 }}>
               <span style={{ ...S.faint }}>
                 {balanceDisplay !== null
                   ? `Balance: ${balanceDisplay} USDC`
                   : "Loading balance…"}
               </span>
-              {balance !== null && balance > 0n && (
+              {!fiatMode && balance !== null && balance > 0n && (
                 <button
                   type="button"
                   onClick={() => setAmountInput(formatUnits(balance, USDC_DECIMALS))}
@@ -361,14 +398,18 @@ export function Cashout(props: CashoutProps) {
                 skeleton transition. */}
             {(isQuotePending || preview) && (
               <div style={{ marginBottom: 16, padding: "14px 16px", background: color.surfaceAlt, borderRadius: radius.md, border: `1px solid ${color.border}` }}>
-                <div style={S.rowBetween}>
-                  <span style={{ ...S.label, color: color.text, fontWeight: weight.semibold }}>You receive</span>
-                  {isQuotePending
-                    ? <Skeleton width={110} height={16} />
-                    : <span style={{ ...S.body, fontWeight: weight.bold, ...S.num }}>{preview!.symbol} {preview!.receive}</span>}
-                </div>
-                <div style={{ ...S.rowBetween, marginTop: 8 }}>
-                  <span style={S.label}>For</span>
+                {/* In fiat mode the payout is the headline above, so the card
+                    leads with the USDC side (what the wallet is debited). */}
+                {!fiatMode && (
+                  <div style={S.rowBetween}>
+                    <span style={{ ...S.label, color: color.text, fontWeight: weight.semibold }}>You receive</span>
+                    {isQuotePending
+                      ? <Skeleton width={110} height={16} />
+                      : <span style={{ ...S.body, fontWeight: weight.bold, ...S.num }}>{preview!.symbol} {preview!.receive}</span>}
+                  </div>
+                )}
+                <div style={{ ...S.rowBetween, marginTop: fiatMode ? 0 : 8 }}>
+                  <span style={S.label}>{fiatMode ? "You sell" : "For"}</span>
                   {isQuotePending
                     ? <Skeleton width={70} />
                     : <span style={{ ...S.body, ...S.num, color: color.textMuted }}>{preview!.principal} USDC</span>}
@@ -400,6 +441,18 @@ export function Cashout(props: CashoutProps) {
               onValidityChange={setPaymentValid}
             />
 
+            {/* Fiat-mode couldn't price the payout — rate read failed, or the
+                target is below one micro-USDC of sell value. */}
+            {(fiatRateUnavailable || fiatTooSmall) && (
+              <div style={{ marginTop: 12, padding: "12px 14px", background: color.dangerSoft, border: `1px solid ${color.danger}22`, borderRadius: radius.md }}>
+                <span style={{ color: color.danger, fontSize: font.md, lineHeight: 1.5 }}>
+                  {fiatTooSmall
+                    ? "This payout is too small to withdraw. Please use a larger amount."
+                    : "Couldn't load the exchange rate for this payout. Please try again."}
+                </span>
+              </div>
+            )}
+
             <button
               type="button"
               disabled={!canSubmit}
@@ -416,6 +469,10 @@ export function Cashout(props: CashoutProps) {
                   <Spinner size={14} />
                   Loading quote…
                 </>
+              ) : fiatTooSmall ? (
+                "Payout too small"
+              ) : fiatRateUnavailable ? (
+                "Rate unavailable"
               ) : preview ? (
                 `Withdraw ${preview.symbol} ${preview.receive}`
               ) : (

@@ -4,6 +4,7 @@ import {
   usdcToFiat,
   fiatToUsdc,
   grossFiatForOrder,
+  sellPrincipalFromFiat,
   resolveUsdcFromAllInFiat,
   computeAmountResolution,
   type AmountResolutionInputs,
@@ -195,6 +196,21 @@ test("grossFiatForOrder adds the small-order fee for a small order", () => {
 test("grossFiatForOrder omits the fee above the threshold and when config is null", () => {
   assert.strictEqual(grossFiatForOrder(20_000_000n, BUY_PRICE, THRESHOLD, FIXED_FEE), usdcToFiat(20_000_000n, BUY_PRICE));
   assert.strictEqual(grossFiatForOrder(5_000_000n, BUY_PRICE, null, null), usdcToFiat(5_000_000n, BUY_PRICE));
+});
+
+// ─── sellPrincipalFromFiat (cashout / withdrawal fiatPayoutAmount) ──
+
+test("sellPrincipalFromFiat converts a target payout to the USDC principal", () => {
+  // Receive ₹5,000 at sellPrice 83 → sell 5000/83 = 60.240964 USDC.
+  assert.strictEqual(sellPrincipalFromFiat(5_000_000_000n, BUY_PRICE), 60_240_964n);
+  // Round-trips back to ~the payout (fee is separate on the USDC side).
+  const back = usdcToFiat(60_240_964n, BUY_PRICE);
+  const diff = back > 5_000_000_000n ? back - 5_000_000_000n : 5_000_000_000n - back;
+  assert.ok(diff <= BUY_PRICE);
+});
+
+test("sellPrincipalFromFiat returns null for a dust payout (principal rounds to 0)", () => {
+  assert.strictEqual(sellPrincipalFromFiat(0n, BUY_PRICE), null);
 });
 
 // ─── computeAmountResolution (amount-mode state machine, issue #53.4) ─

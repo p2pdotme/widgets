@@ -35,6 +35,19 @@ export function fiatToUsdc(fiat: bigint, buyPrice: bigint): bigint {
 }
 
 /**
+ * Sell-side inverse: the USDC principal to sell so the user RECEIVES `fiatPayout`
+ * at `sellPrice`. The offramp fee is charged separately in USDC (on top of the
+ * principal, pulled at `setSellOrderUpi`) and never reduces the fiat payout, so
+ * — unlike the buy side — there is no fee to back out here: `principal =
+ * fiatPayout / sellPrice`. Returns null when the payout rounds to a
+ * non-positive principal (dust), so the caller can block placement.
+ */
+export function sellPrincipalFromFiat(fiatPayout: bigint, sellPrice: bigint): bigint | null {
+  const usdc = fiatToUsdc(fiatPayout, sellPrice);
+  return usdc > 0n ? usdc : null;
+}
+
+/**
  * Gross fiat for a USDC order: the subtotal plus the protocol small-order fee,
  * converted at `buyPrice`. The fee applies when the order is `0 < order ≤
  * threshold` (mirrors the pre-order breakdown's total). Used for the SDK
