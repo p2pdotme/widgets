@@ -380,6 +380,10 @@ export default function App({ privateKey }: AppProps) {
           placeOrder={placeBuy}
           currencies={CURRENCIES}
           amount="5 USDC"
+          // To price in fiat instead of USDC, drop `amount`/`usdcAmount` and
+          // pass e.g. `fiatChargeAmount={5000_000000n}` (₹5,000 all-in). The
+          // resolved USDC arrives on `ctx.usdcAmount` in `placeBuy`. See
+          // README §"Pricing the order in fiat".
           productName="Common NFT"
           signer={signer}
           chainId={CHAIN.id}

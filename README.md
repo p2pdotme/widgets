@@ -1241,6 +1241,88 @@ The accepted-screen breakdown still renders, sourced from on-chain
 
 ---
 
+## Pricing the order in fiat (`fiatChargeAmount`)
+
+By default you tell `<Checkout>` the order size in USDC (`usdcAmount`) and
+the widget shows the user the fiat equivalent. Payment-gateway integrators
+often think the other way round — *"collect ₹5,000 from this user"* — and
+don't want to pre-compute USDC. Pass **`fiatChargeAmount`** instead and the
+widget does the conversion:
+
+```tsx
+<Checkout
+  placeOrder={placeOrder}
+  currencies={[{ symbol: "INR", flag: "🇮🇳", paymentMethod: "UPI" }]}
+  // The ALL-IN fiat total the user pays (6-dec), fee included.
+  fiatChargeAmount={5000_000000n}   // ₹5,000.00
+  subgraphUrl={SUBGRAPH_URL}
+  usdcAddress={USDC_ADDRESS}
+  signer={signer}
+  /* … */
+/>
+```
+
+- **All-in semantics.** `fiatChargeAmount` is the *total the user pays* —
+  the protocol's small-order fee is **baked in**, not added on top. The
+  widget reads `getPriceConfig(currency).buyPrice`, backs the fee out of the
+  total, and derives the USDC order amount so the **"You pay"** line lands on
+  the number you passed, **to the nearest micro-USDC** (integer-division
+  rounding leaves at most a sub-cent residual). (Compare `usdcAmount`, where
+  the fee is charged *on top* of the USDC you specify.)
+- **Denomination.** The amount is denominated in the **selected** currency.
+  For a single-currency picker this is unambiguous; for a multi-currency
+  picker the amount is interpreted in whichever currency the user is paying
+  with.
+- **Timing.** Conversion needs the on-chain rate, so the **Pay** button stays
+  in its *"Loading quote…"* state until the price config resolves. If that
+  read fails, the widget shows a *"rate unavailable"* error rather than
+  guessing an amount.
+- **Too-small guard.** If the entered total is below the protocol fee (e.g.
+  a ₹5 charge when the fee alone is ~₹5.19), there's no positive order to
+  place — the widget blocks placement with an *"amount too small"* message
+  instead of billing a zero/negative order.
+- **Credit accounting.** If you also wire the [credit gate](#credit-accounting-optional-integrator-agnostic),
+  the fee is re-decided on the post-credit delta (the amount that reaches the
+  Diamond), so the all-in total absorbs exactly the fee the chain charges and
+  the user pays `fiatChargeAmount − creditValue`. (Payment gateways typically
+  don't wire credit, so this is a no-op for them.)
+- **Pass exactly one** of `usdcAmount` or `fiatChargeAmount`. If both are set,
+  `usdcAmount` wins and a dev warning is logged.
+
+### Encoding the resolved amount in your `placeOrder`
+
+Because the widget computes the USDC amount, your `placeOrder` callback
+receives it back on the context — alongside the fiat total — so you can
+encode it into your gateway tx:
+
+```tsx
+const placeOrder = async (ctx: PlaceOrderContext) => {
+  // ctx.usdcAmount → resolved USDC order amount (6-dec)
+  // ctx.fiatAmount → all-in fiat total (6-dec), = fiatChargeAmount
+  const data = encodeFunctionData({
+    abi: GATEWAY_ABI,
+    functionName: "placePayment",
+    args: [ctx.currency!.circleId!, ctx.usdcAmount!, /* … */],
+  });
+  const { hash } = await signer.sendTransaction({ to: GATEWAY_ADDRESS, data });
+  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  return { orderId: parseOrderIdFromReceipt(receipt)!, txHash: hash };
+};
+```
+
+`ctx.usdcAmount` / `ctx.fiatAmount` are populated in **both** modes (in
+`usdcAmount` mode they echo the resolved values), so a callback written this
+way works regardless of which amount input the host uses.
+
+> ⚠️ **`ctx.fiatAmount` is the fee-*inclusive* gross** the user pays. If your
+> integrator tx takes an on-chain `fiatAmount` that the Diamond uses to derive
+> `price = fiatAmount / amount`, pass the fee-**exclusive** subtotal there
+> (`ctx.usdcAmount × buyPrice`), **not** `ctx.fiatAmount` — encoding the gross
+> against the subtotal amount skews the price ratio. When in doubt, encode only
+> `ctx.usdcAmount` (as above) and let the Diamond quote the fiat.
+
+---
+
 ## Reading integrator limits
 
 Every integrator exposes a `userTxLimit()` view returning the per-tx USDC cap
@@ -1407,8 +1489,9 @@ flows through the three host callbacks. That's the bright line.
 | `paymentNotice` | `ReactNode` | — | Caller-controlled banner above "Pay now" (e.g. "gas sponsored"). |
 | `subgraphUrl` | `string` | conditional | Required when any `CurrencyOption` omits `circleId` — used for SDK circle routing. |
 | `usdcAddress` | `0x…` | conditional | Same — required for SDK routing. |
-| `usdcAmount` | `bigint` | conditional | USDC amount the user is charged (6-dec). Required for SDK routing; also drives the fiat breakdown when `subgraphUrl` is set. |
-| `fiatAmount` | `bigint` | — | **Override.** When omitted, the widget derives it from on-chain `getPriceConfig(currency).buyPrice × usdcAmount` plus the small-order fee (gross). Pass this only to pin a custom fiat amount (e.g. a fixed-price promo). |
+| `usdcAmount` | `bigint` | conditional | USDC amount the user is charged (6-dec); the protocol fee is added on top. Required for SDK routing; also drives the fiat breakdown when `subgraphUrl` is set. Pass this **or** `fiatChargeAmount`, not both. |
+| `fiatChargeAmount` | `bigint` | conditional | **Fiat-denominated alternative to `usdcAmount`.** The all-in fiat total (6-dec, fee included) the user pays; the widget converts it to a USDC order amount via the selected currency's on-chain `buyPrice`. See [Pricing the order in fiat](#pricing-the-order-in-fiat-fiatchargeamount). Denominated in the selected currency. Blocks placement if the total can't cover the protocol fee. |
+| `fiatAmount` | `bigint` | — | **Routing override** (not a price). When omitted, the widget derives it from on-chain `getPriceConfig(currency).buyPrice × usdcAmount` plus the small-order fee (gross). Pass this only to pin the SDK routing eligibility filter (e.g. a fixed-price promo); it does **not** change what the user pays. |
 | `chainId` | `number` | — | Defaults to **84532 (Base Sepolia)**. Override for mainnet. |
 | `diamondAddress` | `0x…` | — | Defaults to a Sepolia testnet Diamond. **Override for production.** |
 | `rpcUrl` | `string` | — | Custom RPC for status polling. Defaults to viem's chain default. |
@@ -1599,7 +1682,7 @@ context so it shows up in Sentry / DataDog without extra wiring.
 | `REVERT_UNKNOWN` | revert | On-chain revert with an unrecognized selector — register it to get a friendly message next time. |
 | `NETWORK_RPC_UNREACHABLE` / `NETWORK_TIMEOUT` | network | RPC fetch failed / timed out. |
 | `ROUTING_NO_MERCHANTS` | routing | SDK couldn't pick a circle (replaces internal "No eligible circles" jargon). |
-| `ROUTING_MISSING_INPUTS` | validation | You omitted `circleId` but also didn't pass `subgraphUrl` + `usdcAddress` + `usdcAmount`. |
+| `ROUTING_MISSING_INPUTS` | validation | You omitted `circleId` but also didn't pass `subgraphUrl` + `usdcAddress` + an amount (`usdcAmount` or `fiatChargeAmount`). |
 | `SCREENING_API_ERROR` | screening | Fraud-engine returned non-2xx. **Fail-open** — the order still proceeds. |
 | `ENCRYPTION_PREFLIGHT_FAILED` / `ENCRYPTION_FAILED` | encryption | Crypto polyfills missing, or encrypt step failed at ACCEPTED handoff. |
 | `ORDER_BAD_STATUS` | order | You tried to retry-deliver an order that's no longer in `ACCEPTED`. |
@@ -1717,11 +1800,12 @@ The subgraph has ~10–20s indexing latency. Forward the orderId from
 immediately and reconciles with the subgraph on the next fetch. See
 [Optimistic terminal updates](#optimistic-terminal-updates).
 
-**SDK routing throws "Routing requires subgraphUrl, usdcAddress, and usdcAmount"**
+**SDK routing throws "Routing requires subgraphUrl, usdcAddress, and an amount"**
 You left `circleId` off some `CurrencyOption` but didn't pass the routing
 inputs to `<Checkout>`. Either add `circleId` to that currency or pass
-all three routing props. `fiatAmount` is optional — when missing the widget
-derives it from on-chain `getPriceConfig`.
+`subgraphUrl` + `usdcAddress` + an amount (`usdcAmount` **or**
+`fiatChargeAmount`). `fiatAmount` is optional — when missing the widget
+derives the routing filter from on-chain `getPriceConfig`.
 
 ---
 

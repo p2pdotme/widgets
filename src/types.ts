@@ -113,6 +113,29 @@ export interface CurrencyOption {
 
 export interface PlaceOrderContext {
   currency?: CurrencyOption;
+  /**
+   * Resolved USDC order amount (6-dec) the widget billed for this order —
+   * either the host-passed `usdcAmount`, or the value the widget converted
+   * from `fiatChargeAmount` using the selected currency's on-chain buyPrice.
+   * Encode this into your integrator tx when it takes an explicit amount
+   * (e.g. a payment-gateway `placeOrder(amount, …)`). Undefined only when the
+   * host wired neither amount input (product-priced integrators that derive
+   * the amount fully on-chain).
+   */
+  usdcAmount?: bigint;
+  /**
+   * All-in fiat total (6-dec) the user pays for this order — subtotal plus the
+   * protocol small-order fee, in the selected currency. In `fiatChargeAmount`
+   * mode this echoes the exact value the integrator requested. Encode it into
+   * integrator txs that take a fiat amount / fiat slippage limit.
+   *
+   * ⚠️ This is the fee-INCLUSIVE gross. If your integrator tx passes an
+   * on-chain `fiatAmount` that the Diamond uses to derive `price =
+   * fiatAmount / amount`, use the fee-EXCLUSIVE subtotal there (not this), or
+   * the price ratio is skewed. When unsure, encode only `usdcAmount` and let
+   * the Diamond quote the fiat.
+   */
+  fiatAmount?: bigint;
 }
 
 /**
@@ -183,15 +206,43 @@ export interface CheckoutProps {
   // explicit `circleId`.
   subgraphUrl?: string;
   usdcAddress?: `0x${string}`;
-  /** USDC amount (6-dec bigint) the user will be charged. */
+  /** USDC amount (6-dec bigint) the user will be charged. Pass this OR
+   *  `fiatChargeAmount` — not both. */
   usdcAmount?: bigint;
   /**
    * Expected fiat amount (6-dec bigint) for SDK routing eligibility. Optional
    * — when omitted, the widget derives it from the diamond's on-chain
    * `getPriceConfig(currency).buyPrice × usdcAmount`. Pass this only when you
    * want to override the on-chain quote (e.g., a fixed-price merchant promo).
+   *
+   * NOTE: this is a routing hint only; it does NOT decide what the user pays.
+   * To price the order in fiat, use `fiatChargeAmount` instead.
    */
   fiatAmount?: bigint;
+  /**
+   * Fiat-denominated checkout — an alternative to `usdcAmount`. Pass the
+   * **all-in fiat total** (6-dec bigint, protocol fee included) the user
+   * should pay, and the widget converts it to a USDC order amount using the
+   * selected currency's on-chain `getPriceConfig(currency).buyPrice`, backing
+   * the protocol's small-order fee out of the total so the "You pay" line
+   * lands on exactly this number. Built for payment-gateway integrators that
+   * think in fiat and don't want to pre-compute USDC.
+   *
+   * Denominated in the **selected** currency (for a multi-currency picker,
+   * the amount is interpreted in whichever currency the user is paying with).
+   * Requires the same on-chain price read the fiat breakdown already uses, so
+   * the "Pay" button stays in its loading state until the rate resolves; if
+   * the rate read fails, the widget shows an error rather than guessing.
+   *
+   * Pass EXACTLY ONE of `usdcAmount` or `fiatChargeAmount`. When both are set,
+   * `usdcAmount` wins and a dev warning is logged. When the entered total is
+   * too small to cover the protocol fee, the widget blocks placement with a
+   * clear "amount too small" message instead of billing a zero/negative order.
+   *
+   * The resolved USDC amount and this fiat total are handed to your
+   * `placeOrder` callback via `ctx.usdcAmount` / `ctx.fiatAmount`.
+   */
+  fiatChargeAmount?: bigint;
 
   // UI
   mode?: "inline" | "modal";

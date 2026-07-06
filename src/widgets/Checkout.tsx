@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { formatUnits } from "viem";
 import type { CheckoutProps } from "../types";
 import { useOrderMachine } from "../core/order-machine";
+import { usdcToFiat } from "../core/price-math";
 import { resolveCurrencyMeta } from "../core/currency-meta";
 import { CurrencyRow } from "../ui/CurrencyRow";
 import { DEFAULT_DIAMOND_ADDRESS, USDC_DECIMALS } from "../core/contracts";
@@ -23,7 +24,7 @@ export function Checkout(props: CheckoutProps) {
     chainId = 84532, diamondAddress = DEFAULT_DIAMOND_ADDRESS, rpcUrl,
     currency: demoCurrency,
     currencies,
-    subgraphUrl, usdcAddress, usdcAmount, fiatAmount,
+    subgraphUrl, usdcAddress, usdcAmount, fiatAmount, fiatChargeAmount,
     screening,
     fetchCredit, fetchPendingOrders, onResumeRequest,
     liveness,
@@ -57,11 +58,14 @@ export function Checkout(props: CheckoutProps) {
     return () => document.removeEventListener("mousedown", onClick);
   }, [dropdownOpen]);
 
-  const { state, handlePlaceOrder, markPaid, cancelOrder, startLivenessVerification } = useOrderMachine({
+  const {
+    state, handlePlaceOrder, markPaid, cancelOrder, startLivenessVerification,
+    resolvedUsdcAmount, amountStatus, gate,
+  } = useOrderMachine({
     orderId: initialOrderId, placeOrder,
     signer, chainId, diamondAddress, rpcUrl, demo,
     demoCurrency, selectedCurrency,
-    subgraphUrl, usdcAddress, usdcAmount, fiatAmount,
+    subgraphUrl, usdcAddress, usdcAmount, fiatAmount, fiatChargeAmount,
     screening,
     fetchCredit, fetchPendingOrders, liveness,
     onOrderPlaced, onComplete, onError, onCancel,
@@ -107,6 +111,15 @@ export function Checkout(props: CheckoutProps) {
     ? `${Number(state.smallOrderThreshold) / 1e6} USDC`
     : "10 USDC";
 
+  // Protocol fee in fiat (and USDC), used in the "amount too small" message
+  // when a fiat-mode total can't cover it. Null until the price config loads.
+  const feeFiatLabel =
+    state.smallOrderFixedFee !== null && state.buyPrice && selectedCurrency
+      ? `${selectedCurrency.symbol} ${(Number(usdcToFiat(state.smallOrderFixedFee, state.buyPrice)) / 1e6).toFixed(2)}`
+      : state.smallOrderFixedFee !== null
+        ? `${formatUnits(state.smallOrderFixedFee, USDC_DECIMALS)} USDC`
+        : null;
+
   // Pre-order fiat breakdown. Fee is charged on top of the fiat the user pays
   // (the user always receives the full `usdcAmount`). Per protocol config:
   // small orders (usdcAmount ≤ smallOrderThreshold) pay `smallOrderFixedFee`
@@ -119,14 +132,18 @@ export function Checkout(props: CheckoutProps) {
   // total. Fee logic uses the FULL `usdcAmount` for threshold comparison —
   // protocol fee is charged on the gross order, not the post-credit net.
   const credit = state.credit ?? 0n;
+  // Effective order amount — the host's `usdcAmount`, or the value the widget
+  // converted from `fiatChargeAmount`. All breakdown/gating math derives from
+  // this so both input modes render identically.
+  const orderUsdc = resolvedUsdcAmount;
   const chargedUsdc = (() => {
-    if (!usdcAmount) return null;
-    if (credit >= usdcAmount) return 0n;
-    return usdcAmount - credit;
+    if (!orderUsdc) return null;
+    if (credit >= orderUsdc) return 0n;
+    return orderUsdc - credit;
   })();
   const preview = (() => {
-    if (!usdcAmount || !state.buyPrice || !selectedCurrency || chargedUsdc === null) return null;
-    const chargedFiat = (chargedUsdc * state.buyPrice) / 1_000_000n;
+    if (!orderUsdc || !state.buyPrice || !selectedCurrency || chargedUsdc === null) return null;
+    const chargedFiat = usdcToFiat(chargedUsdc, state.buyPrice);
     // Fee follows the DELTA (charged amount), not the gross order:
     //   - credit covers fully (chargedUsdc == 0): no Diamond order, no fee
     //   - chargedUsdc > 0 + chargedUsdc ≤ smallOrderThreshold: fee applies
@@ -141,12 +158,12 @@ export function Checkout(props: CheckoutProps) {
       chargedUsdc <= state.smallOrderThreshold
         ? state.smallOrderFixedFee
         : 0n;
-    const feeFiat = (feeUsdc * state.buyPrice) / 1_000_000n;
+    const feeFiat = usdcToFiat(feeUsdc, state.buyPrice);
     const totalFiat = chargedFiat + feeFiat;
     // Subtotal-without-credit: shown when credit > 0 to make the deduction
     // visible. Equals what the user would have paid pre-credit.
-    const grossFiat = (usdcAmount * state.buyPrice) / 1_000_000n;
-    const creditFiat = (credit * state.buyPrice) / 1_000_000n;
+    const grossFiat = usdcToFiat(orderUsdc, state.buyPrice);
+    const creditFiat = usdcToFiat(credit, state.buyPrice);
     return {
       subtotal: (Number(chargedFiat) / 1e6).toFixed(2),
       gross: (Number(grossFiat) / 1e6).toFixed(2),
@@ -155,7 +172,7 @@ export function Checkout(props: CheckoutProps) {
       fee: feeFiat > 0n ? (Number(feeFiat) / 1e6).toFixed(2) : null,
       total: (Number(totalFiat) / 1e6).toFixed(2),
       symbol: selectedCurrency.symbol,
-      creditCoversFully: credit >= usdcAmount,
+      creditCoversFully: credit >= orderUsdc,
     };
   })();
 
@@ -169,16 +186,25 @@ export function Checkout(props: CheckoutProps) {
   // Releases when state.currency catches up OR the fetch fails (so a
   // bad RPC doesn't strand the user).
   //
-  // Also holds while the credit/pending fetch is in flight (state.gate ===
-  // "loading"). Without this, the user would briefly see the un-credited
+  // Also holds while the credit/pending fetch is in flight (`gate ===
+  // "loading"`). Without this, the user would briefly see the un-credited
   // price + Pay button — and could fire the order before the credit
-  // adjustment renders. The gate resolves to allow/reject as soon as both
-  // fetchers return (or short-circuits to allow when the host didn't wire
-  // either callback).
+  // adjustment renders. The derived gate resolves to allow/reject from the
+  // current resolved amount as soon as the fetch returns (or is allow when the
+  // host didn't wire either callback).
+  // True when the host expressed a placement amount either way. In fiat mode
+  // `usdcAmount` is absent but `fiatChargeAmount` drives the same flow.
+  const hasAmountIntent = Boolean(usdcAmount || fiatChargeAmount);
+  // Fiat all-in couldn't resolve to a placeable amount: the entered total
+  // doesn't cover the fee ("too-small"), or the rate read failed
+  // ("unavailable"). Surface a blocking message instead of the Pay button.
+  const amountBlocked = amountStatus === "too-small" || amountStatus === "unavailable";
   const isQuotePending = Boolean(
-    !demo && usdcAmount && selectedCurrency && (
+    !demo && hasAmountIntent && selectedCurrency && !amountBlocked && (
+      // Fiat mode: hold while the rate the conversion needs is still loading.
+      amountStatus === "pending" ||
       (!state.priceConfigFailed && (!preview || state.currency !== selectedCurrency.symbol)) ||
-      state.gate === "loading" ||
+      gate === "loading" ||
       state.livenessGate === "loading"
     )
   );
@@ -196,7 +222,7 @@ export function Checkout(props: CheckoutProps) {
     if (state.phase !== "accepted" || !state.fiatAmount || !state.usdcAmount) return null;
     const feeFiat =
       state.fee && state.fee > 0n && state.buyPrice
-        ? (state.fee * state.buyPrice) / 1_000_000n
+        ? usdcToFiat(state.fee, state.buyPrice)
         : 0n;
     const subtotalFiat = state.fiatAmount > feeFiat ? state.fiatAmount - feeFiat : state.fiatAmount;
 
@@ -204,12 +230,12 @@ export function Checkout(props: CheckoutProps) {
     // host passed `usdcAmount` AND it's larger than the Diamond delta —
     // otherwise we skip the credit row (e.g. tracking-only resumes where
     // the prop isn't set).
-    const intent = usdcAmount ?? 0n;
+    const intent = orderUsdc ?? 0n;
     const delta = state.usdcAmount;
     const creditUsed = intent > delta ? intent - delta : 0n;
     const creditFiat =
       creditUsed > 0n && state.buyPrice
-        ? (creditUsed * state.buyPrice) / 1_000_000n
+        ? usdcToFiat(creditUsed, state.buyPrice)
         : 0n;
     const grossFiat = subtotalFiat + creditFiat;
 
@@ -230,10 +256,10 @@ export function Checkout(props: CheckoutProps) {
   const hasPlaceOrder = Boolean(placeOrder);
 
   // Narrow the gate union once so the JSX render block doesn't have to
-  // re-check `state.gate !== "loading"` on every property access. `rejection`
+  // re-check `gate !== "loading"` on every property access. `rejection`
   // is null when the gate is loading or allowing; `Conflict` otherwise.
   const rejection =
-    state.gate !== "loading" && state.gate.kind === "reject" ? state.gate.conflict : null;
+    gate !== "loading" && gate.kind === "reject" ? gate.conflict : null;
 
   // Liveness gate takes precedence over the pending-order gate and the form:
   // a verified-human check is required, or a verification is in flight.
@@ -479,21 +505,37 @@ export function Checkout(props: CheckoutProps) {
                 {paymentNotice}
               </div>
             )}
+            {/* Fiat all-in mode couldn't price the order — the entered total
+                is below the protocol fee, or the rate read failed. Blocks
+                placement with a clear reason instead of a broken button. */}
+            {amountBlocked && (
+              <div style={{ marginBottom: 12, padding: "12px 14px", background: color.dangerSoft, border: `1px solid ${color.danger}22`, borderRadius: radius.md }}>
+                <span style={{ color: color.danger, fontSize: font.md, lineHeight: 1.5 }}>
+                  {amountStatus === "too-small"
+                    ? `This amount is too small to process${feeFiatLabel ? ` — it doesn't cover the ${feeFiatLabel} transaction fee` : ""}. Please use a larger amount.`
+                    : "Couldn't load the exchange rate to price this order. Please refresh and try again."}
+                </span>
+              </div>
+            )}
             {state.error && (
               <div style={{ marginBottom: 12, padding: "10px 12px", background: color.dangerSoft, border: `1px solid ${color.danger}22`, borderRadius: radius.md }}>
                 <span style={{ color: color.danger, fontSize: font.md }}>{state.error}</span>
               </div>
             )}
             <button
-              style={{ ...S.primaryBtn, opacity: isQuotePending ? 0.6 : 1, cursor: isQuotePending ? "wait" : "pointer" }}
+              style={{ ...S.primaryBtn, opacity: (isQuotePending || amountBlocked) ? 0.6 : 1, cursor: amountBlocked ? "not-allowed" : isQuotePending ? "wait" : "pointer" }}
               onClick={handlePlaceOrder}
-              disabled={isQuotePending}
+              disabled={isQuotePending || amountBlocked}
             >
               {isQuotePending ? (
                 <>
                   <Spinner size={14} />
                   Loading quote…
                 </>
+              ) : amountStatus === "too-small" ? (
+                "Amount too small"
+              ) : amountStatus === "unavailable" ? (
+                "Rate unavailable"
               ) : preview?.creditCoversFully ? (
                 "Redeem credit"
               ) : preview ? (
