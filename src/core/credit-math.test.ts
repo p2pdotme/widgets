@@ -4,6 +4,7 @@ import {
   chargedUsdc,
   creditFullyCovers,
   computeGateDecision,
+  deriveGate,
   type PendingOrderSummary,
 } from "./credit-math.ts";
 
@@ -77,4 +78,47 @@ test("computeGateDecision: multiple pending → reject with the first as conflic
   // one shown.
   const gate = computeGateDecision([pendingB, pendingA], 5_000_000n);
   assert.deepStrictEqual(gate, { kind: "reject", conflict: pendingB });
+});
+
+// ─── deriveGate (pure gate status; recomputes from the CURRENT amount) ─
+//
+// The gate is DERIVED, not stored: the credit/pending FETCH is keyed on the
+// signer alone, and this pure function folds the resolved order amount into
+// the decision on every render. That's what keeps fiatChargeAmount mode from
+// briefly showing an enabled Pay button to a user who already has a pending
+// order — in the old code the gate was computed once inside the fetch from the
+// amount captured at fetch time (still `undefined` while the fiat rate loaded),
+// so it stuck on "allow" until a second, amount-triggered refetch corrected it.
+
+test("deriveGate: gate not wired → allow even with a pending order", () => {
+  // No fetchers / no signer: the concurrency gate is inactive, so nothing to
+  // gate regardless of what's in `pendingOrders`.
+  assert.deepStrictEqual(deriveGate(false, [pendingA], 5_000_000n), { kind: "allow" });
+});
+
+test("deriveGate: wired but pending not yet fetched (null) → loading", () => {
+  assert.strictEqual(deriveGate(true, null, 5_000_000n), "loading");
+});
+
+test("deriveGate: wired, no pending → allow", () => {
+  assert.deepStrictEqual(deriveGate(true, [], 5_000_000n), { kind: "allow" });
+});
+
+test("deriveGate: wired, pending + resolved amount → reject (reflects the CURRENT amount)", () => {
+  // The regression this fixes: once the fiat rate resolves the order amount,
+  // the gate must reject in the SAME render — never pass through an enabled
+  // "allow" on a stale/undefined amount.
+  assert.deepStrictEqual(
+    deriveGate(true, [pendingA], 10_937_500n),
+    { kind: "reject", conflict: pendingA },
+  );
+});
+
+test("deriveGate: wired, pending + amount still undefined → allow (masked by the quote-pending hold)", () => {
+  // While the fiat amount is resolving, `resolvedUsdcAmount` is undefined and
+  // computeGateDecision short-circuits to allow — but the widget is holding the
+  // Pay button on `amountStatus === "pending"` in that window, so no enabled
+  // allow is ever shown. The point of deriving is that the instant the amount
+  // lands, this recomputes to reject (previous test) with no refetch.
+  assert.deepStrictEqual(deriveGate(true, [pendingA], undefined), { kind: "allow" });
 });

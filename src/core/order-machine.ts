@@ -26,7 +26,8 @@ import { DIAMOND_ABI, readSmallOrderFixedFee, LIVENESS_GATE_ABI, fetchLivenessSt
 import { DEMO_FIAT_RATE } from "./config";
 import { processB2BBuyOrder } from "./b2b-fraud-engine";
 import { getActiveOrder, setActiveOrder, removeActiveOrder, keyFor, type ActiveOrderKey } from "./active-orders-store";
-import { computeGateDecision, type GateDecision } from "./credit-math";
+import { deriveGate } from "./credit-math";
+import { grossFiatForOrder, computeAmountResolution, type AmountResolution } from "./price-math";
 import { keepOnlyB2BPending } from "./b2b-orders";
 import { computeLivenessGate, createLivenessSession, redeemLivenessAttestation, openVerifyPopup } from "./liveness";
 import {
@@ -71,11 +72,11 @@ interface OrderState {
   // in flight on initial mount. Distinguished from `0n` (fetcher returned
   // zero) so the UI can hide the credit row entirely until we know.
   credit: bigint | null;
-  // Pending-order list from the host. null = unfetched; [] = none.
+  // Pending-order list from the host. null = unfetched; [] = none. The gate
+  // status is DERIVED from this plus the resolved order amount (see
+  // `deriveGate` / the hook return), never stored — so it always reflects the
+  // current amount, not one captured when the credit fetch fired.
   pendingOrders: PendingOrderSummary[] | null;
-  // Decision derived from (credit, pendingOrders, opts.usdcAmount).
-  // "loading" until both fetches resolve; then drives the gate UI.
-  gate: GateDecision | "loading";
   // True when the host's `placeOrder` returned `creditOnly: true`. Drives
   // the success-screen copy and tells the polling loop to short-circuit.
   creditOnly: boolean;
@@ -109,13 +110,17 @@ type OrderAction =
   | { type: "INLINE_ERROR"; message: string | null }
   | { type: "PRICE_CONFIG"; currency: string; buyPrice: bigint; smallOrderThreshold: bigint; smallOrderFixedFee: bigint }
   | { type: "PRICE_CONFIG_FAILED" }
+  // Clears a stale failure flag at the start of a fresh price-config read
+  // (e.g. currency switch) so a prior currency's failure can't flash the
+  // "rate unavailable" banner over the new currency while it loads.
+  | { type: "PRICE_CONFIG_RESET" }
   // Used while phase=checkout to hold a resumable order in the background.
   // RESUMABLE_FOUND attaches an orderId without flipping out of "checkout"
   // — the user still sees the form. Pay-now uses this id to skip placement.
   | { type: "RESUMABLE_FOUND"; orderId: string; txHash: string }
   | { type: "RESUMABLE_CLEARED" }
   // Credit-accounting actions.
-  | { type: "CREDIT_LOADED"; credit: bigint; pending: PendingOrderSummary[]; gate: GateDecision }
+  | { type: "CREDIT_LOADED"; credit: bigint; pending: PendingOrderSummary[] }
   | { type: "CREDIT_ONLY_PLACED"; orderId: string; txHash: string }
   // Liveness-gate actions.
   // Feature off (no config) → cleared, no gate. STATUS carries the verify-once
@@ -138,7 +143,7 @@ export const INITIAL: OrderState = {
   fee: null, actualUsdcAmount: null,
   acceptedTimestamp: null,
   priceConfigFailed: false,
-  credit: null, pendingOrders: null, gate: "loading",
+  credit: null, pendingOrders: null,
   creditOnly: false,
   livenessGate: "loading", livenessCleared: false, livenessError: null,
 };
@@ -165,10 +170,11 @@ export function reducer(state: OrderState, action: OrderAction): OrderState {
       priceConfigFailed: false,
     };
     case "PRICE_CONFIG_FAILED": return { ...state, priceConfigFailed: true };
+    case "PRICE_CONFIG_RESET": return state.priceConfigFailed ? { ...state, priceConfigFailed: false } : state;
     case "RESUMABLE_FOUND": return { ...state, orderId: action.orderId, txHash: action.txHash };
     case "RESUMABLE_CLEARED": return { ...state, orderId: null, txHash: null };
     case "CREDIT_LOADED": return {
-      ...state, credit: action.credit, pendingOrders: action.pending, gate: action.gate,
+      ...state, credit: action.credit, pendingOrders: action.pending,
     };
     case "CREDIT_ONLY_PLACED": return {
       ...state, phase: "completed",
@@ -208,6 +214,9 @@ export interface UseOrderMachineOpts {
   usdcAddress?: `0x${string}`;
   usdcAmount?: bigint;
   fiatAmount?: bigint;
+  // All-in fiat total (6-dec). Alternative to `usdcAmount`; the widget
+  // converts it to a USDC order amount via the selected currency's buyPrice.
+  fiatChargeAmount?: bigint;
   screening?: ScreeningConfig;
   // Credit accounting (optional; both must be set for the gate to engage).
   fetchCredit?: (user: `0x${string}`) => Promise<bigint>;
@@ -230,18 +239,66 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
   const chain = opts.chainId === 84532 ? baseSepolia : base;
   const publicClient = createPublicClient({ chain, transport: http(opts.rpcUrl) });
 
+  // ─── Amount resolution ──────────────────────────────────────────────
+  // The order amount arrives one of two ways:
+  //   • usdcAmount        → used as-is (the original contract).
+  //   • fiatChargeAmount  → an all-in fiat total; convert to a USDC order
+  //     amount via the selected currency's on-chain buyPrice, backing the
+  //     protocol small-order fee out of the POST-CREDIT delta (issue #51).
+  // `status` drives the UI: "pending" holds the Pay button while the rate /
+  // async credit read loads; "too-small" / "unavailable" surface a blocking
+  // error; "ready" exposes the resolved `usdcAmount`; "none" = tracking-only.
+  // Decision is a pure function (computeAmountResolution) so it's unit-tested
+  // directly and the hook just maps props + reducer state onto it.
+  const selSym = opts.selectedCurrency?.symbol;
+  const hasCurrency = opts.selectedCurrency !== undefined;
+  const demoCur = selSym ?? opts.demoCurrency ?? "INR";
+  // Mutually-exclusive misconfig — warn (don't throw); `usdcAmount` wins.
+  useEffect(() => {
+    if (opts.usdcAmount !== undefined && opts.fiatChargeAmount !== undefined) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        "[p2p-widget] Pass either `usdcAmount` or `fiatChargeAmount`, not both — using `usdcAmount`.",
+      );
+    }
+  }, [opts.usdcAmount, opts.fiatChargeAmount]);
+  const amountResolution = useMemo<AmountResolution>(
+    () =>
+      computeAmountResolution({
+        usdcAmount: opts.usdcAmount,
+        fiatChargeAmount: opts.fiatChargeAmount,
+        demo: opts.demo,
+        demoRate: DEMO_FIAT_RATE[demoCur] ?? 1,
+        hasSelectedCurrency: hasCurrency,
+        selectedSymbol: selSym,
+        priceLoadedCurrency: state.currency,
+        buyPrice: state.buyPrice,
+        threshold: state.smallOrderThreshold,
+        fixedFee: state.smallOrderFixedFee,
+        priceConfigFailed: state.priceConfigFailed,
+        credit: state.credit,
+      }),
+    [
+      opts.usdcAmount, opts.fiatChargeAmount, opts.demo, demoCur, hasCurrency, selSym,
+      state.currency, state.buyPrice, state.smallOrderThreshold, state.smallOrderFixedFee,
+      state.priceConfigFailed, state.credit,
+    ],
+  );
+  const resolvedUsdcAmount = amountResolution.usdcAmount;
+
   // Composite key for the resumable-order store. null when the host hasn't
-  // supplied enough context (no signer / no currency picker / no amount) —
-  // in that mode the machine just acts like the previous version (no resume).
+  // supplied enough context (no signer / no currency picker / no resolved
+  // amount) — in that mode the machine just acts like the previous version
+  // (no resume). In fiat mode the key stays null until the rate resolves.
   const storeKey = useMemo<ActiveOrderKey | null>(() => {
-    if (!opts.signer?.address || !opts.selectedCurrency || opts.usdcAmount === undefined) return null;
+    if (!opts.signer?.address || !opts.selectedCurrency || resolvedUsdcAmount === undefined) return null;
     return {
       user: opts.signer.address,
       chainId: opts.chainId,
       currency: opts.selectedCurrency.symbol,
-      usdcAmount: opts.usdcAmount,
+      usdcAmount: resolvedUsdcAmount,
     };
-  }, [opts.signer?.address, opts.chainId, opts.selectedCurrency?.symbol, opts.usdcAmount]);
+  }, [opts.signer?.address, opts.chainId, opts.selectedCurrency?.symbol, resolvedUsdcAmount]);
   const storeKeyStr = storeKey ? keyFor(storeKey) : null;
 
   // Hold a ref to current state so the resumable-store effect can decide
@@ -389,6 +446,10 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
     : opts.selectedCurrency?.symbol;
   useEffect(() => {
     if (opts.demo || !currencySymbol) return;
+    // Clear any prior currency's failure before the new read so a stale flag
+    // can't surface "rate unavailable" over the freshly-picked currency
+    // (no-op when already clear — the reducer returns the same state).
+    dispatch({ type: "PRICE_CONFIG_RESET" });
     let cancelled = false;
     const currencyHex = stringToHex(currencySymbol, { size: 32 });
     (async () => {
@@ -428,19 +489,26 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
 
   // Credit + pending-order fetch. Runs on mount, on signer rotation, and
   // after each completion (so post-redemption credit refreshes). When the
-  // host didn't supply both callbacks, the gate stays in "loading" until
-  // we explicitly mark it allow — done synchronously here.
+  // host didn't supply both callbacks, we record empty credit/pending here so
+  // the derived gate resolves to allow instead of hanging on "loading".
   //
   // Why both must be set: enforcing the rule with only one callback leaves
   // a half-state — e.g. seeing credit but not knowing if a pending order
   // exists means we either over- or under-block. Easier to require both
   // up-front than to define partial-mode semantics.
-  const fetchKeyStr = `${opts.signer?.address ?? ""}|${opts.usdcAmount?.toString() ?? ""}`;
+  //
+  // Keyed on the signer ALONE — credit and pending orders don't depend on the
+  // order amount, so the fetch runs once. In fiatChargeAmount mode the amount
+  // isn't known until the on-chain rate resolves (after this fetch); the gate
+  // folds that later-arriving amount in via `deriveGate` at the return, with no
+  // refetch. Keying on the amount here would fire a second fetch and, worse,
+  // decide the gate from an amount still `undefined` at fetch time.
+  const fetchKeyStr = opts.signer?.address ?? "";
   useEffect(() => {
     if (!opts.fetchCredit || !opts.fetchPendingOrders || !opts.signer?.address) {
-      // No gate to compute — record explicit "allow" so the UI doesn't
-      // hang on the "loading" state forever.
-      dispatch({ type: "CREDIT_LOADED", credit: 0n, pending: [], gate: { kind: "allow" } });
+      // No gate wired — record empty credit/pending so the derived gate is
+      // allow and the UI doesn't hang on "loading".
+      dispatch({ type: "CREDIT_LOADED", credit: 0n, pending: [] });
       return;
     }
     // Re-fetch is gated on `phase === "checkout"` so we don't churn the
@@ -464,15 +532,14 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
         // longer block. Resilient: passes through unchanged if it can't run.
         const b2bPending = await keepOnlyB2BPending(pending, opts.subgraphUrl, userAddr);
         if (cancelled) return;
-        const gate = computeGateDecision(b2bPending, opts.usdcAmount);
-        dispatch({ type: "CREDIT_LOADED", credit, pending: b2bPending, gate });
+        dispatch({ type: "CREDIT_LOADED", credit, pending: b2bPending });
       } catch {
         // Treat fetch failure as no-credit/no-pending so the user can
         // still place an order — better than blocking on a transient RPC
         // blip. The host's `onError` is reserved for placement-side
         // failures; failed credit reads aren't user-facing.
         if (!cancelled) {
-          dispatch({ type: "CREDIT_LOADED", credit: 0n, pending: [], gate: { kind: "allow" } });
+          dispatch({ type: "CREDIT_LOADED", credit: 0n, pending: [] });
         }
       }
     })();
@@ -605,6 +672,21 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
       }
     }
 
+    // Fiat all-in mode that hasn't resolved to a placeable USDC amount. The
+    // Pay button is already gated on this, but guard defensively so a fast
+    // click can't fire a zero/negative order before the rate lands (or when
+    // the entered total is too small to cover the fee).
+    if (!opts.demo && opts.fiatChargeAmount !== undefined && resolvedUsdcAmount === undefined) {
+      const message =
+        amountResolution.status === "too-small"
+          ? "This amount is too small to process — it doesn't cover the transaction fee. Please use a larger amount."
+          : amountResolution.status === "unavailable"
+            ? "Couldn't load the exchange rate to price this order. Please try again."
+            : "Still loading the exchange rate — please wait a moment and try again.";
+      dispatch({ type: "INLINE_ERROR", message });
+      return;
+    }
+
     dispatch({ type: "PLACING" });
 
     if (opts.demo) {
@@ -612,15 +694,22 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
       dispatch({ type: "PLACED", orderId: fakeId, txHash: "0xdemo" });
       opts.onOrderPlaced?.(fakeId, "0xdemo");
       const cur = opts.selectedCurrency?.symbol ?? opts.demoCurrency ?? "INR";
+      // Honor the resolved amount in demo too (fiat mode converts via the
+      // static demo rate); default to 10 USDC when no amount was supplied.
+      const demoUsdc = resolvedUsdcAmount ?? BigInt(10 * 1e6);
       setTimeout(() => {
         const rate = DEMO_FIAT_RATE[cur] ?? 1;
+        const demoFee = 100_000n; // demo: 0.10 USDC
+        const demoFiat = opts.fiatChargeAmount ?? BigInt(Math.round(Number(demoUsdc) * rate));
         dispatch({
           type: "ACCEPTED",
-          fiatAmount: BigInt(Math.round(10 * 1e6 * rate)),
-          usdcAmount: BigInt(10 * 1e6),
+          fiatAmount: demoFiat,
+          usdcAmount: demoUsdc,
           currency: cur,
-          fee: 100_000n, // demo: 0.10 USDC
-          actualUsdcAmount: BigInt(10 * 1e6) - 100_000n,
+          fee: demoFee,
+          // Clamp so a tiny fiatChargeAmount can't render a negative "you
+          // receive" in demo (demo-only; no funds move).
+          actualUsdcAmount: demoUsdc > demoFee ? demoUsdc - demoFee : 0n,
           acceptedTimestamp: BigInt(Math.floor(Date.now() / 1000)),
         });
         dispatch({ type: "DECRYPTED_UPI", upi: "p2pdemo@upi" });
@@ -635,7 +724,7 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
       diamondAddress: opts.diamondAddress,
       currency: opts.selectedCurrency?.symbol,
       circleId: opts.selectedCurrency?.circleId?.toString(),
-      amountUsdc: opts.usdcAmount?.toString(),
+      amountUsdc: resolvedUsdcAmount?.toString(),
     };
     try {
       let resolvedCurrency = opts.selectedCurrency;
@@ -649,9 +738,9 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
       // `placeOrder` callback is expected to return `creditOnly: true` here.
       const creditCoversFully =
         state.credit !== null &&
-        opts.usdcAmount !== undefined &&
-        opts.usdcAmount > 0n &&
-        state.credit >= opts.usdcAmount;
+        resolvedUsdcAmount !== undefined &&
+        resolvedUsdcAmount > 0n &&
+        state.credit >= resolvedUsdcAmount;
       if (resolvedCurrency && resolvedCurrency.circleId === undefined && creditCoversFully) {
         // 0n is a sentinel — integrators that take the credit-only path
         // (e.g. LotPot's `userPlaceOrder` when `credit >= total`) ignore
@@ -660,30 +749,25 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
         resolvedCurrency = { ...resolvedCurrency, circleId: 0n };
       }
       if (resolvedCurrency && resolvedCurrency.circleId === undefined) {
-        if (!opts.subgraphUrl || !opts.usdcAddress || opts.usdcAmount === undefined) {
+        if (!opts.subgraphUrl || !opts.usdcAddress || resolvedUsdcAmount === undefined) {
           throw missingRoutingInputsError(
-            "Routing requires subgraphUrl, usdcAddress, and usdcAmount when circleId is omitted on CurrencyOption.",
+            "Routing requires subgraphUrl, usdcAddress, and an amount (usdcAmount or fiatChargeAmount) when circleId is omitted on CurrencyOption.",
             errorCtx,
           );
         }
-        // Prefer an explicit fiatAmount from the host; otherwise derive from
-        // the on-chain price config. We pass the GROSS fiat (subtotal + fee
-        // converted to fiat) — that's the amount the merchant validates
-        // against, so it must include the protocol's small-order fee.
-        // Falls back to 0n if buyPrice hasn't loaded yet, which lets the SDK
-        // route without an eligibility filter.
-        const routingFiat = opts.fiatAmount ?? (() => {
-          if (!state.buyPrice) return 0n;
-          const subtotal = (opts.usdcAmount * state.buyPrice) / 1_000_000n;
-          const feeUsdc =
-            state.smallOrderThreshold !== null &&
-            state.smallOrderFixedFee !== null &&
-            opts.usdcAmount <= state.smallOrderThreshold
-              ? state.smallOrderFixedFee
-              : 0n;
-          const feeFiat = (feeUsdc * state.buyPrice) / 1_000_000n;
-          return subtotal + feeFiat;
-        })();
+        // Resolved USDC order amount is known here (guarded above).
+        const orderUsdc: bigint = resolvedUsdcAmount;
+        // GROSS fiat the merchant validates against (subtotal + small-order
+        // fee, in fiat). Precedence: explicit routing override → the all-in
+        // fiat the integrator already gave us → derived from on-chain price.
+        // Falls back to 0n if buyPrice hasn't loaded, letting the SDK route
+        // without an eligibility filter.
+        const routingFiat =
+          opts.fiatAmount ??
+          opts.fiatChargeAmount ??
+          (state.buyPrice
+            ? grossFiatForOrder(orderUsdc, state.buyPrice, state.smallOrderThreshold, state.smallOrderFixedFee)
+            : 0n);
 
         const orders = createOrders({
           publicClient: publicClient as any,
@@ -698,7 +782,7 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
           // its CurrencyCode enum at runtime via Zod. Cast to satisfy TS.
           currency: resolvedCurrency.symbol as any,
           user: opts.signer.address,
-          amount: opts.usdcAmount,
+          amount: orderUsdc,
           fiatAmount: routingFiat,
           recipientAddr: opts.signer.address,
           preferredPaymentChannelConfigId: resolvedCurrency.paymentChannelConfigId ?? 0n,
@@ -716,7 +800,21 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
         resolvedCurrency = { ...resolvedCurrency, circleId: routedCircleId };
       }
 
-      const runPlace = () => opts.placeOrder!({ currency: resolvedCurrency });
+      // Fiat handed back to the host alongside the resolved USDC amount: the
+      // exact all-in total in fiat mode, else the gross derived from the
+      // resolved amount. Lets payment-gateway `placeOrder` callbacks encode
+      // the widget-computed amount into their integrator tx.
+      const contextFiat =
+        opts.fiatChargeAmount ??
+        (resolvedUsdcAmount !== undefined && state.buyPrice
+          ? grossFiatForOrder(resolvedUsdcAmount, state.buyPrice, state.smallOrderThreshold, state.smallOrderFixedFee)
+          : undefined);
+      const runPlace = () =>
+        opts.placeOrder!({
+          currency: resolvedCurrency,
+          usdcAmount: resolvedUsdcAmount,
+          fiatAmount: contextFiat,
+        });
       const result = opts.screening
         ? await processB2BBuyOrder({
             signer: opts.signer,
@@ -863,5 +961,31 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
     }
   }, [opts]);
 
-  return { state, handlePlaceOrder, markPaid, cancelOrder, startLivenessVerification };
+  // Concurrency gate, DERIVED (not stored) so it recomputes from the current
+  // resolved amount every render — see `deriveGate`. Keeps fiatChargeAmount
+  // mode from flashing an enabled Pay button to a user with a pending order in
+  // the window after the rate resolves but before an amount-keyed refetch used
+  // to correct the gate. The fetch above is signer-keyed and runs once.
+  const gateWired = Boolean(
+    opts.fetchCredit && opts.fetchPendingOrders && opts.signer?.address,
+  );
+  const gate = useMemo(
+    () => deriveGate(gateWired, state.pendingOrders, resolvedUsdcAmount),
+    [gateWired, state.pendingOrders, resolvedUsdcAmount],
+  );
+
+  return {
+    state,
+    handlePlaceOrder,
+    markPaid,
+    cancelOrder,
+    startLivenessVerification,
+    // Effective order amount + its resolution status, so the widget renders
+    // the breakdown / gates the Pay button consistently in both usdcAmount
+    // and fiatChargeAmount modes.
+    resolvedUsdcAmount,
+    amountStatus: amountResolution.status,
+    // Derived credit/concurrency gate: "loading" | { allow } | { reject }.
+    gate,
+  };
 }
