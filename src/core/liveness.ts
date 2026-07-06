@@ -23,12 +23,17 @@ export interface LivenessStatus {
 export type LivenessGate = "loading" | "ok" | "required";
 
 /**
- * Pure gate decision.
+ * Pure verify-once decision. `"ok"` means the user is **cleared** — needs no
+ * liveness check — because the integrator's gate is off or they're already
+ * verified. The order machine uses `=== "ok"` to set `livenessCleared` (which
+ * lets a cleared user bypass a screening `liveliness_required` response); it
+ * does NOT blanket-gate on `"required"`, since the prompt trigger is the
+ * suspect-scoped screening flag, not this read.
  * - no `liveness` config            → "ok" (feature off for this integration)
  * - status not yet read             → "loading"
- * - on-chain gate off               → "ok"
- * - gate on + user already verified → "ok" (verify-once)
- * - gate on + user not verified     → "required"
+ * - on-chain gate off               → "ok"  (cleared)
+ * - gate on + user already verified → "ok"  (cleared, verify-once)
+ * - gate on + user not verified     → "required" (not cleared)
  */
 export function computeLivenessGate(
   status: LivenessStatus | null,
@@ -38,32 +43,6 @@ export function computeLivenessGate(
   if (status === null) return "loading";
   if (!status.required) return "ok";
   return status.verified ? "ok" : "required";
-}
-
-/**
- * Credit-based exemption for the liveness gate (two-integrator migration).
- *
- * Liveness lives on the NEW integrator. During migration, users with
- * redeemable credit route to the OLD integrator — which has no liveness gate —
- * so they must never see the verify step. Their zero-credit peers route to the
- * NEW integrator and are gated normally.
- *
- *   - exemption off              → "enforce" (gate every user; the default).
- *   - credit not yet known (null)→ "wait" (hold rather than decide on stale
- *                                  zero-credit and momentarily prompt/exempt).
- *   - credit > 0                 → "exempt" (OLD integrator → skip liveness).
- *   - credit == 0                → "enforce" (NEW integrator → run the gate).
- *
- * Requires the credit gate wired (`fetchCredit` + `fetchPendingOrders`); with
- * neither, credit resolves to 0n and every user is enforced — a safe default.
- */
-export function livenessCreditExemption(
-  exemptWhenCreditPositive: boolean,
-  credit: bigint | null,
-): "enforce" | "exempt" | "wait" {
-  if (!exemptWhenCreditPositive) return "enforce";
-  if (credit === null) return "wait";
-  return credit > 0n ? "exempt" : "enforce";
 }
 
 /** The on-chain attestation handed back by the liveness proxy, ready for
