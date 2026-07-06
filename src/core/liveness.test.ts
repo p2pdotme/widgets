@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert";
-import { computeLivenessGate } from "./liveness.ts";
+import { computeLivenessGate, livenessCreditExemption } from "./liveness.ts";
 
 test("no liveness config → never gates (other integrations unaffected)", () => {
   assert.equal(computeLivenessGate(null, false), "ok");
@@ -22,4 +22,25 @@ test("gate on + already verified → ok (verify once)", () => {
 
 test("gate on + not verified → required", () => {
   assert.equal(computeLivenessGate({ required: true, verified: false }, true), "required");
+});
+
+// ─── livenessCreditExemption (two-integrator migration) ─────────────
+
+test("exemption off → always enforce, ignoring credit", () => {
+  assert.equal(livenessCreditExemption(false, null), "enforce");
+  assert.equal(livenessCreditExemption(false, 0n), "enforce");
+  assert.equal(livenessCreditExemption(false, 5_000_000n), "enforce");
+});
+
+test("exemption on + credit still loading → wait (never decide on stale zero)", () => {
+  assert.equal(livenessCreditExemption(true, null), "wait");
+});
+
+test("exemption on + credit > 0 → exempt (old integrator, no liveness)", () => {
+  assert.equal(livenessCreditExemption(true, 1n), "exempt");
+  assert.equal(livenessCreditExemption(true, 5_000_000n), "exempt");
+});
+
+test("exemption on + zero credit → enforce (new integrator gate applies)", () => {
+  assert.equal(livenessCreditExemption(true, 0n), "enforce");
 });
