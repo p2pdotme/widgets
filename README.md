@@ -1522,6 +1522,7 @@ flows through the three host callbacks. That's the bright line.
 | `subgraphUrl` | `string` | — | Required when any `CurrencyOption` omits `circleId` — passed to the SDK for routing. |
 | `fiatAmountLimit` | `bigint` | — | Slippage floor (6 decimals). `0` = no check. |
 | `defaultAmountUsdc` | `bigint` | — | Pre-fills the amount input (6-dec). User can still edit. |
+| `fiatPayoutAmount` | `bigint` | — | **Fiat-denominated withdrawal** (alternative to `defaultAmountUsdc`). The fiat the user should **receive** (6-dec); the widget computes the USDC to sell via the selected currency's on-chain `sellPrice`. The small-order fee is charged separately in USDC, so it doesn't reduce the payout. Hides the amount input. The sell-side analog of `<Checkout>`'s `fiatChargeAmount`. |
 | `theme` | `P2PTheme` | — | Optional visual overrides. See [Theming](#theming). |
 | `mode` / `open` / events | — | — | Same shape as `<Checkout>`. |
 

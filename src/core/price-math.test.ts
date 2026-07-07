@@ -4,9 +4,11 @@ import {
   usdcToFiat,
   fiatToUsdc,
   grossFiatForOrder,
+  resolveSellAmount,
   resolveUsdcFromAllInFiat,
   computeAmountResolution,
   type AmountResolutionInputs,
+  type SellAmountInputs,
 } from "./price-math.ts";
 
 // Concrete config used across the cases: INR at 83 fiat/USDC, 10 USDC
@@ -195,6 +197,59 @@ test("grossFiatForOrder adds the small-order fee for a small order", () => {
 test("grossFiatForOrder omits the fee above the threshold and when config is null", () => {
   assert.strictEqual(grossFiatForOrder(20_000_000n, BUY_PRICE, THRESHOLD, FIXED_FEE), usdcToFiat(20_000_000n, BUY_PRICE));
   assert.strictEqual(grossFiatForOrder(5_000_000n, BUY_PRICE, null, null), usdcToFiat(5_000_000n, BUY_PRICE));
+});
+
+// ─── resolveSellAmount (cashout / withdrawal fiatPayoutAmount) ──────
+
+// `BUY_PRICE` doubles as the sellPrice here (both are fiat-per-USDC, 6-dec).
+const SELL_BASE: SellAmountInputs = {
+  fiatPayoutAmount: undefined,
+  sellPrice: BUY_PRICE,
+  priceReadyForCurrency: true,
+  priceConfigFailed: false,
+  threshold: THRESHOLD,
+  fixedFee: FIXED_FEE,
+};
+
+test("resolveSellAmount: no fiatPayoutAmount → none (plain USDC-input mode)", () => {
+  assert.deepStrictEqual(resolveSellAmount(SELL_BASE), { status: "none" });
+});
+
+test("resolveSellAmount: holds pending until the rate is ready for the currency", () => {
+  const p = { ...SELL_BASE, fiatPayoutAmount: 5_000_000_000n };
+  assert.strictEqual(resolveSellAmount({ ...p, priceReadyForCurrency: false }).status, "pending");
+  assert.strictEqual(resolveSellAmount({ ...p, sellPrice: null }).status, "pending");
+});
+
+test("resolveSellAmount: rate read failed → unavailable", () => {
+  const r = resolveSellAmount({ ...SELL_BASE, fiatPayoutAmount: 5_000_000_000n, priceConfigFailed: true });
+  assert.strictEqual(r.status, "unavailable");
+});
+
+test("resolveSellAmount: large payout → full principal, no fee", () => {
+  // ₹5,000 at 83 → 60.240964 USDC, above the 10 USDC threshold.
+  assert.deepStrictEqual(
+    resolveSellAmount({ ...SELL_BASE, fiatPayoutAmount: 5_000_000_000n }),
+    { status: "ready", principal: 60_240_964n, feeUsdc: 0n },
+  );
+});
+
+test("resolveSellAmount: small payout → principal + separate USDC fee (not deducted from payout)", () => {
+  // ₹100 → 1.204819 USDC (≤ threshold) → fee applies, charged on top in USDC.
+  assert.deepStrictEqual(
+    resolveSellAmount({ ...SELL_BASE, fiatPayoutAmount: 100_000_000n }),
+    { status: "ready", principal: 1_204_819n, feeUsdc: FIXED_FEE },
+  );
+});
+
+test("resolveSellAmount: dust payout (principal rounds to 0) → too-small", () => {
+  assert.strictEqual(resolveSellAmount({ ...SELL_BASE, fiatPayoutAmount: 1n }).status, "too-small");
+});
+
+test("resolveSellAmount: fee-dominated payout (fee ≥ principal) → too-small (#58)", () => {
+  // ₹2.49 → ~0.03 USDC principal; the 0.0625 USDC fee exceeds it, so the user
+  // would pay more fee than they sell — block it.
+  assert.strictEqual(resolveSellAmount({ ...SELL_BASE, fiatPayoutAmount: 2_490_000n }).status, "too-small");
 });
 
 // ─── computeAmountResolution (amount-mode state machine, issue #53.4) ─
