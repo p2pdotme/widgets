@@ -404,6 +404,9 @@ export default function App({ privateKey }: AppProps) {
           rpcUrl={RPC_URL}
           currencies={CURRENCIES}
           defaultAmountUsdc={2_000_000n}
+          // To fix the fiat the user RECEIVES instead, drop `defaultAmountUsdc`
+          // and pass e.g. `fiatPayoutAmount={5000_000000n}` (₹5,000) — the widget
+          // computes the USDC to sell. Sell-side analog of `fiatChargeAmount`.
           placeCashout={placeCashout}
           deliverUpi={deliverUpi}
           reconcile={reconcile}
