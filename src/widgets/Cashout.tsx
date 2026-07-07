@@ -3,7 +3,7 @@ import { createPublicClient, http, formatUnits, parseUnits, stringToHex } from "
 import { baseSepolia, base } from "viem/chains";
 import type { CashoutProps, CurrencyOption } from "../types";
 import { useOfframpMachine } from "../core/offramp-machine";
-import { sellPrincipalFromFiat, usdcToFiat } from "../core/price-math";
+import { resolveSellAmount, usdcToFiat } from "../core/price-math";
 import { color, radius, font, weight, shadow, S, themeToCssVars } from "../ui/theme";
 import { Modal } from "../ui/Modal";
 import {
@@ -116,17 +116,27 @@ export function Cashout(props: CashoutProps) {
     return () => { cancelled = true; };
   }, [selectedCurrency?.symbol, diamondAddress, chainId, rpcUrl]);
 
-  // The USDC principal to sell. In fiat mode it's derived from the target
-  // payout ÷ the selected currency's sellPrice (null until the rate lands, or
-  // when the payout is dust). Otherwise it's parsed from the amount input
-  // (null on empty / NaN / negative). The "Withdraw" button disables on null.
+  // Fiat mode: resolve the target payout → USDC principal + fee (pure, tested).
+  // "none" in plain USDC-input mode. Gated so a just-switched currency's stale
+  // rate can't misconvert (priceReadyForCurrency).
+  const sell = useMemo(
+    () =>
+      resolveSellAmount({
+        fiatPayoutAmount,
+        sellPrice,
+        priceReadyForCurrency: priceCurrency === selectedCurrency.symbol && sellPrice !== null,
+        priceConfigFailed,
+        threshold: smallOrderThreshold,
+        fixedFee: smallOrderFixedFee,
+      }),
+    [fiatPayoutAmount, sellPrice, priceCurrency, selectedCurrency.symbol, priceConfigFailed, smallOrderThreshold, smallOrderFixedFee],
+  );
+
+  // The USDC principal to sell. In fiat mode it's the resolved principal (null
+  // until the rate lands / when blocked). Otherwise it's parsed from the amount
+  // input (null on empty / NaN / negative). The "Withdraw" button disables on null.
   const parsedAmount = useMemo((): bigint | null => {
-    if (fiatMode) {
-      // Wait for the sellPrice of the *selected* currency — a stale rate from a
-      // just-switched currency would misconvert.
-      if (!sellPrice || priceCurrency !== selectedCurrency.symbol) return null;
-      return sellPrincipalFromFiat(fiatPayoutAmount!, sellPrice);
-    }
+    if (fiatMode) return sell.status === "ready" ? sell.principal : null;
     const trimmed = amountInput.trim();
     if (!trimmed) return null;
     try {
@@ -136,7 +146,7 @@ export function Cashout(props: CashoutProps) {
     } catch {
       return null;
     }
-  }, [fiatMode, fiatPayoutAmount, sellPrice, priceCurrency, selectedCurrency.symbol, amountInput]);
+  }, [fiatMode, sell, amountInput]);
 
   // Source the cashout-able amount for the "Max" affordance + insufficient
   // hint. Default: the user's on-chain USDC balance (read-only ERC20 ABI, no
@@ -197,6 +207,7 @@ export function Cashout(props: CashoutProps) {
   // or mid-currency-switch), we conservatively treat fee as 0 — the
   // balance check would re-tighten once the real fee is in.
   const feeUsdc = (() => {
+    if (fiatMode) return sell.status === "ready" ? sell.feeUsdc : 0n;
     if (parsedAmount === null || smallOrderThreshold === null || smallOrderFixedFee === null) return 0n;
     return parsedAmount <= smallOrderThreshold ? smallOrderFixedFee : 0n;
   })();
@@ -225,13 +236,14 @@ export function Cashout(props: CashoutProps) {
   })();
   // Rate still loading for the selected currency (initial load OR mid-switch).
   const ratePending = !priceConfigFailed && (!sellPrice || priceCurrency !== selectedCurrency.symbol);
-  // Pending gates the Withdraw button + drives the breakdown skeleton. In fiat
-  // mode the principal itself depends on the rate, so hold on the rate alone.
-  const isQuotePending = Boolean(fiatMode ? ratePending : (parsedAmount && ratePending));
-  // Fiat mode couldn't resolve a principal: the rate read failed, or the target
-  // payout is too small to sell any USDC.
-  const fiatRateUnavailable = fiatMode && priceConfigFailed;
-  const fiatTooSmall = fiatMode && !ratePending && !priceConfigFailed && parsedAmount === null;
+  // Pending gates the Withdraw button + drives the breakdown skeleton. Fiat mode
+  // uses the resolver's status (the principal depends on the rate); USDC-input
+  // mode holds while the quote for the entered amount loads.
+  const isQuotePending = Boolean(fiatMode ? sell.status === "pending" : (parsedAmount && ratePending));
+  // Fiat mode couldn't price the payout: rate read failed, or the payout is
+  // dust / fee-dominated (fee ≥ principal).
+  const fiatRateUnavailable = fiatMode && sell.status === "unavailable";
+  const fiatTooSmall = fiatMode && sell.status === "too-small";
 
   const canSubmit = paymentValid && parsedAmount !== null && !insufficientBalance && !isQuotePending;
 

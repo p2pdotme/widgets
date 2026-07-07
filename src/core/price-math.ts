@@ -34,17 +34,56 @@ export function fiatToUsdc(fiat: bigint, buyPrice: bigint): bigint {
   return (2n * numerator + buyPrice) / (2n * buyPrice);
 }
 
+/** Inputs for {@link resolveSellAmount} — the `<Cashout>` fiat-payout resolver
+ *  mapped from props + reducer state (no React), so the gating is unit-tested. */
+export interface SellAmountInputs {
+  /** Host `fiatPayoutAmount`; `undefined` = plain USDC-input mode (not fiat). */
+  fiatPayoutAmount?: bigint;
+  /** `getPriceConfig(currency).sellPrice` (fiat-per-USDC, 6-dec). */
+  sellPrice: bigint | null;
+  /** True once the loaded price is for the currently-selected currency
+   *  (`priceCurrency === selected`) — guards against a stale-rate misconvert. */
+  priceReadyForCurrency: boolean;
+  priceConfigFailed: boolean;
+  threshold: bigint | null;
+  fixedFee: bigint | null;
+}
+
+export type SellAmountResolution =
+  /** Plain USDC-input mode — the widget parses the amount field instead. */
+  | { status: "none" }
+  /** Fiat mode, rate still loading — hold the Withdraw button. */
+  | { status: "pending" }
+  /** Rate read failed — can't price the payout. */
+  | { status: "unavailable" }
+  /** Payout rounds to a non-positive principal, or the small-order fee meets
+   *  or exceeds the principal (a fee-dominated dust order). Block placement. */
+  | { status: "too-small" }
+  | { status: "ready"; principal: bigint; feeUsdc: bigint };
+
 /**
- * Sell-side inverse: the USDC principal to sell so the user RECEIVES `fiatPayout`
- * at `sellPrice`. The offramp fee is charged separately in USDC (on top of the
- * principal, pulled at `setSellOrderUpi`) and never reduces the fiat payout, so
- * — unlike the buy side — there is no fee to back out here: `principal =
- * fiatPayout / sellPrice`. Returns null when the payout rounds to a
- * non-positive principal (dust), so the caller can block placement.
+ * Resolve a fiat payout into the USDC principal to **sell** plus the offramp
+ * fee. Sell-side analog of the buy `computeAmountResolution`, but simpler: the
+ * fee is charged separately in USDC (pulled on top of the principal at
+ * `setSellOrderUpi`) and never reduces the payout, so there is no fee to back
+ * out — `principal = fiatPayout / sellPrice`.
+ *
+ * Blocks (`"too-small"`) when the principal rounds to ≤ 0, **or** when the
+ * small-order fee is ≥ the principal (a fee-dominated dust order the user
+ * shouldn't pay — issue #58). `threshold` / `fixedFee` null → fee treated as 0.
  */
-export function sellPrincipalFromFiat(fiatPayout: bigint, sellPrice: bigint): bigint | null {
-  const usdc = fiatToUsdc(fiatPayout, sellPrice);
-  return usdc > 0n ? usdc : null;
+export function resolveSellAmount(i: SellAmountInputs): SellAmountResolution {
+  if (i.fiatPayoutAmount === undefined) return { status: "none" };
+  if (i.priceConfigFailed) return { status: "unavailable" };
+  if (!i.priceReadyForCurrency || i.sellPrice === null || i.sellPrice <= 0n) {
+    return { status: "pending" };
+  }
+  const principal = fiatToUsdc(i.fiatPayoutAmount, i.sellPrice);
+  if (principal <= 0n) return { status: "too-small" };
+  const feeUsdc =
+    i.threshold !== null && i.fixedFee !== null && principal <= i.threshold ? i.fixedFee : 0n;
+  if (feeUsdc >= principal) return { status: "too-small" };
+  return { status: "ready", principal, feeUsdc };
 }
 
 /**
