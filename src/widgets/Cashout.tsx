@@ -19,6 +19,7 @@ import { PaymentAddressInput } from "../ui/PaymentAddressInput";
 import { CurrencyRow } from "../ui/CurrencyRow";
 import { ERC20_READ_ABI, DIAMOND_ABI, readSmallOrderFixedFee } from "../core/contracts";
 import { resolveCurrencyMeta } from "../core/currency-meta";
+import { usdcToFiat } from "../core/price-math";
 
 const USDC_DECIMALS = 6;
 
@@ -168,6 +169,9 @@ export function Cashout(props: CashoutProps) {
   const balanceDisplay = balance !== null
     ? (Number(balance) / 10 ** USDC_DECIMALS).toLocaleString(undefined, { maximumFractionDigits: 2 })
     : null;
+  const balanceFiatDisplay = balance !== null && sellPrice !== null && priceCurrency === selectedCurrency.symbol
+    ? (Number(usdcToFiat(balance, sellPrice)) / 1e6).toLocaleString(undefined, { maximumFractionDigits: 2 })
+    : null;
 
   // Small-order fee applies when principal is at or below the threshold.
   // Same rule as `libOrderProcessorFacet.isOrderSmall` on chain. The fee
@@ -275,7 +279,7 @@ export function Cashout(props: CashoutProps) {
             <div style={{ ...S.rowBetween, marginTop: 6 }}>
               <span style={{ ...S.faint }}>
                 {balanceDisplay !== null
-                  ? `Balance: ${balanceDisplay} USDC`
+                  ? `Balance: ${balanceDisplay} USDC${balanceFiatDisplay ? ` (~ ${selectedCurrency.symbol} ${balanceFiatDisplay})` : ""}`
                   : "Loading balance…"}
               </span>
               {balance !== null && balance > 0n && (
