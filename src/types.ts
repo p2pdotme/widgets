@@ -466,6 +466,23 @@ export interface CashoutProps {
   fiatAmountLimit?: bigint;
   /** Pre-fill the amount input (USDC, 6-decimals). User can still edit. */
   defaultAmountUsdc?: bigint;
+  /**
+   * Fiat-denominated withdrawal — an alternative to the user-entered USDC
+   * amount. Pass the fiat amount (6-dec bigint) the user should **receive**,
+   * and the widget computes how much USDC to sell using the selected currency's
+   * on-chain `sellPrice` (`principal = fiatPayoutAmount / sellPrice`). This is
+   * the withdrawal analog of `<Checkout>`'s `fiatChargeAmount`.
+   *
+   * The protocol's small-order fee is charged **separately in USDC** (on top of
+   * the principal), so it does not reduce the payout — the user receives the
+   * full `fiatPayoutAmount` (to the nearest cent) and their wallet is debited
+   * `principal + fee`. The amount input is hidden (the payout is
+   * integrator-fixed) and the balance check still enforces `principal + fee ≤
+   * balance`. Denominated in the selected currency. The Withdraw button holds
+   * until the on-chain rate resolves. Pass this **or** `defaultAmountUsdc` —
+   * when both are set, `fiatPayoutAmount` wins and a dev warning is logged.
+   */
+  fiatPayoutAmount?: bigint;
   /** UI mode. */
   mode?: "inline" | "modal";
   open?: boolean;
