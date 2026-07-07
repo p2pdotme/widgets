@@ -7,6 +7,13 @@ and the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format. While
 the package is `0.x`, minor releases may introduce additive prop changes;
 patch releases stay backward-compatible.
 
+## [1.6.0](https://github.com/p2pdotme/widgets/compare/v1.5.0...v1.6.0) (2026-07-07)
+
+
+### Features
+
+* **cashout:** fiat-denominated withdrawal via fiatPayoutAmount ([#56](https://github.com/p2pdotme/widgets/issues/56)) ([b002736](https://github.com/p2pdotme/widgets/commit/b0027369c12945badbbafe9b4ad4a7ccfe2a9e7c))
+
 ## [1.5.0](https://github.com/p2pdotme/widgets/compare/v1.4.0...v1.5.0) (2026-07-06)
 
 
