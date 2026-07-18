@@ -690,16 +690,30 @@ export function Checkout(props: CheckoutProps) {
                         <p style={S.muted}>Decrypting payment details…</p>
                       )}
                     </div>
-                    {/* QR is INR-only — mirrors user-app behavior. Mercado
-                        Pago / PIX QRs require PSP-generated payloads that
-                        the widget can't synthesize from the bare address. */}
-                    {state.decryptedUpi && state.currency === "INR" && (
-                      <div style={{ display: "flex", justifyContent: "center", marginTop: 16 }}>
+                    {/* INR gets a real payable QR (upi://pay deep link — any UPI
+                        app can act on it directly). PIX / CBU-alias / other
+                        rails don't have an equivalent deep-link scheme the
+                        widget can synthesize from a bare payout id — a valid
+                        PIX BR Code or Mercado Pago QR needs a PSP-issued,
+                        checksummed payload we don't have. So for those we
+                        still render a QR, but it just encodes the PLAIN
+                        payout id as text (same value as the CopyRow above) —
+                        scan it with any QR reader to read/copy the id into
+                        your banking app, rather than "scan to pay". */}
+                    {state.decryptedUpi && !compoundFields && (
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", marginTop: 16 }}>
                         <div style={{ padding: 12, background: "#fff", borderRadius: radius.md, border: `1px solid ${color.border}` }}>
                           <img src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&margin=0&data=${encodeURIComponent(
-                            `upi://pay?pa=${state.decryptedUpi}&am=${fiatDisplay}&cu=INR&tr=${state.orderId}`
+                            state.currency === "INR"
+                              ? `upi://pay?pa=${state.decryptedUpi}&am=${fiatDisplay}&cu=INR&tr=${state.orderId}`
+                              : state.decryptedUpi
                           )}`} alt="QR" style={{ width: 180, height: 180, display: "block" }} />
                         </div>
+                        {state.currency !== "INR" && (
+                          <p style={{ ...S.faint, textAlign: "center", marginTop: 8 }}>
+                            Scan to copy the {acceptedMeta?.paymentAddressLabel ?? "payment"} id — not a pay QR
+                          </p>
+                        )}
                       </div>
                     )}
                   </div>
