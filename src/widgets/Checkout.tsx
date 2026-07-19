@@ -25,6 +25,29 @@ const AUTO_CANCEL_WINDOW_MS = 5 * 60 * 1000;
 // on the custom domain below).
 const COPY_PAGE_URL = "https://copy.p2p.cool";
 
+// Non-INR "scan to copy" QR caption, with hardcoded per-rail localization for
+// now (pt-BR for PIX/BRL, es-AR for the alias/ARS) and an English fallback —
+// the widget has no i18n layer yet. `strong` is the bolded, high-contrast tail.
+function nonInrQrCaption(
+  currency: string | null | undefined,
+  label: string,
+): { lead: string; strong: string } {
+  if (currency === "BRL")
+    return {
+      lead: "Escaneie com o app de câmera para copiar a chave PIX — ",
+      strong: "Não é um QR de pagamento",
+    };
+  if (currency === "ARS")
+    return {
+      lead: "Escaneá con la app de cámara para copiar el alias — ",
+      strong: "No es un QR de pago",
+    };
+  return {
+    lead: `Scan with camera app to copy the ${label} — `,
+    strong: "Not a Payable QR",
+  };
+}
+
 export function Checkout(props: CheckoutProps) {
   const {
     orderId: initialOrderId, placeOrder,
@@ -717,11 +740,14 @@ export function Checkout(props: CheckoutProps) {
                               : `${COPY_PAGE_URL}/#${new URLSearchParams({ v: state.decryptedUpi!, l: acceptedMeta?.paymentAddressLabel ?? "Payment ID" }).toString()}`
                           )}`} alt="QR" style={{ width: 180, height: 180, display: "block" }} />
                         </div>
-                        {state.currency !== "INR" && (
-                          <p style={{ ...S.faint, color: color.textMuted, textAlign: "center", marginTop: 8 }}>
-                            Scan to copy the {acceptedMeta?.paymentAddressLabel ?? "payment"} — <strong style={{ color: color.text }}>Not a Payable QR</strong>
-                          </p>
-                        )}
+                        {state.currency !== "INR" && (() => {
+                          const cap = nonInrQrCaption(state.currency, acceptedMeta?.paymentAddressLabel ?? "payment");
+                          return (
+                            <p style={{ ...S.faint, color: color.textMuted, textAlign: "center", marginTop: 8 }}>
+                              {cap.lead}<strong style={{ color: color.text }}>{cap.strong}</strong>
+                            </p>
+                          );
+                        })()}
                       </div>
                     )}
                   </div>
