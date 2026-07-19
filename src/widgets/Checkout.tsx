@@ -4,6 +4,7 @@ import type { CheckoutProps } from "../types";
 import { useOrderMachine } from "../core/order-machine";
 import { usdcToFiat } from "../core/price-math";
 import { resolveCurrencyMeta } from "../core/currency-meta";
+import { buildStaticPixPayload, normalizePixKey, detectPixKeyType } from "../core/pix-brcode";
 import { CurrencyRow } from "../ui/CurrencyRow";
 import { DEFAULT_DIAMOND_ADDRESS, USDC_DECIMALS } from "../core/contracts";
 import { color, radius, font, weight, shadow, S, themeToCssVars } from "../ui/theme";
@@ -25,18 +26,15 @@ const AUTO_CANCEL_WINDOW_MS = 5 * 60 * 1000;
 // on the custom domain below).
 const COPY_PAGE_URL = "https://copy.p2p.cool";
 
-// Non-INR "scan to copy" QR caption, with hardcoded per-rail localization for
-// now (pt-BR for PIX/BRL, es-AR for the alias/ARS) and an English fallback —
-// the widget has no i18n layer yet. `strong` is the bolded, high-contrast tail.
+// Non-INR, non-BRL "scan to copy" QR caption, with hardcoded per-rail
+// localization for now (es-AR for the alias/ARS) and an English fallback —
+// the widget has no i18n layer yet. `strong` is the bolded, high-contrast
+// tail. BRL/PIX gets a real scan-to-pay BR Code instead (see
+// `buildBrlQrPayload` below), so it no longer needs this caption.
 function nonInrQrCaption(
   currency: string | null | undefined,
   label: string,
 ): { lead: string; strong: string } {
-  if (currency === "BRL")
-    return {
-      lead: "Escaneie com o app de câmera para copiar a chave PIX — ",
-      strong: "Não é um QR de pagamento",
-    };
   if (currency === "ARS")
     return {
       lead: "Escaneá con la app de cámara para copiar el alias — ",
@@ -48,10 +46,55 @@ function nonInrQrCaption(
   };
 }
 
+// Builds a spec-correct Pix BR Code payload for the decrypted PIX key so the
+// accepted-phase QR is scan-to-pay in any bank/Pix app — not just a "scan to
+// copy" fallback. Key type isn't collected separately from the merchant, so
+// it's detected from the key's shape (same detection the BRL validator uses)
+// before normalizing. Returns null if the key fails to normalize (shouldn't
+// happen for a key that already passed the BRL validator, but the accepted
+// key came from a merchant elsewhere in the system, not this session's own
+// input) so the caller can fall back to the copy-page QR instead of throwing.
+//
+// This protocol has no merchant-profile system — a "merchant" is just a
+// wallet address holding a Pix key, with no registered display name or
+// city anywhere in the SDK. Tags 59/60 are mandatory non-empty fields per
+// spec (an empty value can make some bank apps' parsers reject the QR
+// outright), so we fall back to the host's `productName` for tag 59 (the
+// only payer-facing label this widget already has) and a neutral single
+// character for tag 60 rather than inventing a brand identity. Hosts that
+// want their real registered legal name/city shown should pass
+// `pixMerchantName`/`pixMerchantCity` explicitly.
+//
+// `amount`, when provided, is embedded so the payer's bank app can
+// auto-fill the exact fiat total instead of requiring manual entry.
+function buildBrlQrPayload(
+  pixKey: string,
+  orderId: string | null,
+  amount: string | null,
+  merchantName?: string,
+  merchantCity?: string,
+  fallbackName?: string,
+): string | null {
+  try {
+    const keyType = detectPixKeyType(pixKey);
+    const normalized = normalizePixKey(pixKey, keyType);
+    return buildStaticPixPayload({
+      pixKey: normalized,
+      merchantName: merchantName ?? fallbackName ?? "PIX",
+      merchantCity: merchantCity ?? "NA",
+      txid: orderId ?? undefined,
+      amount: amount !== null ? Number(amount) : undefined,
+    });
+  } catch {
+    return null;
+  }
+}
+
 export function Checkout(props: CheckoutProps) {
   const {
     orderId: initialOrderId, placeOrder,
     amount, productName, signer, paymentNotice,
+    pixMerchantName, pixMerchantCity,
     chainId = 84532, diamondAddress = DEFAULT_DIAMOND_ADDRESS, rpcUrl,
     currency: demoCurrency,
     currencies,
@@ -722,34 +765,43 @@ export function Checkout(props: CheckoutProps) {
                       )}
                     </div>
                     {/* INR gets a real payable QR (upi://pay deep link — any UPI
-                        app can act on it directly). PIX / CBU-alias / other
-                        rails don't have an equivalent deep-link scheme the
-                        widget can synthesize from a bare payout id — a valid
-                        PIX BR Code or Mercado Pago QR needs a PSP-issued,
-                        checksummed payload we don't have. So for those we
-                        still render a QR, but it just encodes the PLAIN
-                        payout id as text (same value as the CopyRow above) —
-                        scan it with any QR reader to read/copy the id into
-                        your banking app, rather than "scan to pay". */}
-                    {state.decryptedUpi && !compoundFields && (
-                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", marginTop: 16 }}>
-                        <div style={{ padding: 12, background: "#fff", borderRadius: radius.md, border: `1px solid ${color.border}` }}>
-                          <img src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&margin=0&data=${encodeURIComponent(
-                            state.currency === "INR"
-                              ? `upi://pay?pa=${state.decryptedUpi}&am=${fiatDisplay}&cu=INR&tr=${state.orderId}`
-                              : `${COPY_PAGE_URL}/#${new URLSearchParams({ v: state.decryptedUpi!, l: acceptedMeta?.paymentAddressLabel ?? "Payment ID" }).toString()}`
-                          )}`} alt="QR" style={{ width: 180, height: 180, display: "block" }} />
+                        app can act on it directly). BRL gets a real payable
+                        Pix BR Code (EMV QRCPS-MPM, CRC16-sealed — any bank/Pix
+                        app can scan-to-pay it directly). Other rails (CBU-alias
+                        / ARS, etc.) don't have an equivalent deep-link or
+                        checksummed-payload scheme the widget can synthesize
+                        from a bare payout id, so those still render a QR that
+                        just encodes the PLAIN payout id as text (same value as
+                        the CopyRow above) — scan it with any QR reader to
+                        read/copy the id into your banking app, rather than
+                        "scan to pay". */}
+                    {state.decryptedUpi && !compoundFields && (() => {
+                      const brlPayload =
+                        state.currency === "BRL"
+                          ? buildBrlQrPayload(state.decryptedUpi, state.orderId, fiatDisplay, pixMerchantName, pixMerchantCity, productName)
+                          : null;
+                      const qrData =
+                        state.currency === "INR"
+                          ? `upi://pay?pa=${state.decryptedUpi}&am=${fiatDisplay}&cu=INR&tr=${state.orderId}`
+                          : brlPayload ??
+                            `${COPY_PAGE_URL}/#${new URLSearchParams({ v: state.decryptedUpi!, l: acceptedMeta?.paymentAddressLabel ?? "Payment ID" }).toString()}`;
+                      const isPayableQr = state.currency === "INR" || brlPayload !== null;
+                      return (
+                        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", marginTop: 16 }}>
+                          <div style={{ padding: 12, background: "#fff", borderRadius: radius.md, border: `1px solid ${color.border}` }}>
+                            <img src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&margin=0&data=${encodeURIComponent(qrData)}`} alt="QR" style={{ width: 180, height: 180, display: "block" }} />
+                          </div>
+                          {!isPayableQr && (() => {
+                            const cap = nonInrQrCaption(state.currency, acceptedMeta?.paymentAddressLabel ?? "payment");
+                            return (
+                              <p style={{ ...S.faint, color: color.textMuted, textAlign: "center", marginTop: 8 }}>
+                                {cap.lead}<strong style={{ color: color.text }}>{cap.strong}</strong>
+                              </p>
+                            );
+                          })()}
                         </div>
-                        {state.currency !== "INR" && (() => {
-                          const cap = nonInrQrCaption(state.currency, acceptedMeta?.paymentAddressLabel ?? "payment");
-                          return (
-                            <p style={{ ...S.faint, color: color.textMuted, textAlign: "center", marginTop: 8 }}>
-                              {cap.lead}<strong style={{ color: color.text }}>{cap.strong}</strong>
-                            </p>
-                          );
-                        })()}
-                      </div>
-                    )}
+                      );
+                    })()}
                   </div>
 
                   {state.error && (

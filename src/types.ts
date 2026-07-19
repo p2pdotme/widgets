@@ -185,6 +185,16 @@ export interface CheckoutProps {
   amount?: string;
   productName?: string;
 
+  // ─── PIX BR Code (BRL) ───────────────────────────────────────────
+  // Merchant identity embedded in the Pix BR Code QR (EMV tags 59/60).
+  // Only used when the accepted currency is BRL — every other rail is
+  // unaffected. Per spec, merchantName is sanitized + truncated to 25
+  // ASCII chars and merchantCity to 15; both default to a neutral
+  // placeholder ("PAYQR" / "BRASIL") when omitted since Pix wallets accept
+  // any non-empty value here and don't display it prominently.
+  pixMerchantName?: string;
+  pixMerchantCity?: string;
+
   // Optional notice rendered above the "Pay now" button on the pre-order
   // screen. Use for caller-specific context such as "wallet will be charged
   // for gas" vs. "gas sponsored".

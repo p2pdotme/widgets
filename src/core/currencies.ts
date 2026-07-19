@@ -1,4 +1,5 @@
 import type { PaymentAddressValidator } from "../types";
+import { normalizePixKey, detectPixKeyType } from "./pix-brcode";
 
 /**
  * Default validators per currency symbol. Mirrors the format expectations
@@ -17,12 +18,20 @@ export const DEFAULT_VALIDATORS: Record<string, PaymentAddressValidator> = {
       ? null
       : "UPI handle must look like name@bank (e.g. example@upi)",
 
-  // PIX key: CPF (11 digits), email, phone (E.164), or 32-char random key.
-  // Permissive non-empty check ≥5 chars for v1.
-  BRL: (s) =>
-    s.trim().length >= 5
-      ? null
-      : "PIX key required (CPF, email, phone, or random key)",
+  // PIX key: CPF, CNPJ, email, phone, or random (EVP/UUID) key. Key type
+  // isn't collected separately from the merchant, so we detect it from
+  // shape, then run the same normalization used to build the BR Code QR —
+  // a key that fails here would also fail (or corrupt) the QR payload.
+  BRL: (s) => {
+    const trimmed = s.trim();
+    if (trimmed.length === 0) return "PIX key required (CPF, CNPJ, email, phone, or random key)";
+    try {
+      normalizePixKey(trimmed, detectPixKeyType(trimmed));
+      return null;
+    } catch (err) {
+      return err instanceof Error ? err.message : "Invalid PIX key";
+    }
+  },
 
   // IBAN: 2 letters + 2 digits + 11..30 alphanumerics, no spaces.
   EUR: (s) => {
