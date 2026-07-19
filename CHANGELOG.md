@@ -7,6 +7,13 @@ and the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format. While
 the package is `0.x`, minor releases may introduce additive prop changes;
 patch releases stay backward-compatible.
 
+## [1.7.0](https://github.com/p2pdotme/widgets/compare/v1.6.0...v1.7.0) (2026-07-19)
+
+
+### Features
+
+* **checkout:** non-INR QR opens a copy page for cross-device paste ([#63](https://github.com/p2pdotme/widgets/issues/63)) ([81b30b2](https://github.com/p2pdotme/widgets/commit/81b30b2751d456a6bb420927ac0005091073fd6f))
+
 ## [1.6.0](https://github.com/p2pdotme/widgets/compare/v1.5.0...v1.6.0) (2026-07-07)
 
 
