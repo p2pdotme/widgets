@@ -17,6 +17,14 @@ import {
 // Mirrors user-app's 5-minute window.
 const AUTO_CANCEL_WINDOW_MS = 5 * 60 * 1000;
 
+// Non-INR rails can't produce a scannable "pay" QR from a bare payout id, so
+// the accepted-phase QR instead links to this static page with the id in the
+// URL fragment. The payer scans it on a second device (phone) and taps once to
+// copy the id into their banking app — replacing a Telegram hand-off / manual
+// typing. Source: github.com/p2pdotme/p2p-copy (Netlify site p2p-copy, served
+// on the custom domain below).
+const COPY_PAGE_URL = "https://copy.p2p.cool";
+
 export function Checkout(props: CheckoutProps) {
   const {
     orderId: initialOrderId, placeOrder,
@@ -706,12 +714,12 @@ export function Checkout(props: CheckoutProps) {
                           <img src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&margin=0&data=${encodeURIComponent(
                             state.currency === "INR"
                               ? `upi://pay?pa=${state.decryptedUpi}&am=${fiatDisplay}&cu=INR&tr=${state.orderId}`
-                              : state.decryptedUpi
+                              : `${COPY_PAGE_URL}/#${new URLSearchParams({ v: state.decryptedUpi!, l: acceptedMeta?.paymentAddressLabel ?? "Payment ID" }).toString()}`
                           )}`} alt="QR" style={{ width: 180, height: 180, display: "block" }} />
                         </div>
                         {state.currency !== "INR" && (
-                          <p style={{ ...S.faint, textAlign: "center", marginTop: 8 }}>
-                            Scan to copy the {acceptedMeta?.paymentAddressLabel ?? "payment"} id — not a pay QR
+                          <p style={{ ...S.faint, color: color.textMuted, textAlign: "center", marginTop: 8 }}>
+                            Scan to copy the {acceptedMeta?.paymentAddressLabel ?? "payment"} — <strong style={{ color: color.text }}>Not a Payable QR</strong>
                           </p>
                         )}
                       </div>
