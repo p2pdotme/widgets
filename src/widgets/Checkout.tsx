@@ -17,6 +17,37 @@ import {
 // Mirrors user-app's 5-minute window.
 const AUTO_CANCEL_WINDOW_MS = 5 * 60 * 1000;
 
+// Non-INR rails can't produce a scannable "pay" QR from a bare payout id, so
+// the accepted-phase QR instead links to this static page with the id in the
+// URL fragment. The payer scans it on a second device (phone) and taps once to
+// copy the id into their banking app — replacing a Telegram hand-off / manual
+// typing. Source: github.com/p2pdotme/p2p-copy (Netlify site p2p-copy, served
+// on the custom domain below).
+const COPY_PAGE_URL = "https://copy.p2p.cool";
+
+// Non-INR "scan to copy" QR caption, with hardcoded per-rail localization for
+// now (pt-BR for PIX/BRL, es-AR for the alias/ARS) and an English fallback —
+// the widget has no i18n layer yet. `strong` is the bolded, high-contrast tail.
+function nonInrQrCaption(
+  currency: string | null | undefined,
+  label: string,
+): { lead: string; strong: string } {
+  if (currency === "BRL")
+    return {
+      lead: "Escaneie com o app de câmera para copiar a chave PIX — ",
+      strong: "Não é um QR de pagamento",
+    };
+  if (currency === "ARS")
+    return {
+      lead: "Escaneá con la app de cámara para copiar el alias — ",
+      strong: "No es un QR de pago",
+    };
+  return {
+    lead: `Scan with camera app to copy the ${label} — `,
+    strong: "Not a Payable QR",
+  };
+}
+
 export function Checkout(props: CheckoutProps) {
   const {
     orderId: initialOrderId, placeOrder,
@@ -690,16 +721,33 @@ export function Checkout(props: CheckoutProps) {
                         <p style={S.muted}>Decrypting payment details…</p>
                       )}
                     </div>
-                    {/* QR is INR-only — mirrors user-app behavior. Mercado
-                        Pago / PIX QRs require PSP-generated payloads that
-                        the widget can't synthesize from the bare address. */}
-                    {state.decryptedUpi && state.currency === "INR" && (
-                      <div style={{ display: "flex", justifyContent: "center", marginTop: 16 }}>
+                    {/* INR gets a real payable QR (upi://pay deep link — any UPI
+                        app can act on it directly). PIX / CBU-alias / other
+                        rails don't have an equivalent deep-link scheme the
+                        widget can synthesize from a bare payout id — a valid
+                        PIX BR Code or Mercado Pago QR needs a PSP-issued,
+                        checksummed payload we don't have. So for those we
+                        still render a QR, but it just encodes the PLAIN
+                        payout id as text (same value as the CopyRow above) —
+                        scan it with any QR reader to read/copy the id into
+                        your banking app, rather than "scan to pay". */}
+                    {state.decryptedUpi && !compoundFields && (
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", marginTop: 16 }}>
                         <div style={{ padding: 12, background: "#fff", borderRadius: radius.md, border: `1px solid ${color.border}` }}>
                           <img src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&margin=0&data=${encodeURIComponent(
-                            `upi://pay?pa=${state.decryptedUpi}&am=${fiatDisplay}&cu=INR&tr=${state.orderId}`
+                            state.currency === "INR"
+                              ? `upi://pay?pa=${state.decryptedUpi}&am=${fiatDisplay}&cu=INR&tr=${state.orderId}`
+                              : `${COPY_PAGE_URL}/#${new URLSearchParams({ v: state.decryptedUpi!, l: acceptedMeta?.paymentAddressLabel ?? "Payment ID" }).toString()}`
                           )}`} alt="QR" style={{ width: 180, height: 180, display: "block" }} />
                         </div>
+                        {state.currency !== "INR" && (() => {
+                          const cap = nonInrQrCaption(state.currency, acceptedMeta?.paymentAddressLabel ?? "payment");
+                          return (
+                            <p style={{ ...S.faint, color: color.textMuted, textAlign: "center", marginTop: 8 }}>
+                              {cap.lead}<strong style={{ color: color.text }}>{cap.strong}</strong>
+                            </p>
+                          );
+                        })()}
                       </div>
                     )}
                   </div>
