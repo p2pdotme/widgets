@@ -65,6 +65,17 @@ export {
   getPaymentLabelFor,
 } from "./core/currencies";
 
+// ─── Pix (BRL) BR Code ─────────────────────────────────────────────────
+export {
+  buildStaticPixPayload,
+  buildDynamicPixPayload,
+  normalizePixKey,
+  detectPixKeyType,
+  pixKeyToQR,
+  crc16,
+} from "./core/pix-brcode";
+export type { PixKeyType, StaticPixInput, DynamicPixInput } from "./core/pix-brcode";
+
 // ─── Shared types ──────────────────────────────────────────────────────
 export { OrderStatus } from "./types";
 export type {
