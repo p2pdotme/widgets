@@ -60,7 +60,12 @@ export function buildStaticPixPayload(input: StaticPixInput): string {
     tlv("00", "BR.GOV.BCB.PIX") +
     tlv("01", input.pixKey) +
     (input.description ? tlv("02", input.description.slice(0, 72)) : "");
-  const additionalData = tlv("05", (input.txid ?? "***").slice(0, 25));
+  // txid (EMV 62-05) is alphanumeric only, ≤25 chars; "***" is Bacen's
+  // "no txid" sentinel. Strip anything outside [A-Za-z0-9] — an order id with
+  // hyphens/slashes would otherwise be an out-of-spec txid that some wallets
+  // reject — and fall back to "***" when nothing usable is left.
+  const txid = (input.txid ?? "").replace(/[^A-Za-z0-9]/g, "").slice(0, 25);
+  const additionalData = tlv("05", txid || "***");
   const body =
     tlv("00", "01") +
     (input.includePointOfInitiation !== false ? tlv("01", "11") : "") +
@@ -69,8 +74,8 @@ export function buildStaticPixPayload(input: StaticPixInput): string {
     tlv("53", "986") +
     (input.amount !== undefined ? tlv("54", input.amount.toFixed(2)) : "") +
     tlv("58", "BR") +
-    tlv("59", sanitize(input.merchantName, 25)) +
-    tlv("60", sanitize(input.merchantCity, 15)) +
+    tlv("59", sanitize(input.merchantName, 25) || "PIX") +
+    tlv("60", sanitize(input.merchantCity, 15) || "BRASIL") +
     tlv("62", additionalData);
   return body + "6304" + crc16(body + "6304");
 }
@@ -84,8 +89,8 @@ export function buildDynamicPixPayload(input: DynamicPixInput): string {
     tlv("52", "0000") +
     tlv("53", "986") +
     tlv("58", "BR") +
-    tlv("59", sanitize(input.merchantName, 25)) +
-    tlv("60", sanitize(input.merchantCity, 15));
+    tlv("59", sanitize(input.merchantName, 25) || "PIX") +
+    tlv("60", sanitize(input.merchantCity, 15) || "BRASIL");
   return body + "6304" + crc16(body + "6304");
 }
 
@@ -132,11 +137,23 @@ export function normalizePixKey(raw: string, keyType: PixKeyType): string {
 export function detectPixKeyType(raw: string): PixKeyType {
   const trimmed = raw.trim();
   const digits = trimmed.replace(/\D/g, "");
-  if (/^[0-9a-f-]{36}$/i.test(trimmed) && trimmed.includes("-")) return "random";
+  // Random/EVP key: a UUID (8-4-4-4-12 hex).
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed)) return "random";
+  // Email key: contains an "@".
   if (trimmed.includes("@")) return "email";
-  if (trimmed.startsWith("+") || /^(55)?\d{10,11}$/.test(digits)) return "phone";
-  if (digits.length === 11) return "cpf";
+  // Phone key: Pix stores phone keys in E.164, so a phone ALWAYS carries a
+  // country code — an explicit "+", or a bare "55" + area code + 8/9-digit
+  // number (12–13 digits total). This check MUST come before CPF and MUST
+  // require the country code: a bare 11-digit number has no country code and
+  // is a CPF, not a mobile (a mobile is +55 + DDD + 9 digits = 13). The old
+  // loose `^(55)?\d{10,11}$` matched a bare 11-digit CPF and rewrote it into a
+  // bogus +55 phone key — misrouting a very common key type.
+  if (trimmed.startsWith("+") || (digits.startsWith("55") && (digits.length === 12 || digits.length === 13))) return "phone";
+  // CNPJ: 14 digits. CPF: 11 digits (bare, no country code).
   if (digits.length === 14) return "cnpj";
+  if (digits.length === 11) return "cpf";
+  // Unrecognized shape → treat as an opaque EVP key; normalize will reject it
+  // if it isn't a valid UUID, and the caller falls back to the copy-page.
   return "random";
 }
 

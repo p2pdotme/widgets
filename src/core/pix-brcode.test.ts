@@ -5,6 +5,7 @@ import {
   buildStaticPixPayload,
   normalizePixKey,
   pixKeyToQR,
+  detectPixKeyType,
 } from "./pix-brcode.ts";
 
 // ─── crc16 ───────────────────────────────────────────────────────────
@@ -135,4 +136,56 @@ test("buildStaticPixPayload strips accents, uppercases, and truncates merchant n
   });
   assert.ok(payload.includes("5925JOSE DA SILVA COMERCIO"), payload);
   assert.ok(payload.includes("6015SAO PAULO METR"), payload);
+});
+
+// ─── detectPixKeyType (the integration path the widget actually uses) ──
+//
+// The widget only has the raw key string, so it detects the type by shape.
+// The load-bearing case: an 11-digit CPF must NOT be read as a phone.
+
+test("detectPixKeyType reads a bare CPF as cpf, never phone", () => {
+  assert.strictEqual(detectPixKeyType("12345678901"), "cpf");
+  assert.strictEqual(detectPixKeyType("111.444.777-35"), "cpf");
+});
+
+test("detectPixKeyType reads E.164 phone keys as phone", () => {
+  assert.strictEqual(detectPixKeyType("+5521982390011"), "phone"); // mobile, "+"
+  assert.strictEqual(detectPixKeyType("5521982390011"), "phone");  // mobile, 13-digit 55-prefixed
+  assert.strictEqual(detectPixKeyType("+551133334444"), "phone");  // landline
+});
+
+test("detectPixKeyType reads cnpj / email / random keys", () => {
+  assert.strictEqual(detectPixKeyType("12345678000195"), "cnpj");
+  assert.strictEqual(detectPixKeyType("shop@example.com"), "email");
+  assert.strictEqual(detectPixKeyType("9fc9b472-3930-4a8f-85d3-b9491fedeef9"), "random");
+});
+
+test("a CPF key round-trips as a CPF payload, not a +55 phone rewrite", () => {
+  const key = "11144477735";
+  const type = detectPixKeyType(key);
+  assert.strictEqual(type, "cpf");
+  const qr = pixKeyToQR(key, type);
+  assert.ok(qr.includes("011111144477735"), qr); // MAI tag 01, len 11, the raw CPF
+  assert.ok(!qr.includes("+55"), "a CPF must not be rewritten into a phone key");
+});
+
+// ─── txid charset (EMV 62-05: alphanumeric only, ≤25) ─────────────────
+
+test("buildStaticPixPayload strips non-alphanumeric txid characters", () => {
+  const p = buildStaticPixPayload({ pixKey: "a@b.com", merchantName: "N", merchantCity: "C", txid: "order-abc/123" });
+  assert.ok(p.includes("0511orderabc123"), p); // tag 05, len 11, sanitized value
+  assert.ok(!p.includes("order-abc"), "punctuation must be stripped from txid");
+});
+
+test("buildStaticPixPayload falls back to *** for an all-punctuation txid", () => {
+  const p = buildStaticPixPayload({ pixKey: "a@b.com", merchantName: "N", merchantCity: "C", txid: "!!!" });
+  assert.ok(p.includes("62070503***"), p);
+});
+
+// ─── mandatory tags 59/60 are never emitted empty ─────────────────────
+
+test("buildStaticPixPayload guards a merchant name/city that sanitizes to empty", () => {
+  const p = buildStaticPixPayload({ pixKey: "a@b.com", merchantName: "🎁", merchantCity: "🏙" });
+  assert.ok(p.includes("5903PIX"), p);    // name -> "PIX"
+  assert.ok(p.includes("6006BRASIL"), p); // city -> "BRASIL"
 });

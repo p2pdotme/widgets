@@ -26,15 +26,21 @@ const AUTO_CANCEL_WINDOW_MS = 5 * 60 * 1000;
 // on the custom domain below).
 const COPY_PAGE_URL = "https://copy.p2p.cool";
 
-// Non-INR, non-BRL "scan to copy" QR caption, with hardcoded per-rail
-// localization for now (es-AR for the alias/ARS) and an English fallback —
-// the widget has no i18n layer yet. `strong` is the bolded, high-contrast
-// tail. BRL/PIX gets a real scan-to-pay BR Code instead (see
-// `buildBrlQrPayload` below), so it no longer needs this caption.
+// Non-INR "scan to copy" QR caption, with hardcoded per-rail localization for
+// now (pt-BR for PIX/BRL, es-AR for the alias/ARS) and an English fallback —
+// the widget has no i18n layer yet. `strong` is the bolded, high-contrast tail.
+// BRL/PIX normally gets a real scan-to-pay BR Code (see `buildBrlQrPayload`);
+// this pt-BR caption only shows for BRL on the copy-page fallback — a key that
+// can't be turned into a valid Pix payload.
 function nonInrQrCaption(
   currency: string | null | undefined,
   label: string,
 ): { lead: string; strong: string } {
+  if (currency === "BRL")
+    return {
+      lead: "Escaneie com o app de câmera para copiar a chave PIX — ",
+      strong: "Não é um QR de pagamento",
+    };
   if (currency === "ARS")
     return {
       lead: "Escaneá con la app de cámara para copiar el alias — ",
@@ -60,8 +66,8 @@ function nonInrQrCaption(
 // city anywhere in the SDK. Tags 59/60 are mandatory non-empty fields per
 // spec (an empty value can make some bank apps' parsers reject the QR
 // outright), so we fall back to the host's `productName` for tag 59 (the
-// only payer-facing label this widget already has) and a neutral single
-// character for tag 60 rather than inventing a brand identity. Hosts that
+// only payer-facing label this widget already has) and a neutral "BRASIL"
+// for tag 60 rather than inventing a brand identity. Hosts that
 // want their real registered legal name/city shown should pass
 // `pixMerchantName`/`pixMerchantCity` explicitly.
 //
@@ -81,7 +87,7 @@ function buildBrlQrPayload(
     return buildStaticPixPayload({
       pixKey: normalized,
       merchantName: merchantName ?? fallbackName ?? "PIX",
-      merchantCity: merchantCity ?? "NA",
+      merchantCity: merchantCity ?? "BRASIL",
       txid: orderId ?? undefined,
       amount: amount !== null ? Number(amount) : undefined,
     });

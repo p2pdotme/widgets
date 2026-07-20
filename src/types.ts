@@ -189,9 +189,11 @@ export interface CheckoutProps {
   // Merchant identity embedded in the Pix BR Code QR (EMV tags 59/60).
   // Only used when the accepted currency is BRL — every other rail is
   // unaffected. Per spec, merchantName is sanitized + truncated to 25
-  // ASCII chars and merchantCity to 15; both default to a neutral
-  // placeholder ("PAYQR" / "BRASIL") when omitted since Pix wallets accept
-  // any non-empty value here and don't display it prominently.
+  // ASCII chars and merchantCity to 15. When omitted, merchantName falls back
+  // to the order's productName (else "PIX") and merchantCity to "BRASIL";
+  // these mandatory tags are also never emitted empty (a value that sanitizes
+  // to nothing is replaced by the same defaults), since Pix wallets accept any
+  // non-empty value here and don't display it prominently.
   pixMerchantName?: string;
   pixMerchantCity?: string;
 
