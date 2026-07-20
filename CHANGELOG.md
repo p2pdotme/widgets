@@ -7,6 +7,13 @@ and the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format. While
 the package is `0.x`, minor releases may introduce additive prop changes;
 patch releases stay backward-compatible.
 
+## [1.7.1](https://github.com/p2pdotme/widgets/compare/v1.7.0...v1.7.1) (2026-07-20)
+
+
+### Bug Fixes
+
+* **checkout:** render a real scan-to-pay Pix QR for BRL ([d9ad83f](https://github.com/p2pdotme/widgets/commit/d9ad83f93f27e989422f22049552b82975f7bb70))
+
 ## [1.7.0](https://github.com/p2pdotme/widgets/compare/v1.6.0...v1.7.0) (2026-07-19)
 
 
