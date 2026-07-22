@@ -7,6 +7,13 @@ and the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format. While
 the package is `0.x`, minor releases may introduce additive prop changes;
 patch releases stay backward-compatible.
 
+## [1.7.2](https://github.com/p2pdotme/widgets/compare/v1.7.1...v1.7.2) (2026-07-22)
+
+
+### Bug Fixes
+
+* **liveness:** receive the wizard postMessage in openVerifyPopup so the popup returns ([#67](https://github.com/p2pdotme/widgets/issues/67)) ([e3b5edb](https://github.com/p2pdotme/widgets/commit/e3b5edb221d5fa628327b51a02cf75490e81791c))
+
 ## [1.7.1](https://github.com/p2pdotme/widgets/compare/v1.7.0...v1.7.1) (2026-07-20)
 
 
