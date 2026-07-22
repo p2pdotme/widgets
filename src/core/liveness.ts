@@ -97,12 +97,19 @@ export async function redeemLivenessAttestation(
 
 /**
  * Open the hosted wizard in a popup and resolve the one-time `code` once the
- * wizard redirects back to our own origin (`?code&state`). Keeps the checkout
- * mounted — no full-page navigation. Resolves `null` if the popup is blocked or
- * the user closes it before finishing.
+ * wizard hands the result back. Keeps the checkout mounted — no full-page
+ * navigation. Resolves `null` if the popup is blocked, the user closes it, or
+ * it times out before finishing.
  *
- * Cross-origin reads of `popup.location` throw while the wizard is on its own
- * origin; we swallow those and only read once it lands back on `returnOrigin`.
+ * Transport: the hosted wizard, when it has an opener (a popup), **postMessages**
+ * the result to this window — `{ type: "verify:complete", code, state }` on
+ * success, `{ type: "verify:error", ... }` otherwise — using the tenant's
+ * allowlisted `web_origins` as the `targetOrigin` (so it can only reach an
+ * allowlisted host). We verify the sender origin and the `state` we minted. A
+ * location-poll of `popup.location` is kept as a fallback for the webview /
+ * redirect build of the wizard (which navigates back to `returnOrigin?code`
+ * instead of posting); cross-origin reads throw until it lands same-origin, so
+ * we swallow those.
  */
 export function openVerifyPopup(
   widgetUrl: string,
@@ -116,13 +123,44 @@ export function openVerifyPopup(
       resolve(null); // blocked
       return;
     }
+    let widgetOrigin = "";
+    try {
+      widgetOrigin = new URL(widgetUrl).origin;
+    } catch {
+      /* relative/malformed URL — fall back to the poll transport only */
+    }
     const started = Date.now();
-    const timer = window.setInterval(() => {
+    let settled = false;
+    let timer = 0;
+
+    const finish = (value: string | null) => {
+      if (settled) return;
+      settled = true;
+      window.removeEventListener("message", onMessage);
+      if (timer) window.clearInterval(timer);
+      try {
+        if (!popup.closed) popup.close();
+      } catch {
+        /* cross-origin close guard */
+      }
+      resolve(value);
+    };
+
+    // Primary transport: the wizard postMessages the result to its opener.
+    const onMessage = (e: MessageEvent) => {
+      if (widgetOrigin && e.origin !== widgetOrigin) return;
+      const data = e.data as { type?: string; code?: string; state?: string } | null;
+      if (!data || data.state !== expectedState) return;
+      if (data.type === "verify:complete" && data.code) finish(data.code);
+      else if (data.type === "verify:error") finish(null);
+    };
+    window.addEventListener("message", onMessage);
+
+    // Fallback: closed/timed-out popup, plus the redirect build's ?code&state.
+    timer = window.setInterval(() => {
       try {
         if (popup.closed || Date.now() - started > timeoutMs) {
-          window.clearInterval(timer);
-          if (!popup.closed) popup.close();
-          resolve(null);
+          finish(null);
           return;
         }
         const href = popup.location.href; // throws until same-origin
@@ -130,11 +168,7 @@ export function openVerifyPopup(
           const u = new URL(href);
           const code = u.searchParams.get("code");
           const state = u.searchParams.get("state");
-          if (code && state === expectedState) {
-            window.clearInterval(timer);
-            popup.close();
-            resolve(code);
-          }
+          if (code && state === expectedState) finish(code);
         }
       } catch {
         /* still on the wizard's origin — keep polling */
