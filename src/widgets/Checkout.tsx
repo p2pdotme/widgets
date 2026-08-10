@@ -12,11 +12,18 @@ import { Modal } from "../ui/Modal";
 import {
   Spinner, PulseDot, CenterStatus, SuccessIcon, XIcon,
   CopyRow, Stepper, CountdownRing, Skeleton, injectKeyframes,
+  StepHeader, useCountdown, formatCountdown,
 } from "../ui/components";
 
 // Window the user has to pay after a merchant accepts before auto-cancellation.
 // Mirrors user-app's 5-minute window.
 const AUTO_CANCEL_WINDOW_MS = 5 * 60 * 1000;
+
+// How long the user has to be away from the tab before we treat the return as
+// "came back from their banking app" and escalate the confirm CTA. Paying
+// takes tens of seconds at minimum, so a short hop out (clicking devtools, an
+// alt-tab misfire) shouldn't trigger the nudge.
+const AWAY_MIN_MS = 2500;
 
 // Non-INR rails can't produce a scannable "pay" QR from a bare payout id, so
 // the accepted-phase QR instead links to this static page with the id in the
@@ -122,6 +129,19 @@ export function Checkout(props: CheckoutProps) {
   const [isCancelling, setIsCancelling] = useState(false);
   const [timerExpired, setTimerExpired] = useState(false);
   const [breakdownExpanded, setBreakdownExpanded] = useState(false);
+  // The single biggest drop-off in the onramp is users who pay from their
+  // banking app and never come back to tap "I've paid" — the order sits
+  // unconfirmed until it auto-cancels. `paymentIntent` records that the user
+  // has *started* paying (copied the payout id, opened their payment app, or
+  // backgrounded the tab); `returnedFromPayment` records that they came back
+  // afterwards, which is the exact moment to escalate the confirm CTA.
+  const [paymentIntent, setPaymentIntent] = useState(false);
+  const [returnedFromPayment, setReturnedFromPayment] = useState(false);
+  // False whenever the in-flow confirm CTA is scrolled out of the modal's
+  // scrollport — the only time the slim pinned bar is worth showing. Starts
+  // true so the bar never flashes on mount before the observer reports.
+  const [ctaOnScreen, setCtaOnScreen] = useState(true);
+  const confirmRef = React.useRef<HTMLButtonElement>(null);
   const [selectedCurrency, setSelectedCurrency] = useState(currencies?.[0]);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = React.useRef<HTMLDivElement>(null);
@@ -151,14 +171,83 @@ export function Checkout(props: CheckoutProps) {
     onOrderPlaced, onComplete, onError, onCancel,
   });
 
+  // Leaving the tab during the accepted phase means one thing in practice:
+  // the user has gone to their bank / UPI / Pix app to send the money. Coming
+  // back is when they need to be told they still owe us a confirmation, so
+  // that's what arms the nudge. `visibilitychange` covers mobile app-switches
+  // and tab-switches; window blur/focus covers desktop window-switches, which
+  // don't hide the document.
+  useEffect(() => {
+    if (state.phase !== "accepted") return;
+    let awayAt: number | null = null;
+    const leave = () => {
+      if (awayAt === null) awayAt = Date.now();
+      setPaymentIntent(true);
+    };
+    const back = () => {
+      if (awayAt === null) return;
+      const away = Date.now() - awayAt;
+      awayAt = null;
+      if (away >= AWAY_MIN_MS) setReturnedFromPayment(true);
+    };
+    const onVisibility = () => (document.visibilityState === "hidden" ? leave() : back());
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("blur", leave);
+    window.addEventListener("focus", back);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("blur", leave);
+      window.removeEventListener("focus", back);
+    };
+  }, [state.phase]);
+
+  // Watch whether the in-flow confirm CTA is inside the modal's scrollport.
+  // The scroll container is the Modal's dialog element (`overflow: auto`), and
+  // in inline mode there may be none — a null root falls back to the viewport,
+  // which is the right answer there. Guarded for environments without
+  // IntersectionObserver (jsdom, older browsers): the bar simply stays
+  // collapsed and the in-flow CTA does all the work.
+  useEffect(() => {
+    if (state.phase !== "accepted" || timerExpired) { setCtaOnScreen(true); return; }
+    const el = confirmRef.current;
+    if (!el || typeof IntersectionObserver === "undefined") return;
+
+    let root: HTMLElement | null = el.parentElement;
+    while (root) {
+      const overflowY = getComputedStyle(root).overflowY;
+      if (overflowY === "auto" || overflowY === "scroll") break;
+      root = root.parentElement;
+    }
+
+    const io = new IntersectionObserver(
+      ([entry]) => setCtaOnScreen(entry.isIntersecting),
+      { root, threshold: 0 },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [state.phase, timerExpired]);
+
+  // Bring the confirm CTA into view on return — it sits below a 180px QR and
+  // is otherwise off-screen on a phone.
+  useEffect(() => {
+    if (!returnedFromPayment) return;
+    const reduced = typeof window !== "undefined"
+      && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    confirmRef.current?.scrollIntoView({ behavior: reduced ? "auto" : "smooth", block: "center" });
+  }, [returnedFromPayment]);
+
   const copy = (text: string, label: string) => {
     navigator.clipboard.writeText(text);
     setCopied(label);
+    setPaymentIntent(true);
     setTimeout(() => setCopied(null), 1400);
   };
 
   const handleMarkPaid = async () => {
     setIsMarkingPaid(true);
+    // Stop nagging the moment they act — if the write fails, the inline error
+    // underneath carries the message instead.
+    setReturnedFromPayment(false);
     await markPaid();
     setIsMarkingPaid(false);
   };
@@ -175,6 +264,14 @@ export function Checkout(props: CheckoutProps) {
     state.acceptedTimestamp !== null
       ? Number(state.acceptedTimestamp) * 1000 + AUTO_CANCEL_WINDOW_MS
       : null;
+  // Same tick as the hero CountdownRing, reused as text under the CTA so the
+  // deadline reads as a deadline *to confirm*, not just a deadline to pay.
+  const acceptedRemaining = useCountdown(state.phase === "accepted" ? acceptedDeadline : null);
+
+  // The slim pinned bar exists only to recover a CTA that has scrolled away.
+  // Suppressed once the window closes, since `paidBuyOrder` reverts past it —
+  // the expired panel in the flow below is what that user needs instead.
+  const showConfirmBar = !ctaOnScreen && !timerExpired;
 
   const usdcDisplay = state.usdcAmount ? formatUnits(state.usdcAmount, USDC_DECIMALS) : null;
   const fiatDisplay = state.fiatAmount ? (Number(state.fiatAmount) / 1e6).toFixed(2) : null;
@@ -589,7 +686,7 @@ export function Checkout(props: CheckoutProps) {
                 is below the protocol fee, or the rate read failed. Blocks
                 placement with a clear reason instead of a broken button. */}
             {amountBlocked && (
-              <div style={{ marginBottom: 12, padding: "12px 14px", background: color.dangerSoft, border: `1px solid ${color.danger}22`, borderRadius: radius.md }}>
+              <div style={{ marginBottom: 12, padding: "12px 14px", background: color.dangerSoft, border: `1px solid color-mix(in srgb, ${color.danger} 25%, transparent)`, borderRadius: radius.md }}>
                 <span style={{ color: color.danger, fontSize: font.md, lineHeight: 1.5 }}>
                   {amountStatus === "too-small"
                     ? `This amount is too small to process${feeFiatLabel ? ` — it doesn't cover the ${feeFiatLabel} transaction fee` : ""}. Please use a larger amount.`
@@ -598,7 +695,7 @@ export function Checkout(props: CheckoutProps) {
               </div>
             )}
             {state.error && (
-              <div style={{ marginBottom: 12, padding: "10px 12px", background: color.dangerSoft, border: `1px solid ${color.danger}22`, borderRadius: radius.md }}>
+              <div style={{ marginBottom: 12, padding: "10px 12px", background: color.dangerSoft, border: `1px solid color-mix(in srgb, ${color.danger} 25%, transparent)`, borderRadius: radius.md }}>
                 <span style={{ color: color.danger, fontSize: font.md }}>{state.error}</span>
               </div>
             )}
@@ -729,13 +826,11 @@ export function Checkout(props: CheckoutProps) {
                     </div>
                   )}
 
-                  {/* Action pill + body — pill matches user-app's
-                      "Pay via PIX and confirm" language; the body
-                      explains the action. A separate heading saying
-                      "Complete your payment & confirm" would just
-                      restate the pill. */}
+                  {/* Action pill — matches user-app's "Pay via PIX and
+                      confirm" language, and doubles as the headline for the
+                      numbered two-step structure below it. */}
                   {acceptedMeta && (
-                    <div style={{ marginBottom: 8 }}>
+                    <div style={{ marginBottom: 10 }}>
                       <span style={{
                         display: "inline-block", padding: "4px 10px", borderRadius: radius.pill,
                         background: color.accentSoft, color: color.accent,
@@ -745,9 +840,17 @@ export function Checkout(props: CheckoutProps) {
                       </span>
                     </div>
                   )}
-                  <p style={{ ...S.muted, marginBottom: 14, lineHeight: 1.45 }}>
-                    Transfer the amount to the {acceptedMeta?.paymentAddressLabel ?? "payment address"} below and click <strong>I have paid</strong> to continue.
-                  </p>
+
+                  {/* STEP 1 — pay. Numbered so the QR stops reading as the
+                      whole job; step 2 lives in the sticky footer below. */}
+                  <div style={{ marginBottom: 10 }}>
+                    <StepHeader
+                      n={1}
+                      done={paymentIntent}
+                      title={fiatDisplay ? `Send ${state.currency} ${fiatDisplay}` : "Send the payment"}
+                      subtitle={`To the ${acceptedMeta?.paymentAddressLabel ?? "payment address"} below, from any ${acceptedMeta?.paymentMethod ?? "payment"} app.`}
+                    />
+                  </div>
 
                   <div style={{ ...S.cardFlat, padding: "20px", background: color.surfaceAlt }}>
                     <div style={S.rowBetween}>
@@ -792,11 +895,36 @@ export function Checkout(props: CheckoutProps) {
                           : brlPayload ??
                             `${COPY_PAGE_URL}/#${new URLSearchParams({ v: state.decryptedUpi!, l: acceptedMeta?.paymentAddressLabel ?? "Payment ID" }).toString()}`;
                       const isPayableQr = state.currency === "INR" || brlPayload !== null;
+                      // NOTE: no tap-to-open UPI deep link here. A tappable
+                      // `upi://pay` affordance was tried and pulled: on a real
+                      // handset the app opened and parsed the payload fine, but
+                      // the transfer was declined after PIN entry. Until that's
+                      // traced to a cause we can rule out, sending users into
+                      // their UPI app only to fail at the last step is worse
+                      // than not offering it. The QR below is unaffected — it
+                      // is scanned from a second device and predates this.
+                      //
+                      // BRL is a different mechanism, not a deep link: every
+                      // Pix app accepts a pasted BR Code ("Copia e Cola"), so
+                      // the payload is offered for copy. That also doubles as a
+                      // strong "I'm paying now" signal.
+                      const qrImg = (
+                        <div style={{ padding: 12, background: "#fff", borderRadius: radius.md, border: `1px solid ${color.border}` }}>
+                          <img src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&margin=0&data=${encodeURIComponent(qrData)}`} alt="QR" style={{ width: 180, height: 180, display: "block" }} />
+                        </div>
+                      );
                       return (
                         <div style={{ display: "flex", flexDirection: "column", alignItems: "center", marginTop: 16 }}>
-                          <div style={{ padding: 12, background: "#fff", borderRadius: radius.md, border: `1px solid ${color.border}` }}>
-                            <img src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&margin=0&data=${encodeURIComponent(qrData)}`} alt="QR" style={{ width: 180, height: 180, display: "block" }} />
-                          </div>
+                          {qrImg}
+                          {brlPayload && (
+                            <button
+                              type="button"
+                              onClick={() => copy(brlPayload, "pix-code")}
+                              style={{ ...S.secondaryBtn, width: "100%", marginTop: 12, borderColor: color.accent, color: color.accent }}
+                            >
+                              {copied === "pix-code" ? "Pix code copied" : "Copy Pix code (Copia e Cola)"}
+                            </button>
+                          )}
                           {!isPayableQr && (() => {
                             const cap = nonInrQrCaption(state.currency, acceptedMeta?.paymentAddressLabel ?? "payment");
                             return (
@@ -814,38 +942,179 @@ export function Checkout(props: CheckoutProps) {
                     <div style={{ marginTop: 12, padding: "10px 12px", background: color.dangerSoft, borderRadius: radius.md, color: color.danger, fontSize: font.md }}>{state.error}</div>
                   )}
 
-                  <button
-                    style={{ ...S.primaryBtn, marginTop: 20, opacity: isMarkingPaid || timerExpired ? 0.5 : 1, cursor: timerExpired ? "not-allowed" : "pointer" }}
-                    onClick={handleMarkPaid}
-                    disabled={isMarkingPaid || timerExpired || isCancelling}
-                  >
-                    {timerExpired ? "Payment window expired" : isMarkingPaid ? "Confirming…" : "I've paid"}
-                  </button>
-
-                  {!showCancelConfirm ? (
-                    <button style={{ ...S.ghostBtn, width: "100%", marginTop: 8, height: 40 }} onClick={() => setShowCancelConfirm(true)} disabled={isCancelling}>Cancel order</button>
-                  ) : (
-                    <div style={{ marginTop: 12, padding: 14, borderRadius: radius.md, background: color.dangerSoft, border: `1px solid ${color.danger}22` }}>
-                      <p style={{ fontSize: font.md, color: color.danger, marginTop: 0 }}>Cancel this order?</p>
-                      <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                        <button
-                          style={{ ...S.secondaryBtn, flex: 1, height: 38, borderColor: color.danger, color: color.danger, opacity: isCancelling ? 0.6 : 1, cursor: isCancelling ? "wait" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}
-                          onClick={handleCancelConfirm}
-                          disabled={isCancelling}
-                        >
-                          {isCancelling && <Spinner size={14} />}
-                          {isCancelling ? "Cancelling…" : "Yes, cancel"}
-                        </button>
-                        <button
-                          style={{ ...S.secondaryBtn, flex: 1, height: 38 }}
-                          onClick={() => setShowCancelConfirm(false)}
-                          disabled={isCancelling}
-                        >
-                          Keep order
-                        </button>
+                  {/* STEP 2 — confirm. Deliberately in normal flow: an
+                      always-pinned block this tall (nudge + header + button +
+                      countdown + cancel ≈ 250px) covered ~40% of a phone
+                      scrollport and hid the QR behind it. The slim bar below
+                      takes over the "never lose the CTA" job, and only while
+                      this block is actually off-screen. */}
+                  <div style={{ marginTop: 20 }}>
+                    {returnedFromPayment && !timerExpired && (
+                      <div className="p2p-nudge-in" style={{
+                        marginBottom: 12, padding: "10px 12px",
+                        // NOT `${color.accent}33` — these tokens are `var(…)`
+                        // references, and var() substitution is token-based, so
+                        // an appended alpha suffix never merges into one hex.
+                        // The whole declaration is dropped and the border
+                        // vanishes. color-mix composes correctly.
+                        background: color.accentSoft,
+                        border: `1px solid color-mix(in srgb, ${color.accent} 30%, transparent)`,
+                        borderRadius: radius.md, fontSize: font.md, color: color.text, lineHeight: 1.45,
+                        animation: "p2p-nudge-in 0.25s ease-out",
+                      }} role="status">
+                        <strong>Back from your {acceptedMeta?.paymentMethod ?? "payment"} app?</strong>{" "}
+                        {fiatDisplay ? `If you sent ${state.currency} ${fiatDisplay}, confirm below` : "If you've sent the payment, confirm below"} — the order won't settle until you do.
                       </div>
+                    )}
+
+                    <div style={{ marginBottom: 12 }}>
+                      <StepHeader
+                        n={2}
+                        title={timerExpired ? "This payment window closed" : "Confirm you've paid"}
+                        subtitle={timerExpired
+                          ? undefined
+                          : "We can't see your bank transfer — your order stays open until you tap below."}
+                      />
                     </div>
-                  )}
+
+                    <button
+                      ref={confirmRef}
+                      className={returnedFromPayment && !timerExpired ? "p2p-attn" : undefined}
+                      style={{
+                        ...S.primaryBtn,
+                        opacity: isMarkingPaid || timerExpired ? 0.5 : 1,
+                        cursor: timerExpired ? "not-allowed" : "pointer",
+                        // Static glow once they've started paying, escalating
+                        // to a repeating ring the moment they come back.
+                        ...(returnedFromPayment && !timerExpired
+                          ? { animation: "p2p-attn 1.6s ease-out 3" }
+                          : paymentIntent && !timerExpired
+                            ? { boxShadow: `0 0 0 4px ${color.accentSoft}` }
+                            : null),
+                      }}
+                      onClick={handleMarkPaid}
+                      disabled={isMarkingPaid || timerExpired || isCancelling}
+                    >
+                      {isMarkingPaid && <Spinner size={14} />}
+                      {timerExpired
+                        ? "Payment window closed"
+                        : isMarkingPaid
+                          ? "Confirming…"
+                          : fiatDisplay
+                            ? `I've sent ${state.currency} ${fiatDisplay}`
+                            : "I've made the payment"}
+                    </button>
+
+                    {/* The 5-minute window is a deadline to *confirm*, not just
+                        to pay — the on-chain paidBuyOrder reverts after it. */}
+                    {!timerExpired && acceptedDeadline !== null && (
+                      <p style={{
+                        ...S.faint, textAlign: "center", margin: "8px 0 0",
+                        color: acceptedRemaining < 60_000 ? color.danger : color.textFaint,
+                        fontWeight: acceptedRemaining < 60_000 ? weight.semibold : weight.regular,
+                      }}>
+                        Confirm within {formatCountdown(acceptedRemaining)} or the order auto-cancels.
+                      </p>
+                    )}
+
+                    {timerExpired && (
+                      <div style={{ marginTop: 12, padding: "12px 14px", background: color.dangerSoft, border: `1px solid color-mix(in srgb, ${color.danger} 25%, transparent)`, borderRadius: radius.md }}>
+                        <p style={{ fontSize: font.md, color: color.danger, margin: 0, lineHeight: 1.45, fontWeight: weight.semibold }}>
+                          Already sent the money? Don't send it again.
+                        </p>
+                        <p style={{ ...S.muted, margin: "6px 0 8px", lineHeight: 1.45 }}>
+                          This order can no longer be confirmed on-chain. Contact support with the order number below and it'll be resolved.
+                        </p>
+                        <CopyRow value={`Order #${state.orderId}`} copied={copied === "order-id"} onCopy={() => copy(String(state.orderId), "order-id")} />
+                      </div>
+                    )}
+
+                    {!showCancelConfirm ? (
+                      <button style={{ ...S.ghostBtn, width: "100%", marginTop: 8, height: 40 }} onClick={() => setShowCancelConfirm(true)} disabled={isCancelling}>Cancel order</button>
+                    ) : (
+                      <div style={{ marginTop: 12, padding: 14, borderRadius: radius.md, background: color.dangerSoft, border: `1px solid color-mix(in srgb, ${color.danger} 25%, transparent)` }}>
+                        <p style={{ fontSize: font.md, color: color.danger, marginTop: 0 }}>Cancel this order?</p>
+                        <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                          <button
+                            style={{ ...S.secondaryBtn, flex: 1, height: 38, borderColor: color.danger, color: color.danger, opacity: isCancelling ? 0.6 : 1, cursor: isCancelling ? "wait" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}
+                            onClick={handleCancelConfirm}
+                            disabled={isCancelling}
+                          >
+                            {isCancelling && <Spinner size={14} />}
+                            {isCancelling ? "Cancelling…" : "Yes, cancel"}
+                          </button>
+                          <button
+                            style={{ ...S.secondaryBtn, flex: 1, height: 38 }}
+                            onClick={() => setShowCancelConfirm(false)}
+                            disabled={isCancelling}
+                          >
+                            Keep order
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Slim pinned confirm bar — the safety net for the CTA
+                      above, shown ONLY while that CTA is scrolled out of the
+                      modal's scrollport. Collapsing to `height: 0` rather than
+                      unmounting keeps it out of the flow entirely when idle,
+                      so it adds no space and can't cover the QR. It sits after
+                      the CTA in flow, so expanding it never shifts the element
+                      being observed — no feedback loop. The card must NOT get
+                      `overflow: hidden`: that would make it a scroll container
+                      and break the stick. */}
+                  <div
+                    aria-hidden={!showConfirmBar}
+                    style={{
+                      position: "sticky", bottom: 0, zIndex: 2,
+                      marginLeft: -32, marginRight: -32,
+                      background: color.surface,
+                      ...(showConfirmBar
+                        ? {
+                            padding: "10px 32px 12px",
+                            borderTop: `1px solid ${color.border}`,
+                            // Shadow is a light-theme affordance; on dark the
+                            // borderTop above carries the separation.
+                            boxShadow: "0 -6px 18px rgba(0,0,0,0.06)",
+                            animation: "p2p-nudge-in 0.18s ease-out",
+                          }
+                        // `overflow: hidden` ONLY while collapsed. Applying it
+                        // unconditionally clips the confirm button's expanding
+                        // `p2p-attn` ring against the bar's padding box, which
+                        // silently kills the one animation that exists to pull
+                        // the eye back to the CTA.
+                        : { height: 0, padding: 0, border: "none", boxShadow: "none", overflow: "hidden", pointerEvents: "none" }),
+                    }}
+                  >
+                    <p style={{
+                      ...S.faint, margin: "0 0 6px",
+                      color: returnedFromPayment ? color.accent : color.textMuted,
+                      fontWeight: returnedFromPayment ? weight.semibold : weight.medium,
+                    }}>
+                      {returnedFromPayment
+                        ? `Back from your ${acceptedMeta?.paymentMethod ?? "payment"} app? Confirm to settle your order.`
+                        : "Step 2 · Confirm once you've paid"}
+                    </p>
+                    <button
+                      className={returnedFromPayment ? "p2p-attn" : undefined}
+                      style={{
+                        ...S.primaryBtn, height: 42,
+                        opacity: isMarkingPaid ? 0.5 : 1,
+                        ...(returnedFromPayment ? { animation: "p2p-attn 1.6s ease-out 3" } : null),
+                      }}
+                      onClick={handleMarkPaid}
+                      disabled={isMarkingPaid || isCancelling}
+                      tabIndex={showConfirmBar ? 0 : -1}
+                    >
+                      {isMarkingPaid && <Spinner size={14} />}
+                      {isMarkingPaid
+                        ? "Confirming…"
+                        : fiatDisplay
+                          ? `I've sent ${state.currency} ${fiatDisplay}`
+                          : "I've made the payment"}
+                    </button>
+                  </div>
                 </div>
               )}
 

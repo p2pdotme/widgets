@@ -157,6 +157,71 @@ export function Skeleton({
 }
 
 /**
+ * Numbered step header. The accepted-phase checkout is two distinct actions —
+ * pay in your banking app, then confirm here — and users routinely stop after
+ * the first because the QR reads as the whole job. Numbering both actions
+ * makes the second one look like a step rather than an optional receipt.
+ */
+export function StepHeader({ n, title, subtitle, done }: {
+  n: number;
+  title: React.ReactNode;
+  subtitle?: React.ReactNode;
+  /** Renders a ✓ instead of the number once the step looks satisfied. */
+  done?: boolean;
+}) {
+  return (
+    <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+      {/* accent + accentText, not success + "#fff". A host's `success` is
+          often a bright green on dark themes, where white glyphs fall to
+          ~2:1 contrast. accent/accentText is a pairing the host has already
+          had to make legible — every primary button uses it — and it matches
+          what <Stepper> does for its own completed steps. */}
+      <div style={{
+        width: 22, height: 22, borderRadius: "50%", flexShrink: 0, marginTop: 1,
+        display: "flex", alignItems: "center", justifyContent: "center",
+        background: color.accent,
+        color: color.accentText,
+        fontSize: font.sm, fontWeight: weight.bold, lineHeight: 1,
+      }}>{done ? "✓" : n}</div>
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <p style={{ fontSize: font.base, fontWeight: weight.semibold, color: color.text, margin: 0, lineHeight: 1.3 }}>{title}</p>
+        {subtitle && <p style={{ ...S.muted, margin: "3px 0 0", lineHeight: 1.45 }}>{subtitle}</p>}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Ticking `deadline - now` in ms, floored at zero, updated once a second.
+ * Shared by `CountdownRing` and any caller that needs the same countdown as
+ * plain text (the checkout prints "Confirm within m:ss" under its CTA) so the
+ * two never drift apart. Passing `null` parks it at zero without a timer.
+ */
+export function useCountdown(deadline: number | null): number {
+  const compute = React.useCallback(
+    () => (deadline === null ? 0 : Math.max(0, deadline - Date.now())),
+    [deadline],
+  );
+  const [remaining, setRemaining] = React.useState(compute);
+
+  React.useEffect(() => {
+    setRemaining(compute());
+    if (deadline === null) return;
+    const id = setInterval(() => setRemaining(compute()), 1000);
+    return () => clearInterval(id);
+  }, [deadline, compute]);
+
+  return remaining;
+}
+
+/** `m:ss` for a millisecond duration. */
+export function formatCountdown(ms: number): string {
+  const mins = Math.floor(ms / 60_000);
+  const secs = Math.floor((ms % 60_000) / 1000);
+  return `${mins}:${secs.toString().padStart(2, "0")}`;
+}
+
+/**
  * Circular countdown — shown next to the "Pay exactly" hero after a merchant
  * accepts a buy order. SVG progress ring + `mm:ss` in the center. Color
  * shifts accent → warning (half-gone) → danger (last minute / expired).
@@ -172,17 +237,8 @@ export function CountdownRing({ deadline, totalMs, onExpire, size = 76, stroke =
   size?: number;
   stroke?: number;
 }) {
-  const compute = () => Math.max(0, deadline - Date.now());
-  const [remaining, setRemaining] = React.useState(compute);
+  const remaining = useCountdown(deadline);
   const calledExpire = React.useRef(false);
-
-  React.useEffect(() => {
-    setRemaining(compute());
-    if (remaining === 0) return;
-    const id = setInterval(() => setRemaining(compute()), 1000);
-    return () => clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deadline]);
 
   const expired = remaining === 0;
   React.useEffect(() => {
@@ -192,9 +248,7 @@ export function CountdownRing({ deadline, totalMs, onExpire, size = 76, stroke =
     }
   }, [expired, onExpire]);
 
-  const mins = Math.floor(remaining / 60_000);
-  const secs = Math.floor((remaining % 60_000) / 1000);
-  const text = `${mins}:${secs.toString().padStart(2, "0")}`;
+  const text = formatCountdown(remaining);
   const progress = totalMs > 0 ? Math.max(0, Math.min(1, remaining / totalMs)) : 0;
 
   const urgent = !expired && remaining < 60_000;
@@ -251,6 +305,17 @@ export function injectKeyframes() {
       @keyframes p2p-spin { to { transform: rotate(360deg); } }
       @keyframes p2p-pulse { 0% { transform: scale(0.6); opacity: 0.5; } 100% { transform: scale(1.6); opacity: 0; } }
       @keyframes p2p-shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+      /* Expanding ring on the confirm CTA, played when the user comes back
+         from their banking app and still owes us the "I've paid" tap. */
+      @keyframes p2p-attn {
+        0%   { box-shadow: 0 0 0 0 color-mix(in srgb, var(--p2p-color-accent, #7c3aed) 50%, transparent); }
+        70%  { box-shadow: 0 0 0 12px color-mix(in srgb, var(--p2p-color-accent, #7c3aed) 0%, transparent); }
+        100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--p2p-color-accent, #7c3aed) 0%, transparent); }
+      }
+      @keyframes p2p-nudge-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+      @media (prefers-reduced-motion: reduce) {
+        .p2p-attn, .p2p-nudge-in { animation: none !important; }
+      }
       @media (max-width: 480px) {
         .p2p-stepper { padding: 12px 14px !important; }
         .p2p-stepper-label { display: none !important; }
