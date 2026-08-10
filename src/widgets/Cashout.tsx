@@ -456,7 +456,7 @@ export function Cashout(props: CashoutProps) {
             {/* Fiat-mode couldn't price the payout — rate read failed, or the
                 target is below one micro-USDC of sell value. */}
             {(fiatRateUnavailable || fiatTooSmall) && (
-              <div style={{ marginTop: 12, padding: "12px 14px", background: color.dangerSoft, border: `1px solid ${color.danger}22`, borderRadius: radius.md }}>
+              <div style={{ marginTop: 12, padding: "12px 14px", background: color.dangerSoft, border: `1px solid color-mix(in srgb, ${color.danger} 25%, transparent)`, borderRadius: radius.md }}>
                 <span style={{ color: color.danger, fontSize: font.md, lineHeight: 1.5 }}>
                   {fiatTooSmall
                     ? "This payout is too small to withdraw. Please use a larger amount."
