@@ -7,6 +7,13 @@ and the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format. While
 the package is `0.x`, minor releases may introduce additive prop changes;
 patch releases stay backward-compatible.
 
+## [1.8.0](https://github.com/p2pdotme/widgets/compare/v1.7.2...v1.8.0) (2026-08-10)
+
+
+### Features
+
+* **checkout:** make confirming a paid order a visible second step ([#70](https://github.com/p2pdotme/widgets/issues/70)) ([178ac06](https://github.com/p2pdotme/widgets/commit/178ac065c1b8d295b1e18c2f5c16bc24131e0b78))
+
 ## [1.7.2](https://github.com/p2pdotme/widgets/compare/v1.7.1...v1.7.2) (2026-07-22)
 
 
