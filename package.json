@@ -1,6 +1,6 @@
 {
   "name": "@p2pdotme/widgets",
-  "version": "1.7.2",
+  "version": "1.8.0",
   "description": "React widgets for the P2P.me protocol — local-fiat-in, USDC-out on Base. Ships Checkout (buy), Cashout (USDC → fiat), and PaymentHistory as independently-importable subpaths.",
   "license": "MIT",
   "author": "P2P.me",
