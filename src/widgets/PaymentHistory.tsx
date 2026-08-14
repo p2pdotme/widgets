@@ -12,6 +12,7 @@ import { Spinner, CenterStatus, injectKeyframes } from "../ui/components";
 import { isOrderActionable } from "../core/order-action";
 import { fetchB2BMap, type B2BOrderMeta } from "../core/b2b-orders";
 import type { CheckoutSigner } from "../types";
+import { I18nProvider, useI18n, useT, type Translator } from "../i18n";
 
 export interface PaymentHistoryProps {
   signer: CheckoutSigner;
@@ -135,11 +136,24 @@ export interface PaymentHistoryProps {
   resolveExtraAddresses?: (user: `0x${string}`) => Promise<`0x${string}`[]>;
   /** Optional theming overrides. See `P2PTheme` for the surface. */
   theme?: P2PTheme;
+  /**
+   * UI locale (`en` | `es` | `pt-BR`). When omitted, derived from
+   * `navigator.language` with English as the fallback.
+   */
+  locale?: string;
 }
 
 const PENDING_STATUSES: ReadonlyArray<Order["status"]> = ["placed", "accepted", "paid"];
 
 export function PaymentHistory(props: PaymentHistoryProps) {
+  return (
+    <I18nProvider locale={props.locale}>
+      <PaymentHistoryInner {...props} />
+    </I18nProvider>
+  );
+}
+
+function PaymentHistoryInner(props: PaymentHistoryProps) {
   const {
     signer, subgraphUrl, usdcAddress,
     chainId = 84532, diamondAddress = DEFAULT_DIAMOND_ADDRESS, rpcUrl,
@@ -154,6 +168,8 @@ export function PaymentHistory(props: PaymentHistoryProps) {
     resolveExtraAddresses,
     theme,
   } = props;
+  const t = useT();
+  const { localeTag } = useI18n();
   const themeStyle = themeToCssVars(theme);
 
   // Stable, lowercased key for the integrator allow-list so prop identity
@@ -173,8 +189,8 @@ export function PaymentHistory(props: PaymentHistoryProps) {
   const title =
     props.title ??
     (filter === "pending" || filter === "actionable"
-      ? "Pending orders"
-      : "Order history");
+      ? t("history.pendingOrders")
+      : t("history.orderHistory"));
 
   useEffect(injectKeyframes, []);
 
@@ -241,11 +257,11 @@ export function PaymentHistory(props: PaymentHistoryProps) {
       setExtraOrderIds(extraIds);
       setB2bMap(b2b);
     } catch (err: any) {
-      setError(err?.message ?? "Failed to fetch orders");
+      setError(err?.message ?? t("history.fetchFailed"));
     } finally {
       setLoading(false);
     }
-  }, [signer?.address, subgraphUrl, usdcAddress, chainId, diamondAddress, rpcUrl, limit, b2bMode, resolveExtraAddresses]);
+  }, [signer?.address, subgraphUrl, usdcAddress, chainId, diamondAddress, rpcUrl, limit, b2bMode, resolveExtraAddresses, t]);
 
   useEffect(() => { fetchOrders(); }, [fetchOrders, refreshKey]);
 
@@ -392,12 +408,12 @@ export function PaymentHistory(props: PaymentHistoryProps) {
           disabled={loading}
         >
           {loading && orders ? <Spinner size={12} /> : null}
-          {loading ? "Refreshing…" : "Refresh"}
+          {loading ? t("history.refreshing") : t("history.refresh")}
         </button>
       </div>
 
       {loading && !orders && (
-        <CenterStatus icon={<Spinner />} title="Loading orders" subtitle="Querying the subgraph…" />
+        <CenterStatus icon={<Spinner />} title={t("history.loadingTitle")} subtitle={t("history.loadingSubtitle")} />
       )}
 
       {error && (
@@ -408,16 +424,16 @@ export function PaymentHistory(props: PaymentHistoryProps) {
 
       {hasNothingToShow && (
         <div style={{ padding: "24px 0", textAlign: "center" }}>
-          <p style={S.muted}>{filter === "pending" ? "No pending orders." : "No orders yet."}</p>
+          <p style={S.muted}>{filter === "pending" ? t("history.noPending") : t("history.noOrders")}</p>
         </div>
       )}
 
       {pending.length > 0 && (
         <div style={{ marginBottom: past.length > 0 ? 20 : 0 }}>
-          {past.length > 0 && <p style={{ ...S.label, marginBottom: 8 }}>Pending</p>}
+          {past.length > 0 && <p style={{ ...S.label, marginBottom: 8 }}>{t("history.pending")}</p>}
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {pending.map((o) => (
-              <OrderRow key={o.orderId.toString()} order={o} onResume={onResume} renderRowAction={renderRowAction} renderRowBadge={renderRowBadge} highlight config={currencyConfigs[o.currency]} integratorLabel={integratorLabelFor(o)} />
+              <OrderRow key={o.orderId.toString()} order={o} onResume={onResume} renderRowAction={renderRowAction} renderRowBadge={renderRowBadge} highlight config={currencyConfigs[o.currency]} integratorLabel={integratorLabelFor(o)} localeTag={localeTag} />
             ))}
           </div>
         </div>
@@ -425,10 +441,10 @@ export function PaymentHistory(props: PaymentHistoryProps) {
 
       {past.length > 0 && (
         <div>
-          {pending.length > 0 && <p style={{ ...S.label, marginBottom: 8 }}>Past</p>}
+          {pending.length > 0 && <p style={{ ...S.label, marginBottom: 8 }}>{t("history.past")}</p>}
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {past.map((o) => (
-              <OrderRow key={o.orderId.toString()} order={o} onResume={onResume} renderRowAction={renderRowAction} renderRowBadge={renderRowBadge} config={currencyConfigs[o.currency]} integratorLabel={integratorLabelFor(o)} />
+              <OrderRow key={o.orderId.toString()} order={o} onResume={onResume} renderRowAction={renderRowAction} renderRowBadge={renderRowBadge} config={currencyConfigs[o.currency]} integratorLabel={integratorLabelFor(o)} localeTag={localeTag} />
             ))}
           </div>
         </div>
@@ -437,7 +453,7 @@ export function PaymentHistory(props: PaymentHistoryProps) {
   );
 }
 
-function OrderRow({ order, onResume, renderRowAction, renderRowBadge, highlight, config, integratorLabel }: {
+function OrderRow({ order, onResume, renderRowAction, renderRowBadge, highlight, config, integratorLabel, localeTag }: {
   order: Order;
   onResume?: (orderId: string) => void;
   renderRowAction?: (order: Order) => React.ReactNode;
@@ -445,7 +461,9 @@ function OrderRow({ order, onResume, renderRowAction, renderRowBadge, highlight,
   highlight?: boolean;
   config?: { buyPrice: bigint; smallOrderThreshold: bigint; smallOrderFixedFee: bigint };
   integratorLabel?: string;
+  localeTag: string;
 }) {
+  const t = useT();
   const isPending = PENDING_STATUSES.includes(order.status);
   // Source-of-truth precedence for the gross fiat the user paid (or would
   // pay): chain-stored `actualFiatAmount` is set on merchant acceptance and
@@ -466,7 +484,7 @@ function OrderRow({ order, onResume, renderRowAction, renderRowBadge, highlight,
   const fiat = (Number(fiatRaw) / 1e6).toFixed(2);
   const usdc = formatUnits(order.usdcAmount, USDC_DECIMALS);
   const ts = Number(order.placedAt) * 1000;
-  const when = ts > 0 ? relativeTime(ts) : "—";
+  const when = ts > 0 ? relativeTime(ts, t, localeTag) : "—";
 
   return (
     <div
@@ -555,7 +573,7 @@ function OrderRow({ order, onResume, renderRowAction, renderRowBadge, highlight,
             style={{ ...S.primaryBtn, width: "auto", height: 36, padding: "0 14px", fontSize: font.md }}
             onClick={() => onResume(order.orderId.toString())}
           >
-            Resume
+            {t("history.resume")}
           </button>
         )}
         {renderRowAction ? renderRowAction(order) : null}
@@ -565,10 +583,11 @@ function OrderRow({ order, onResume, renderRowAction, renderRowBadge, highlight,
 }
 
 function DisputeBadge({ status }: { status: "open" | "resolved" }) {
+  const t = useT();
   const { bg, fg, label } =
     status === "open"
-      ? { bg: color.dangerSoft, fg: color.danger, label: "In support" }
-      : { bg: color.successSoft, fg: color.success, label: "Support resolved" };
+      ? { bg: color.dangerSoft, fg: color.danger, label: t("history.disputeInSupport") }
+      : { bg: color.successSoft, fg: color.success, label: t("history.disputeResolved") };
   return (
     <span style={{
       padding: "2px 8px", borderRadius: radius.pill,
@@ -581,13 +600,14 @@ function DisputeBadge({ status }: { status: "open" | "resolved" }) {
 }
 
 function StatusBadge({ status }: { status: Order["status"] }) {
+  const t = useT();
   const { bg, fg, label } = (() => {
     switch (status) {
-      case "placed": return { bg: color.accentSoft, fg: color.accent, label: "Matching" };
-      case "accepted": return { bg: color.warningSoft, fg: color.warning, label: "Awaiting payment" };
-      case "paid": return { bg: color.accentSoft, fg: color.accent, label: "Verifying" };
-      case "completed": return { bg: color.successSoft, fg: color.success, label: "Completed" };
-      case "cancelled": return { bg: color.dangerSoft, fg: color.danger, label: "Cancelled" };
+      case "placed": return { bg: color.accentSoft, fg: color.accent, label: t("history.statusMatching") };
+      case "accepted": return { bg: color.warningSoft, fg: color.warning, label: t("history.statusAwaitingPayment") };
+      case "paid": return { bg: color.accentSoft, fg: color.accent, label: t("history.statusVerifying") };
+      case "completed": return { bg: color.successSoft, fg: color.success, label: t("history.statusCompleted") };
+      case "cancelled": return { bg: color.dangerSoft, fg: color.danger, label: t("history.statusCancelled") };
     }
   })();
   return (
@@ -622,12 +642,12 @@ function resolveIntegratorLabel(
   return shortenAddress(address);
 }
 
-function relativeTime(ts: number): string {
+function relativeTime(ts: number, t: Translator, localeTag: string): string {
   const diffSec = Math.floor((Date.now() - ts) / 1000);
-  if (diffSec < 60) return "just now";
-  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
-  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
+  if (diffSec < 60) return t("history.justNow");
+  if (diffSec < 3600) return t("history.minutesAgo", { n: Math.floor(diffSec / 60) });
+  if (diffSec < 86400) return t("history.hoursAgo", { n: Math.floor(diffSec / 3600) });
   const days = Math.floor(diffSec / 86400);
-  if (days < 30) return `${days}d ago`;
-  return new Date(ts).toLocaleDateString();
+  if (days < 30) return t("history.daysAgo", { n: days });
+  return new Date(ts).toLocaleDateString(localeTag);
 }

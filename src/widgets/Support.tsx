@@ -12,6 +12,7 @@ import {
   type SignInResponse,
 } from "../state/sessionCache";
 import { OpsSupportPanel } from "./OpsSupportPanel";
+import { I18nProvider, useT, useI18nContext } from "../i18n";
 
 type ErrorKind = "userRejected" | "network" | "auth" | "chatwoot" | "unknown";
 
@@ -70,13 +71,15 @@ function classifyError(err: unknown): { kind: ErrorKind; reason: string } {
 }
 
 export function Support(props: SupportProps) {
-  // Ops surface (D-027-v2). Always-live operator panel; `chatEnabled` is a
-  // customer-mode-only gate and does not apply here. The customer launcher
-  // path below is untouched when `mode` is absent or "customer".
-  if (props.mode === "ops") {
-    return <OpsSupport {...props} />;
-  }
-  return <CustomerSupport {...props} />;
+  // Inherit a parent I18nProvider locale when the host didn't pin one
+  // (e.g. nested under PaymentHistoryWithSupport). Explicit `locale` wins.
+  const parent = useI18nContext();
+  const preferred = props.locale ?? parent?.locale ?? null;
+  return (
+    <I18nProvider locale={preferred}>
+      {props.mode === "ops" ? <OpsSupport {...props} /> : <CustomerSupport {...props} />}
+    </I18nProvider>
+  );
 }
 
 /** Operator surface wrapper. Honors the `layout` prop:
@@ -94,6 +97,7 @@ function OpsSupport(props: SupportProps) {
     onChatResolved,
     layout = "modal",
   } = props;
+  const t = useT();
   const themeStyle = useMemo(() => themeToCssVars(theme), [theme]);
   const [open, setOpen] = useState(true);
 
@@ -123,7 +127,7 @@ function OpsSupport(props: SupportProps) {
       <Modal
         open={open}
         onClose={handleClose}
-        ariaLabel="Order support"
+        ariaLabel={t("support.orderSupportAria")}
         themeStyle={themeStyle}
       >
         <div style={{ height: "70vh", maxHeight: 640, display: "flex" }}>
@@ -187,6 +191,7 @@ function CustomerSupport(props: SupportProps) {
     chatState = "new",
     chatEnabled = false,
   } = props;
+  const t = useT();
   const [open, setOpen] = useState(false);
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
   // Incrementing this counter retriggers the sign-in / boot effect. Used
@@ -199,12 +204,12 @@ function CustomerSupport(props: SupportProps) {
 
   const launcherLabel =
     disputeStatus === "open"
-      ? "View report"
+      ? t("support.viewReport")
       : disputeStatus === "resolved"
-        ? "View resolution"
+        ? t("support.viewResolution")
         : chatState === "active"
-          ? "Continue support"
-          : "Get help";
+          ? t("support.continueSupport")
+          : t("support.getHelp");
 
   const handleOpen = useCallback(() => {
     setOpen(true);
@@ -299,7 +304,7 @@ function CustomerSupport(props: SupportProps) {
       >
         <DialogContent
           orderId={orderId}
-          originApp={originApp ?? "this app"}
+          originApp={originApp ?? t("support.defaultOriginApp")}
           phase={phase}
           onClose={handleClose}
           onRetry={handleRetry}
@@ -318,6 +323,7 @@ interface LauncherButtonProps {
 
 const LauncherButton = forwardRef<HTMLButtonElement, LauncherButtonProps>(
   function LauncherButton({ label, disputeStatus, chatState, onClick }, ref) {
+    const t = useT();
     // Match PaymentHistory's per-row Resume button so the two sit next to
     // each other without a stylistic clash. The leading dot conveys the
     // chat surface's state: warning (dispute open), success (dispute
@@ -336,7 +342,7 @@ const LauncherButton = forwardRef<HTMLButtonElement, LauncherButtonProps>(
         type="button"
         onClick={onClick}
         data-support-launcher
-        aria-label="Open support"
+        aria-label={t("support.openSupportAria")}
         style={{
           ...S.secondaryBtn,
           height: 36,
@@ -378,6 +384,7 @@ function DialogContent({
   onClose,
   onRetry,
 }: DialogContentProps) {
+  const t = useT();
   const busy = phase.kind === "signing" || phase.kind === "loading-chat";
   return (
     <div
@@ -403,7 +410,7 @@ function DialogContent({
           id="p2p-support-title"
           style={{ ...S.h2, fontSize: font.lg, color: color.text }}
         >
-          Support
+          {t("support.title")}
           {orderId ? (
             <>
               {" "}
@@ -415,7 +422,7 @@ function DialogContent({
                   fontSize: font.base,
                 }}
               >
-                Order {shortenId(orderId)}
+                {t("support.orderLabel", { shortId: shortenId(orderId) })}
               </span>
             </>
           ) : null}
@@ -423,7 +430,7 @@ function DialogContent({
         <button
           type="button"
           onClick={onClose}
-          aria-label="Close support"
+          aria-label={t("support.closeSupportAria")}
           style={{
             ...S.ghostBtn,
             width: 32,
@@ -442,9 +449,19 @@ function DialogContent({
       </div>
 
       <p style={{ ...S.muted, marginTop: 0, marginBottom: 16, lineHeight: 1.5 }}>
-        Opened from{" "}
-        <code style={{ ...S.mono, color: color.text }}>{originApp}</code>. No
-        names or wallet addresses are shared with the other side.
+        {(() => {
+          const marker = "\u0000";
+          const [before, after = ""] = t("support.openedFrom", {
+            originApp: marker,
+          }).split(marker);
+          return (
+            <>
+              {before}
+              <code style={{ ...S.mono, color: color.text }}>{originApp}</code>
+              {after}
+            </>
+          );
+        })()}
       </p>
 
       <PhaseView phase={phase} onRetry={onRetry} onClose={onClose} />
@@ -461,28 +478,29 @@ function PhaseView({
   onRetry: () => void;
   onClose: () => void;
 }) {
+  const t = useT();
   if (phase.kind === "signing") {
     return (
       <Loader
-        title="Signing in"
-        body="Approve the message request in your wallet to open support for this order."
+        title={t("support.signingTitle")}
+        body={t("support.signingBody")}
       />
     );
   }
   if (phase.kind === "loading-chat") {
     return (
       <Loader
-        title="Loading chat"
-        body="Connecting to the Payment Support Team..."
+        title={t("support.loadingChatTitle")}
+        body={t("support.loadingChatBody")}
       />
     );
   }
   if (phase.kind === "unavailable") {
     return (
       <StatusBlock
-        title="Support not available yet"
-        body="Your order needs to be accepted before a support thread can open. Try again in a moment, or come back once your order moves to Accepted."
-        primaryLabel="Retry"
+        title={t("support.unavailableTitle")}
+        body={t("support.unavailableBody")}
+        primaryLabel={t("common.retry")}
         onPrimary={onRetry}
         onSecondary={onClose}
       />
@@ -491,21 +509,21 @@ function PhaseView({
   if (phase.kind === "registered") {
     return (
       <StatusBlock
-        title="Support request registered"
-        body="Your support request is on its way to the support team. Any stuck funds will be refunded once it's resolved. Check back here in a little while to see the updated status."
-        primaryLabel="Close"
+        title={t("support.registeredTitle")}
+        body={t("support.registeredBody")}
+        primaryLabel={t("common.close")}
         onPrimary={onClose}
       />
     );
   }
   if (phase.kind === "error") {
-    const copy = errorCopy(phase.errorKind);
+    const copy = errorCopy(phase.errorKind, t);
     return (
       <StatusBlock
         title={copy.title}
         body={copy.body}
         detail={phase.reason}
-        primaryLabel="Retry"
+        primaryLabel={t("common.retry")}
         onPrimary={onRetry}
         onSecondary={onClose}
         variant="danger"
@@ -515,32 +533,35 @@ function PhaseView({
   return null;
 }
 
-function errorCopy(kind: ErrorKind): { title: string; body: string } {
+function errorCopy(
+  kind: ErrorKind,
+  t: ReturnType<typeof useT>,
+): { title: string; body: string } {
   switch (kind) {
     case "userRejected":
       return {
-        title: "Authorization cancelled",
-        body: "You declined the sign-in prompt. Tap Retry to sign in and open support.",
+        title: t("support.errUserRejectedTitle"),
+        body: t("support.errUserRejectedBody"),
       };
     case "network":
       return {
-        title: "Connection issue",
-        body: "We couldn't reach the support service. Check your connection and try again.",
+        title: t("support.errNetworkTitle"),
+        body: t("support.errNetworkBody"),
       };
     case "auth":
       return {
-        title: "Sign-in failed",
-        body: "We couldn't verify your wallet. Try again, or reconnect your wallet if the issue persists.",
+        title: t("support.errAuthTitle"),
+        body: t("support.errAuthBody"),
       };
     case "chatwoot":
       return {
-        title: "Chat couldn't load",
-        body: "The support chat widget didn't load. Refresh the page or try again.",
+        title: t("support.errChatwootTitle"),
+        body: t("support.errChatwootBody"),
       };
     default:
       return {
-        title: "Something went wrong",
-        body: "We couldn't open support. Try again in a moment.",
+        title: t("support.errUnknownTitle"),
+        body: t("support.errUnknownBody"),
       };
   }
 }
@@ -600,6 +621,7 @@ function StatusBlock({
   onSecondary?: () => void;
   variant?: "danger";
 }) {
+  const t = useT();
   const titleColor = variant === "danger" ? color.danger : color.text;
   return (
     <div
@@ -669,7 +691,7 @@ function StatusBlock({
               fontSize: font.base,
             }}
           >
-            Close
+            {t("common.close")}
           </button>
         ) : null}
       </div>

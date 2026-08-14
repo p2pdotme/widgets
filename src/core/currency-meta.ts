@@ -4,6 +4,9 @@ import {
   type CountryOption,
 } from "@p2pdotme/sdk/country";
 import type { CurrencyOption } from "../types";
+import { t } from "../i18n/t";
+import { resolveLocale } from "../i18n/resolveLocale";
+import type { Locale } from "../i18n/types";
 
 /**
  * Per-currency UI metadata resolved against the SDK as the source of truth.
@@ -26,7 +29,7 @@ import type { CurrencyOption } from "../types";
 export interface CompoundField {
   /** Stable key for React lists (`phone`, `bank`, …). */
   key: string;
-  /** English label for the field (e.g. "Bank name", "RIF"). */
+  /** Localized label for the field (e.g. "Bank name", "RIF"). */
   label: string;
 }
 
@@ -56,41 +59,45 @@ const SDK_INDEX: Record<string, CountryOption> = Object.fromEntries(
   COUNTRY_OPTIONS.map((c) => [c.currency, c]),
 );
 
-// SDK ships translation keys (e.g. "PIX_ID", "PAGO_MOVIL_DETAILS"); the
-// widget has no i18n layer, so we map them to English here. Keep aligned
-// with user-app-spa's i18n bundle when adding currencies. Falls back to a
-// kebab-cased version of the key for unmapped values.
-const ADDRESS_LABEL: Record<string, string> = {
-  UPI_ID: "UPI ID",
-  PIX_ID: "PIX ID",
-  ALIAS_ID: "Alias",
-  CLABE_ID: "CLABE",
-  PHONE_NUMBER: "phone number",
-  ACCOUNT_NUMBER: "account number",
-  PAGO_MOVIL_DETAILS: "Pago Movil details",
-};
+const ADDRESS_KEYS = new Set([
+  "UPI_ID",
+  "PIX_ID",
+  "ALIAS_ID",
+  "CLABE_ID",
+  "PHONE_NUMBER",
+  "ACCOUNT_NUMBER",
+  "PAGO_MOVIL_DETAILS",
+]);
 
-// Compound-field i18n keys → English. Used for NGN account/bank + VEN
-// phone/RIF/bank breakdown rows in the accepted-phase screen.
-const FIELD_LABEL: Record<string, string> = {
-  UPI_ID: "UPI ID",
-  PIX_ID: "PIX ID",
-  ALIAS_ID: "Alias",
-  CLABE_ID: "CLABE",
-  PHONE_NUMBER: "Phone number",
-  ACCOUNT_NUMBER: "Account number",
-  ACCOUNT_NUMBER_LABEL: "Account number",
-  BANK_NAME_LABEL: "Bank name",
-  BANK_LABEL: "Bank",
-  RIF_LABEL: "RIF",
-};
-
-function labelFor(key: string): string {
-  return ADDRESS_LABEL[key] ?? key.replace(/_/g, " ").toLowerCase();
+/** Map SDK address-label keys → `currency.*` catalog entries. */
+function labelFor(key: string, locale: Locale): string {
+  if (ADDRESS_KEYS.has(key)) return t(locale, `currency.${key}`);
+  return key.replace(/_/g, " ").toLowerCase();
 }
 
-function fieldLabelFor(key: string): string {
-  return FIELD_LABEL[key] ?? key.replace(/_/g, " ").toLowerCase();
+/**
+ * Map SDK compound-field i18n keys → `currency.*` catalog entries.
+ * PHONE_NUMBER / ACCOUNT_NUMBER use the `_FIELD` variants; others share
+ * address keys or dedicated `*_LABEL` keys.
+ */
+function fieldLabelFor(key: string, locale: Locale): string {
+  switch (key) {
+    case "PHONE_NUMBER":
+      return t(locale, "currency.PHONE_NUMBER_FIELD");
+    case "ACCOUNT_NUMBER":
+      return t(locale, "currency.ACCOUNT_NUMBER_FIELD");
+    case "UPI_ID":
+    case "PIX_ID":
+    case "ALIAS_ID":
+    case "CLABE_ID":
+    case "ACCOUNT_NUMBER_LABEL":
+    case "BANK_NAME_LABEL":
+    case "BANK_LABEL":
+    case "RIF_LABEL":
+      return t(locale, `currency.${key}`);
+    default:
+      return key.replace(/_/g, " ").toLowerCase();
+  }
 }
 
 /**
@@ -101,7 +108,9 @@ function fieldLabelFor(key: string): string {
  */
 export function resolveCurrencyMeta(
   opt: { symbol: string } & Partial<CurrencyOption>,
+  locale?: string,
 ): CurrencyMeta {
+  const loc = resolveLocale(locale);
   const sdk = SDK_INDEX[opt.symbol];
   const paymentAddressName = sdk?.paymentAddressName ?? "PAYMENT_ID";
   const fields = PAYMENT_ID_FIELDS[opt.symbol as keyof typeof PAYMENT_ID_FIELDS] ?? [];
@@ -110,13 +119,13 @@ export function resolveCurrencyMeta(
     symbolNative: opt.symbolNative ?? sdk?.symbolNative ?? opt.symbol,
     country: opt.country ?? sdk?.country ?? "",
     flag: opt.flag ?? sdk?.flag ?? "",
-    paymentMethod: opt.paymentMethod ?? sdk?.paymentMethod ?? "Payment",
+    paymentMethod: opt.paymentMethod ?? sdk?.paymentMethod ?? t(loc, "currency.paymentFallback"),
     paymentAddressName,
-    paymentAddressLabel: labelFor(paymentAddressName),
+    paymentAddressLabel: labelFor(paymentAddressName, loc),
     isAlpha: opt.isAlpha ?? sdk?.isAlpha ?? false,
     compoundFields:
       fields.length > 1
-        ? fields.map((f) => ({ key: f.key, label: fieldLabelFor(f.label) }))
+        ? fields.map((f) => ({ key: f.key, label: fieldLabelFor(f.label, loc) }))
         : null,
   };
 }

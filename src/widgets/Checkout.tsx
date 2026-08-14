@@ -12,8 +12,11 @@ import { Modal } from "../ui/Modal";
 import {
   Spinner, PulseDot, CenterStatus, SuccessIcon, XIcon,
   CopyRow, Stepper, CountdownRing, Skeleton, injectKeyframes,
-  StepHeader, useCountdown, formatCountdown,
+  StepHeader, useCountdown, formatCountdown, P2PMark,
 } from "../ui/components";
+import { I18nProvider, useT, useI18n, translateError } from "../i18n";
+import type { Translator } from "../i18n";
+import { P2PError } from "../core/errors";
 
 // Window the user has to pay after a merchant accepts before auto-cancellation.
 // Mirrors user-app's 5-minute window.
@@ -33,30 +36,11 @@ const AWAY_MIN_MS = 2500;
 // on the custom domain below).
 const COPY_PAGE_URL = "https://copy.p2p.cool";
 
-// Non-INR "scan to copy" QR caption, with hardcoded per-rail localization for
-// now (pt-BR for PIX/BRL, es-AR for the alias/ARS) and an English fallback —
-// the widget has no i18n layer yet. `strong` is the bolded, high-contrast tail.
-// BRL/PIX normally gets a real scan-to-pay BR Code (see `buildBrlQrPayload`);
-// this pt-BR caption only shows for BRL on the copy-page fallback — a key that
-// can't be turned into a valid Pix payload.
-function nonInrQrCaption(
-  currency: string | null | undefined,
-  label: string,
-): { lead: string; strong: string } {
-  if (currency === "BRL")
-    return {
-      lead: "Escaneie com o app de câmera para copiar a chave PIX — ",
-      strong: "Não é um QR de pagamento",
-    };
-  if (currency === "ARS")
-    return {
-      lead: "Escaneá con la app de cámara para copiar el alias — ",
-      strong: "No es un QR de pago",
-    };
-  return {
-    lead: `Scan with camera app to copy the ${label} — `,
-    strong: "Not a Payable QR",
-  };
+function displayError(err: unknown, t: Translator): string | null {
+  if (err == null) return null;
+  if (err instanceof P2PError) return translateError(err, t);
+  if (typeof err === "string") return err;
+  return null;
 }
 
 // Builds a spec-correct Pix BR Code payload for the decrypted PIX key so the
@@ -104,6 +88,14 @@ function buildBrlQrPayload(
 }
 
 export function Checkout(props: CheckoutProps) {
+  return (
+    <I18nProvider locale={props.locale}>
+      <CheckoutInner {...props} />
+    </I18nProvider>
+  );
+}
+
+function CheckoutInner(props: CheckoutProps) {
   const {
     orderId: initialOrderId, placeOrder,
     amount, productName, signer, paymentNotice,
@@ -120,6 +112,8 @@ export function Checkout(props: CheckoutProps) {
     onClose, onOrderPlaced, onComplete, onError, onCancel,
   } = props;
   const themeStyle = themeToCssVars(theme);
+  const t = useT();
+  const { locale, localeTag } = useI18n();
 
   useEffect(injectKeyframes, []);
 
@@ -279,14 +273,14 @@ export function Checkout(props: CheckoutProps) {
   // country name, payment-method label, address-field label, compound
   // fields for NGN/VEN). Host's CurrencyOption fields win when present.
   const acceptedMeta = state.currency
-    ? resolveCurrencyMeta({ symbol: state.currency })
+    ? resolveCurrencyMeta({ symbol: state.currency }, locale)
     : null;
 
   // Threshold display ("10 USDC", "12.5 USDC", etc.) — used in the fee-waiver
   // hint. Sourced from on-chain config so it tracks any protocol changes.
   const thresholdLabel = state.smallOrderThreshold !== null
-    ? `${Number(state.smallOrderThreshold) / 1e6} USDC`
-    : "10 USDC";
+    ? t("common.usdcSuffix", { amount: Number(state.smallOrderThreshold) / 1e6 })
+    : t("common.usdcSuffix", { amount: 10 });
 
   // Protocol fee in fiat (and USDC), used in the "amount too small" message
   // when a fiat-mode total can't cover it. Null until the price config loads.
@@ -450,17 +444,13 @@ export function Checkout(props: CheckoutProps) {
         display: "flex", alignItems: "center", justifyContent: "space-between",
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={{
-            width: 28, height: 28, borderRadius: 8, background: color.accent,
-            color: "#fff", display: "flex", alignItems: "center", justifyContent: "center",
-            fontWeight: weight.bold, fontSize: 14,
-          }}>P</div>
-          <span style={{ fontWeight: weight.semibold, fontSize: font.lg }}>P2P Checkout</span>
+          <P2PMark size={28} />
+          <span style={{ fontWeight: weight.semibold, fontSize: font.lg }}>{t("checkout.title")}</span>
           {demo && <span style={{
             padding: "2px 8px", borderRadius: radius.pill,
             background: color.accentSoft, color: color.accent,
             fontSize: font.xs, fontWeight: weight.semibold,
-          }}>DEMO</span>}
+          }}>{t("common.demo")}</span>}
         </div>
         {mode === "modal" && onClose && (
           <button onClick={onClose} style={{
@@ -479,12 +469,12 @@ export function Checkout(props: CheckoutProps) {
           <div>
             <CenterStatus
               icon={<PulseDot />}
-              title="Quick human check"
-              subtitle="To keep things fair, verify you're a real person. It takes a few seconds and you only do it once."
+              title={t("checkout.livenessTitle")}
+              subtitle={t("checkout.livenessSubtitle")}
             />
             {state.livenessError && (
               <div style={{ ...S.cardFlat, padding: 12, marginTop: 16, background: color.surfaceAlt, fontSize: font.sm }}>
-                {state.livenessError}
+                {displayError(state.livenessError, t)}
               </div>
             )}
             <button
@@ -492,11 +482,11 @@ export function Checkout(props: CheckoutProps) {
               disabled={state.livenessGate === "verifying"}
               onClick={() => { void startLivenessVerification(); }}
             >
-              {state.livenessGate === "verifying" ? "Verifying…" : "Verify I'm human"}
+              {state.livenessGate === "verifying" ? t("checkout.verifying") : t("checkout.verifyHuman")}
             </button>
             {onClose && (
               <button style={{ ...S.ghostBtn, width: "100%", marginTop: 8, height: 40 }} onClick={onClose}>
-                Close
+                {t("common.close")}
               </button>
             )}
           </div>
@@ -512,18 +502,18 @@ export function Checkout(props: CheckoutProps) {
           <div>
             <CenterStatus
               icon={<PulseDot />}
-              title="Finish your pending order first"
-              subtitle="Please complete or cancel your pending order before creating another one."
+              title={t("checkout.pendingTitle")}
+              subtitle={t("checkout.pendingSubtitle")}
             />
             <div style={{ ...S.cardFlat, padding: 14, marginTop: 16, background: color.surfaceAlt }}>
               <div style={S.rowBetween}>
-                <span style={S.label}>Pending order</span>
+                <span style={S.label}>{t("checkout.pendingOrder")}</span>
                 <span style={{ ...S.mono, fontSize: font.sm }}>#{rejection.orderId}</span>
               </div>
               <div style={{ ...S.rowBetween, marginTop: 6 }}>
-                <span style={S.label}>Amount</span>
+                <span style={S.label}>{t("common.amount")}</span>
                 <span style={{ ...S.body, ...S.num }}>
-                  {formatUnits(rejection.usdcAmount, USDC_DECIMALS)} USDC
+                  {t("common.usdcSuffix", { amount: formatUnits(rejection.usdcAmount, USDC_DECIMALS) })}
                 </span>
               </div>
             </div>
@@ -532,12 +522,12 @@ export function Checkout(props: CheckoutProps) {
                 style={{ ...S.primaryBtn, marginTop: 20 }}
                 onClick={() => onResumeRequest(rejection.orderId)}
               >
-                Resume that order
+                {t("checkout.resumeThatOrder")}
               </button>
             )}
             {onClose && (
               <button style={{ ...S.ghostBtn, width: "100%", marginTop: 8, height: 40 }} onClick={onClose}>
-                Close
+                {t("common.close")}
               </button>
             )}
           </div>
@@ -546,7 +536,7 @@ export function Checkout(props: CheckoutProps) {
         {/* PRE-ORDER: client provides placeOrder callback */}
         {state.phase === "checkout" && hasPlaceOrder && !rejection && !livenessBlock && (
           <div>
-            <p style={S.label}>Order Summary</p>
+            <p style={S.label}>{t("checkout.orderSummary")}</p>
             {amount && <h1 style={{ ...S.h1, marginTop: 4, fontSize: font.display }}><span style={S.num}>{amount}</span></h1>}
             {productName && (
               <div style={{ marginTop: 16, display: "flex", alignItems: "center", gap: 16 }}>
@@ -559,10 +549,10 @@ export function Checkout(props: CheckoutProps) {
             )}
             {(amount || productName) && <div style={S.divider} />}
             {currencies && currencies.length > 0 && selectedCurrency && (() => {
-              const selectedMeta = resolveCurrencyMeta(selectedCurrency);
+              const selectedMeta = resolveCurrencyMeta(selectedCurrency, locale);
               return (
               <div style={{ marginBottom: 16 }}>
-                <p style={{ ...S.label, marginBottom: 8 }}>Pay with</p>
+                <p style={{ ...S.label, marginBottom: 8 }}>{t("checkout.payWith")}</p>
                 <div ref={dropdownRef} style={{ position: "relative" }}>
                   <button
                     type="button"
@@ -589,7 +579,7 @@ export function Checkout(props: CheckoutProps) {
                     }}>
                       {currencies.map((c) => {
                         const active = selectedCurrency.symbol === c.symbol;
-                        const meta = resolveCurrencyMeta(c);
+                        const meta = resolveCurrencyMeta(c, locale);
                         return (
                           <button key={c.symbol} type="button"
                             onClick={() => { setSelectedCurrency(c); setDropdownOpen(false); }}
@@ -625,53 +615,53 @@ export function Checkout(props: CheckoutProps) {
               <div style={{ marginBottom: 16, padding: "14px 16px", background: color.surfaceAlt, borderRadius: radius.md, border: `1px solid ${color.border}` }}>
                 {isQuotePending ? (
                   <div style={S.rowBetween}>
-                    <span style={S.label}>Subtotal</span>
+                    <span style={S.label}>{t("checkout.subtotal")}</span>
                     <Skeleton width={84} />
                   </div>
                 ) : preview!.creditUsdc ? (
                   <>
                     <div style={S.rowBetween}>
-                      <span style={S.label}>Order</span>
+                      <span style={S.label}>{t("checkout.order")}</span>
                       <span style={{ ...S.body, ...S.num }}>{preview!.symbol} {preview!.gross}</span>
                     </div>
                     <div style={{ ...S.rowBetween, marginTop: 8 }}>
                       <span style={S.label}>
-                        Credit applied
-                        <span style={{ ...S.faint, marginLeft: 6 }}>({preview!.creditUsdc} USDC)</span>
+                        {t("checkout.creditApplied")}
+                        <span style={{ ...S.faint, marginLeft: 6 }}>{t("checkout.creditAppliedUsdc", { creditUsdc: preview!.creditUsdc })}</span>
                       </span>
                       <span style={{ ...S.body, ...S.num, color: color.accent }}>
                         −{preview!.symbol} {preview!.creditFiat}
                       </span>
                     </div>
                     <div style={{ ...S.rowBetween, marginTop: 8, paddingTop: 8, borderTop: `1px solid ${color.border}` }}>
-                      <span style={S.label}>Subtotal</span>
+                      <span style={S.label}>{t("checkout.subtotal")}</span>
                       <span style={{ ...S.body, ...S.num }}>{preview!.symbol} {preview!.subtotal}</span>
                     </div>
                   </>
                 ) : (
                   <div style={S.rowBetween}>
-                    <span style={S.label}>Subtotal</span>
+                    <span style={S.label}>{t("checkout.subtotal")}</span>
                     <span style={{ ...S.body, ...S.num }}>{preview!.symbol} {preview!.subtotal}</span>
                   </div>
                 )}
                 {!isQuotePending && preview!.fee && (
                   <>
                     <div style={{ ...S.rowBetween, marginTop: 8 }}>
-                      <span style={S.label}>Transaction Fee</span>
+                      <span style={S.label}>{t("checkout.transactionFee")}</span>
                       <span style={{ ...S.body, ...S.num, color: color.textMuted }}>{preview!.symbol} {preview!.fee}</span>
                     </div>
                     <p style={{ ...S.faint, margin: "4px 0 0", lineHeight: 1.4 }}>
-                      Waived on orders above {thresholdLabel}.
+                      {t("checkout.waivedAbove", { thresholdLabel })}
                     </p>
                   </>
                 )}
                 <div style={{ ...S.rowBetween, marginTop: 10, paddingTop: 10, borderTop: `1px solid ${color.border}` }}>
-                  <span style={{ ...S.label, color: color.text, fontWeight: weight.semibold }}>You pay</span>
+                  <span style={{ ...S.label, color: color.text, fontWeight: weight.semibold }}>{t("checkout.youPay")}</span>
                   {isQuotePending
                     ? <Skeleton width={100} height={16} />
                     : <span style={{ ...S.body, fontWeight: weight.bold, ...S.num }}>
                         {preview!.creditCoversFully
-                          ? "Free (credit covers)"
+                          ? t("checkout.freeCreditCovers")
                           : `${preview!.symbol} ${preview!.total}`}
                       </span>}
                 </div>
@@ -689,14 +679,18 @@ export function Checkout(props: CheckoutProps) {
               <div style={{ marginBottom: 12, padding: "12px 14px", background: color.dangerSoft, border: `1px solid color-mix(in srgb, ${color.danger} 25%, transparent)`, borderRadius: radius.md }}>
                 <span style={{ color: color.danger, fontSize: font.md, lineHeight: 1.5 }}>
                   {amountStatus === "too-small"
-                    ? `This amount is too small to process${feeFiatLabel ? ` — it doesn't cover the ${feeFiatLabel} transaction fee` : ""}. Please use a larger amount.`
-                    : "Couldn't load the exchange rate to price this order. Please refresh and try again."}
+                    ? t("checkout.tooSmallBody", {
+                        feeClause: feeFiatLabel
+                          ? t("checkout.tooSmallFeeClause", { feeFiatLabel })
+                          : "",
+                      })
+                    : t("checkout.rateLoadFailed")}
                 </span>
               </div>
             )}
             {state.error && (
               <div style={{ marginBottom: 12, padding: "10px 12px", background: color.dangerSoft, border: `1px solid color-mix(in srgb, ${color.danger} 25%, transparent)`, borderRadius: radius.md }}>
-                <span style={{ color: color.danger, fontSize: font.md }}>{state.error}</span>
+                <span style={{ color: color.danger, fontSize: font.md }}>{displayError(state.error, t)}</span>
               </div>
             )}
             <button
@@ -707,26 +701,26 @@ export function Checkout(props: CheckoutProps) {
               {isQuotePending ? (
                 <>
                   <Spinner size={14} />
-                  Loading quote…
+                  {t("common.loadingQuote")}
                 </>
               ) : amountStatus === "too-small" ? (
-                "Amount too small"
+                t("checkout.amountTooSmall")
               ) : amountStatus === "unavailable" ? (
-                "Rate unavailable"
+                t("checkout.rateUnavailable")
               ) : preview?.creditCoversFully ? (
-                "Redeem credit"
+                t("checkout.redeemCredit")
               ) : preview ? (
-                `Pay ${preview.symbol} ${preview.total}`
+                t("checkout.payAmount", { symbol: preview.symbol, total: preview.total })
               ) : (
-                "Pay now"
+                t("checkout.payNow")
               )}
             </button>
-            <p style={{ ...S.faint, textAlign: "center", marginTop: 12 }}>You'll pay in your local currency to complete this order.</p>
+            <p style={{ ...S.faint, textAlign: "center", marginTop: 12 }}>{t("checkout.localCurrencyHint")}</p>
           </div>
         )}
 
         {state.phase === "placing" && (
-          <CenterStatus icon={<Spinner />} title="Placing order…" subtitle="Waiting for your transaction to confirm." />
+          <CenterStatus icon={<Spinner />} title={t("checkout.placingTitle")} subtitle={t("checkout.placingSubtitle")} />
         )}
 
         {/* ORDER TRACKING — the P2P protocol flow */}
@@ -737,8 +731,8 @@ export function Checkout(props: CheckoutProps) {
             <div style={{ ...S.card, padding: "32px", marginTop: 16 }}>
 
               {state.phase === "placed" && (
-                <CenterStatus icon={<PulseDot />} title="Matching your order"
-                  subtitle={`Order #${state.orderId}: We're matching your cash payment with someone who will deliver USDC for this checkout. This typically takes 2-3 minutes.`} />
+                <CenterStatus icon={<PulseDot />} title={t("checkout.matchingTitle")}
+                  subtitle={t("checkout.matchingSubtitle", { orderId: state.orderId })} />
               )}
 
               {state.phase === "accepted" && (
@@ -753,12 +747,16 @@ export function Checkout(props: CheckoutProps) {
                       />
                     )}
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <p style={{ ...S.label, marginBottom: 2 }}>Pay exactly</p>
+                      <p style={{ ...S.label, marginBottom: 2 }}>{t("checkout.payExactly")}</p>
                       <h1 style={{ ...S.h1, fontSize: font.xxl, ...S.num, lineHeight: 1.1 }}>
                         {state.currency} {fiatDisplay}
                       </h1>
                       <p style={{ ...S.muted, marginTop: 4, marginBottom: 0 }}>
-                        for {productName ?? (usdcDisplay ? `${usdcDisplay} USDC` : "your order")}
+                        {productName
+                          ? t("checkout.forProduct", { productName })
+                          : usdcDisplay
+                            ? t("checkout.forUsdc", { usdc: usdcDisplay })
+                            : t("checkout.forYourOrder")}
                       </p>
                       {orderBreakdown && (
                         <button
@@ -772,7 +770,7 @@ export function Checkout(props: CheckoutProps) {
                           aria-expanded={breakdownExpanded}
                         >
                           <span style={{ display: "inline-block", transform: breakdownExpanded ? "rotate(90deg)" : "none", transition: "transform 0.15s" }}>▸</span>
-                          {breakdownExpanded ? "Hide breakdown" : "View breakdown"}
+                          {breakdownExpanded ? t("checkout.hideBreakdown") : t("checkout.viewBreakdown")}
                         </button>
                       )}
                     </div>
@@ -783,42 +781,42 @@ export function Checkout(props: CheckoutProps) {
                       {orderBreakdown.creditUsdc ? (
                         <>
                           <div style={S.rowBetween}>
-                            <span style={S.label}>Order</span>
+                            <span style={S.label}>{t("checkout.order")}</span>
                             <span style={{ ...S.body, ...S.num }}>{orderBreakdown.symbol} {orderBreakdown.gross}</span>
                           </div>
                           <div style={{ ...S.rowBetween, marginTop: 8 }}>
                             <span style={S.label}>
-                              Credit applied
-                              <span style={{ ...S.faint, marginLeft: 6 }}>({orderBreakdown.creditUsdc} USDC)</span>
+                              {t("checkout.creditApplied")}
+                              <span style={{ ...S.faint, marginLeft: 6 }}>{t("checkout.creditAppliedUsdc", { creditUsdc: orderBreakdown.creditUsdc })}</span>
                             </span>
                             <span style={{ ...S.body, ...S.num, color: color.accent }}>
                               −{orderBreakdown.symbol} {orderBreakdown.creditFiat}
                             </span>
                           </div>
                           <div style={{ ...S.rowBetween, marginTop: 8, paddingTop: 8, borderTop: `1px solid ${color.border}` }}>
-                            <span style={S.label}>Subtotal</span>
+                            <span style={S.label}>{t("checkout.subtotal")}</span>
                             <span style={{ ...S.body, ...S.num }}>{orderBreakdown.symbol} {orderBreakdown.subtotal}</span>
                           </div>
                         </>
                       ) : (
                         <div style={S.rowBetween}>
-                          <span style={S.label}>Subtotal</span>
+                          <span style={S.label}>{t("checkout.subtotal")}</span>
                           <span style={{ ...S.body, ...S.num }}>{orderBreakdown.symbol} {orderBreakdown.subtotal}</span>
                         </div>
                       )}
                       {orderBreakdown.fee && (
                         <>
                           <div style={{ ...S.rowBetween, marginTop: 8 }}>
-                            <span style={S.label}>Transaction Fee</span>
+                            <span style={S.label}>{t("checkout.transactionFee")}</span>
                             <span style={{ ...S.body, ...S.num, color: color.textMuted }}>{orderBreakdown.symbol} {orderBreakdown.fee}</span>
                           </div>
                           <p style={{ ...S.faint, margin: "4px 0 0", lineHeight: 1.4 }}>
-                            Waived on orders above {thresholdLabel}.
+                            {t("checkout.waivedAbove", { thresholdLabel })}
                           </p>
                         </>
                       )}
                       <div style={{ ...S.rowBetween, marginTop: 10, paddingTop: 10, borderTop: `1px solid ${color.border}` }}>
-                        <span style={{ ...S.label, color: color.text, fontWeight: weight.semibold }}>Total paid</span>
+                        <span style={{ ...S.label, color: color.text, fontWeight: weight.semibold }}>{t("checkout.totalPaid")}</span>
                         <span style={{ ...S.body, fontWeight: weight.bold, ...S.num }}>
                           {orderBreakdown.symbol} {orderBreakdown.total}
                         </span>
@@ -836,7 +834,7 @@ export function Checkout(props: CheckoutProps) {
                         background: color.accentSoft, color: color.accent,
                         fontSize: font.sm, fontWeight: weight.semibold, letterSpacing: "0.02em",
                       }}>
-                        Pay via {acceptedMeta.paymentMethod} and confirm
+                        {t("checkout.payViaAndConfirm", { paymentMethod: acceptedMeta.paymentMethod })}
                       </span>
                     </div>
                   )}
@@ -847,15 +845,18 @@ export function Checkout(props: CheckoutProps) {
                     <StepHeader
                       n={1}
                       done={paymentIntent}
-                      title={fiatDisplay ? `Send ${state.currency} ${fiatDisplay}` : "Send the payment"}
-                      subtitle={`To the ${acceptedMeta?.paymentAddressLabel ?? "payment address"} below, from any ${acceptedMeta?.paymentMethod ?? "payment"} app.`}
+                      title={fiatDisplay ? t("checkout.step1SendAmount", { currency: state.currency, fiat: fiatDisplay }) : t("checkout.step1SendPayment")}
+                      subtitle={t("checkout.step1Subtitle", {
+                        paymentAddressLabel: acceptedMeta?.paymentAddressLabel ?? t("common.paymentAddressFallback"),
+                        paymentMethod: acceptedMeta?.paymentMethod ?? t("common.paymentAppFallback"),
+                      })}
                     />
                   </div>
 
                   <div style={{ ...S.cardFlat, padding: "20px", background: color.surfaceAlt }}>
                     <div style={S.rowBetween}>
-                      <span style={S.label}>{acceptedMeta?.paymentMethod ?? "Payment"}</span>
-                      <span style={S.faint}>Order #{state.orderId}</span>
+                      <span style={S.label}>{acceptedMeta?.paymentMethod ?? t("common.payment")}</span>
+                      <span style={S.faint}>{t("common.orderHash", { orderId: state.orderId })}</span>
                     </div>
                     <div style={{ marginTop: 12 }}>
                       {compoundFields ? (
@@ -870,7 +871,7 @@ export function Checkout(props: CheckoutProps) {
                       ) : state.decryptedUpi ? (
                         <CopyRow value={state.decryptedUpi} copied={copied === "upi"} onCopy={() => copy(state.decryptedUpi!, "upi")} />
                       ) : (
-                        <p style={S.muted}>Decrypting payment details…</p>
+                        <p style={S.muted}>{t("checkout.decrypting")}</p>
                       )}
                     </div>
                     {/* INR gets a real payable QR (upi://pay deep link — any UPI
@@ -893,7 +894,7 @@ export function Checkout(props: CheckoutProps) {
                         state.currency === "INR"
                           ? `upi://pay?pa=${state.decryptedUpi}&am=${fiatDisplay}&cu=INR&tr=${state.orderId}`
                           : brlPayload ??
-                            `${COPY_PAGE_URL}/#${new URLSearchParams({ v: state.decryptedUpi!, l: acceptedMeta?.paymentAddressLabel ?? "Payment ID" }).toString()}`;
+                            `${COPY_PAGE_URL}/#${new URLSearchParams({ v: state.decryptedUpi!, l: acceptedMeta?.paymentAddressLabel ?? t("common.paymentId") }).toString()}`;
                       const isPayableQr = state.currency === "INR" || brlPayload !== null;
                       // NOTE: no tap-to-open UPI deep link here. A tappable
                       // `upi://pay` affordance was tried and pulled: on a real
@@ -922,11 +923,12 @@ export function Checkout(props: CheckoutProps) {
                               onClick={() => copy(brlPayload, "pix-code")}
                               style={{ ...S.secondaryBtn, width: "100%", marginTop: 12, borderColor: color.accent, color: color.accent }}
                             >
-                              {copied === "pix-code" ? "Pix code copied" : "Copy Pix code (Copia e Cola)"}
+                              {copied === "pix-code" ? t("checkout.pixCodeCopied") : t("checkout.copyPixCode")}
                             </button>
                           )}
                           {!isPayableQr && (() => {
-                            const cap = nonInrQrCaption(state.currency, acceptedMeta?.paymentAddressLabel ?? "payment");
+                            const label = acceptedMeta?.paymentAddressLabel ?? t("common.paymentAppFallback");
+                            const cap = { lead: t("checkout.qrScanLead", { label }), strong: t("checkout.qrNotPayable") };
                             return (
                               <p style={{ ...S.faint, color: color.textMuted, textAlign: "center", marginTop: 8 }}>
                                 {cap.lead}<strong style={{ color: color.text }}>{cap.strong}</strong>
@@ -939,7 +941,7 @@ export function Checkout(props: CheckoutProps) {
                   </div>
 
                   {state.error && (
-                    <div style={{ marginTop: 12, padding: "10px 12px", background: color.dangerSoft, borderRadius: radius.md, color: color.danger, fontSize: font.md }}>{state.error}</div>
+                    <div style={{ marginTop: 12, padding: "10px 12px", background: color.dangerSoft, borderRadius: radius.md, color: color.danger, fontSize: font.md }}>{displayError(state.error, t)}</div>
                   )}
 
                   {/* STEP 2 — confirm. Deliberately in normal flow: an
@@ -962,18 +964,25 @@ export function Checkout(props: CheckoutProps) {
                         borderRadius: radius.md, fontSize: font.md, color: color.text, lineHeight: 1.45,
                         animation: "p2p-nudge-in 0.25s ease-out",
                       }} role="status">
-                        <strong>Back from your {acceptedMeta?.paymentMethod ?? "payment"} app?</strong>{" "}
-                        {fiatDisplay ? `If you sent ${state.currency} ${fiatDisplay}, confirm below` : "If you've sent the payment, confirm below"} — the order won't settle until you do.
+                        {fiatDisplay
+                          ? t("checkout.backFromAppNudge", {
+                              paymentMethod: acceptedMeta?.paymentMethod ?? t("common.paymentAppFallback"),
+                              currency: state.currency,
+                              fiat: fiatDisplay,
+                            })
+                          : t("checkout.backFromAppNudgeNoAmount", {
+                              paymentMethod: acceptedMeta?.paymentMethod ?? t("common.paymentAppFallback"),
+                            })}
                       </div>
                     )}
 
                     <div style={{ marginBottom: 12 }}>
                       <StepHeader
                         n={2}
-                        title={timerExpired ? "This payment window closed" : "Confirm you've paid"}
+                        title={timerExpired ? t("checkout.windowClosedTitle") : t("checkout.confirmTitle")}
                         subtitle={timerExpired
                           ? undefined
-                          : "We can't see your bank transfer — your order stays open until you tap below."}
+                          : t("checkout.confirmSubtitle")}
                       />
                     </div>
 
@@ -997,12 +1006,12 @@ export function Checkout(props: CheckoutProps) {
                     >
                       {isMarkingPaid && <Spinner size={14} />}
                       {timerExpired
-                        ? "Payment window closed"
+                        ? t("checkout.paymentWindowClosed")
                         : isMarkingPaid
-                          ? "Confirming…"
+                          ? t("checkout.confirming")
                           : fiatDisplay
-                            ? `I've sent ${state.currency} ${fiatDisplay}`
-                            : "I've made the payment"}
+                            ? t("checkout.iveSent", { currency: state.currency, fiat: fiatDisplay })
+                            : t("checkout.iveMadePayment")}
                     </button>
 
                     {/* The 5-minute window is a deadline to *confirm*, not just
@@ -1013,27 +1022,27 @@ export function Checkout(props: CheckoutProps) {
                         color: acceptedRemaining < 60_000 ? color.danger : color.textFaint,
                         fontWeight: acceptedRemaining < 60_000 ? weight.semibold : weight.regular,
                       }}>
-                        Confirm within {formatCountdown(acceptedRemaining)} or the order auto-cancels.
+                        {t("checkout.confirmWithin", { countdown: formatCountdown(acceptedRemaining) })}
                       </p>
                     )}
 
                     {timerExpired && (
                       <div style={{ marginTop: 12, padding: "12px 14px", background: color.dangerSoft, border: `1px solid color-mix(in srgb, ${color.danger} 25%, transparent)`, borderRadius: radius.md }}>
                         <p style={{ fontSize: font.md, color: color.danger, margin: 0, lineHeight: 1.45, fontWeight: weight.semibold }}>
-                          Already sent the money? Don't send it again.
+                          {t("checkout.alreadySentDontResend")}
                         </p>
                         <p style={{ ...S.muted, margin: "6px 0 8px", lineHeight: 1.45 }}>
-                          This order can no longer be confirmed on-chain. Contact support with the order number below and it'll be resolved.
+                          {t("checkout.windowExpiredBody")}
                         </p>
-                        <CopyRow value={`Order #${state.orderId}`} copied={copied === "order-id"} onCopy={() => copy(String(state.orderId), "order-id")} />
+                        <CopyRow value={t("common.orderHash", { orderId: state.orderId })} copied={copied === "order-id"} onCopy={() => copy(String(state.orderId), "order-id")} />
                       </div>
                     )}
 
                     {!showCancelConfirm ? (
-                      <button style={{ ...S.ghostBtn, width: "100%", marginTop: 8, height: 40 }} onClick={() => setShowCancelConfirm(true)} disabled={isCancelling}>Cancel order</button>
+                      <button style={{ ...S.ghostBtn, width: "100%", marginTop: 8, height: 40 }} onClick={() => setShowCancelConfirm(true)} disabled={isCancelling}>{t("checkout.cancelOrder")}</button>
                     ) : (
                       <div style={{ marginTop: 12, padding: 14, borderRadius: radius.md, background: color.dangerSoft, border: `1px solid color-mix(in srgb, ${color.danger} 25%, transparent)` }}>
-                        <p style={{ fontSize: font.md, color: color.danger, marginTop: 0 }}>Cancel this order?</p>
+                        <p style={{ fontSize: font.md, color: color.danger, marginTop: 0 }}>{t("checkout.cancelConfirm")}</p>
                         <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
                           <button
                             style={{ ...S.secondaryBtn, flex: 1, height: 38, borderColor: color.danger, color: color.danger, opacity: isCancelling ? 0.6 : 1, cursor: isCancelling ? "wait" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}
@@ -1041,14 +1050,14 @@ export function Checkout(props: CheckoutProps) {
                             disabled={isCancelling}
                           >
                             {isCancelling && <Spinner size={14} />}
-                            {isCancelling ? "Cancelling…" : "Yes, cancel"}
+                            {isCancelling ? t("checkout.cancelling") : t("checkout.yesCancel")}
                           </button>
                           <button
                             style={{ ...S.secondaryBtn, flex: 1, height: 38 }}
                             onClick={() => setShowCancelConfirm(false)}
                             disabled={isCancelling}
                           >
-                            Keep order
+                            {t("checkout.keepOrder")}
                           </button>
                         </div>
                       </div>
@@ -1093,8 +1102,10 @@ export function Checkout(props: CheckoutProps) {
                       fontWeight: returnedFromPayment ? weight.semibold : weight.medium,
                     }}>
                       {returnedFromPayment
-                        ? `Back from your ${acceptedMeta?.paymentMethod ?? "payment"} app? Confirm to settle your order.`
-                        : "Step 2 · Confirm once you've paid"}
+                        ? t("checkout.stickyBackConfirm", {
+                            paymentMethod: acceptedMeta?.paymentMethod ?? t("common.paymentAppFallback"),
+                          })
+                        : t("checkout.stickyStep2")}
                     </p>
                     <button
                       className={returnedFromPayment ? "p2p-attn" : undefined}
@@ -1109,40 +1120,40 @@ export function Checkout(props: CheckoutProps) {
                     >
                       {isMarkingPaid && <Spinner size={14} />}
                       {isMarkingPaid
-                        ? "Confirming…"
+                        ? t("checkout.confirming")
                         : fiatDisplay
-                          ? `I've sent ${state.currency} ${fiatDisplay}`
-                          : "I've made the payment"}
+                          ? t("checkout.iveSent", { currency: state.currency, fiat: fiatDisplay })
+                          : t("checkout.iveMadePayment")}
                     </button>
                   </div>
                 </div>
               )}
 
               {state.phase === "paid" && (
-                <CenterStatus icon={<Spinner />} title="Verifying your payment" subtitle="Confirming receipt. Usually under a minute." />
+                <CenterStatus icon={<Spinner />} title={t("checkout.verifyingTitle")} subtitle={t("checkout.verifyingSubtitle")} />
               )}
 
               {state.phase === "completed" && (
                 <div style={{ textAlign: "center" }}>
                   <SuccessIcon />
                   <h1 style={{ ...S.h1, fontSize: font.xxl }}>
-                    {state.creditOnly ? "Credit redeemed" : "Payment complete"}
+                    {state.creditOnly ? t("checkout.creditRedeemed") : t("checkout.paymentComplete")}
                   </h1>
                   {state.creditOnly ? (
                     <p style={{ ...S.muted, marginTop: 8 }}>
-                      Order fulfilled from your existing credit. No fiat was charged.
+                      {t("checkout.creditOnlyBody")}
                     </p>
                   ) : (
-                    usdcDisplay && <p style={{ ...S.muted, marginTop: 8 }}>{usdcDisplay} USDC delivered.</p>
+                    usdcDisplay && <p style={{ ...S.muted, marginTop: 8 }}>{t("checkout.usdcDelivered", { usdc: usdcDisplay })}</p>
                   )}
-                  {onClose && <button style={{ ...S.primaryBtn, marginTop: 20 }} onClick={onClose}>Done</button>}
+                  {onClose && <button style={{ ...S.primaryBtn, marginTop: 20 }} onClick={onClose}>{t("common.done")}</button>}
                 </div>
               )}
 
               {state.phase === "cancelled" && (
                 <div style={{ textAlign: "center" }}>
-                  <CenterStatus icon={<XIcon />} title="Order cancelled" subtitle="You were not charged." variant="danger" />
-                  {onClose && <button style={{ ...S.primaryBtn, marginTop: 8 }} onClick={onClose}>Done</button>}
+                  <CenterStatus icon={<XIcon />} title={t("checkout.orderCancelled")} subtitle={t("checkout.notCharged")} variant="danger" />
+                  {onClose && <button style={{ ...S.primaryBtn, marginTop: 8 }} onClick={onClose}>{t("common.done")}</button>}
                 </div>
               )}
             </div>
@@ -1156,8 +1167,8 @@ export function Checkout(props: CheckoutProps) {
                 <circle cx="12" cy="12" r="10" /><line x1="15" y1="9" x2="9" y2="15" /><line x1="9" y1="9" x2="15" y2="15" />
               </svg>
             </div>
-            <h2 style={S.h2}>{state.error}</h2>
-            {hasPlaceOrder && <button style={{ ...S.primaryBtn, marginTop: 20 }} onClick={handlePlaceOrder}>Try again</button>}
+            <h2 style={S.h2}>{displayError(state.error, t)}</h2>
+            {hasPlaceOrder && <button style={{ ...S.primaryBtn, marginTop: 20 }} onClick={handlePlaceOrder}>{t("common.tryAgain")}</button>}
           </div>
         )}
       </div>

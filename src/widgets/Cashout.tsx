@@ -15,11 +15,13 @@ import {
   Stepper,
   Skeleton,
   injectKeyframes,
+  P2PMark,
 } from "../ui/components";
 import { PaymentAddressInput } from "../ui/PaymentAddressInput";
 import { CurrencyRow } from "../ui/CurrencyRow";
 import { ERC20_READ_ABI, DIAMOND_ABI, readSmallOrderFixedFee } from "../core/contracts";
 import { resolveCurrencyMeta } from "../core/currency-meta";
+import { I18nProvider, useT, useI18n, translateError } from "../i18n";
 
 const USDC_DECIMALS = 6;
 
@@ -38,6 +40,14 @@ const USDC_DECIMALS = 6;
  * protocol term to stay accurate to what the Diamond does.
  */
 export function Cashout(props: CashoutProps) {
+  return (
+    <I18nProvider locale={props.locale}>
+      <CashoutInner {...props} />
+    </I18nProvider>
+  );
+}
+
+function CashoutInner(props: CashoutProps) {
   const {
     usdcAddress, diamondAddress, signer, currencies,
     chainId = 84532, rpcUrl, subgraphUrl, fiatAmountLimit,
@@ -46,6 +56,8 @@ export function Cashout(props: CashoutProps) {
     onClose, onOrderPlaced, onComplete, onCancelled, onError,
   } = props;
   const themeStyle = themeToCssVars(theme);
+  const t = useT();
+  const { locale, localeTag } = useI18n();
 
   useEffect(injectKeyframes, []);
 
@@ -198,7 +210,7 @@ export function Cashout(props: CashoutProps) {
   // produces 6-dec strings which are visually noisy here. The Max button
   // still sets the full-precision value into the input.
   const balanceDisplay = balance !== null
-    ? (Number(balance) / 10 ** USDC_DECIMALS).toLocaleString(undefined, { maximumFractionDigits: 2 })
+    ? (Number(balance) / 10 ** USDC_DECIMALS).toLocaleString(localeTag, { maximumFractionDigits: 2 })
     : null;
 
   // Small-order fee applies when principal is at or below the threshold.
@@ -221,15 +233,15 @@ export function Cashout(props: CashoutProps) {
   // USDC side surfaces the fee as a separate line so the user knows their
   // wallet is debited `principal + fee`, matching the on-chain charge.
   const thresholdLabel = smallOrderThreshold !== null
-    ? `${Number(smallOrderThreshold) / 1e6} USDC`
-    : "10 USDC";
+    ? t("common.usdcSuffix", { amount: Number(smallOrderThreshold) / 1e6 })
+    : t("common.usdcSuffix", { amount: 10 });
   const preview = (() => {
     if (!parsedAmount || !sellPrice) return null;
     const subtotalFiat = usdcToFiat(parsedAmount, sellPrice);
     return {
       receive: (Number(subtotalFiat) / 1e6).toFixed(2),
       fee: feeUsdc > 0n ? formatUnits(feeUsdc, USDC_DECIMALS) : null,
-      totalCharge: (Number((totalCharge ?? 0n)) / 10 ** USDC_DECIMALS).toLocaleString(undefined, { maximumFractionDigits: 6 }),
+      totalCharge: (Number((totalCharge ?? 0n)) / 10 ** USDC_DECIMALS).toLocaleString(localeTag, { maximumFractionDigits: 6 }),
       principal: formatUnits(parsedAmount, USDC_DECIMALS),
       symbol: selectedCurrency.symbol,
     };
@@ -257,6 +269,10 @@ export function Cashout(props: CashoutProps) {
     ["placed", "accepted", "encrypting", "paid", "completed", "cancelled"].includes(state.phase) ||
     (state.phase === "error" && state.orderId !== null);
 
+  const errorMessage = state.error
+    ? translateError(state.error, t)
+    : t("report.unknownError");
+
   const content = (
     <div style={{ ...themeStyle, fontFamily: "var(--p2p-font, inherit)", color: color.text }}>
       <div style={{
@@ -264,12 +280,8 @@ export function Cashout(props: CashoutProps) {
         display: "flex", alignItems: "center", justifyContent: "space-between",
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={{
-            width: 28, height: 28, borderRadius: 8, background: color.accent,
-            color: "#fff", display: "flex", alignItems: "center", justifyContent: "center",
-            fontWeight: weight.bold, fontSize: 14,
-          }}>P</div>
-          <span style={{ fontWeight: weight.semibold, fontSize: font.lg }}>P2P Withdraw</span>
+          <P2PMark size={28} />
+          <span style={{ fontWeight: weight.semibold, fontSize: font.lg }}>{t("cashout.title")}</span>
         </div>
         {mode === "modal" && onClose && (
           <button onClick={onClose} style={{
@@ -288,21 +300,21 @@ export function Cashout(props: CashoutProps) {
               // Fiat-denominated: the payout is integrator-fixed — show it as
               // the headline, no editable amount input.
               <div style={{ marginBottom: 2 }}>
-                <p style={{ ...S.label, marginBottom: 2 }}>You'll receive</p>
+                <p style={{ ...S.label, marginBottom: 2 }}>{t("cashout.youllReceive")}</p>
                 <h1 style={{ ...S.h1, fontSize: font.display, ...S.num, margin: 0 }}>
                   {selectedCurrency.symbol} {(Number(fiatPayoutAmount) / 1e6).toFixed(2)}
                 </h1>
               </div>
             ) : (
               <>
-                <p style={S.label}>Amount to withdraw</p>
+                <p style={S.label}>{t("cashout.amountToWithdraw")}</p>
                 <div style={{ position: "relative", marginTop: 6 }}>
                   <input
                     type="text"
                     inputMode="decimal"
                     value={amountInput}
                     onChange={(e) => setAmountInput(e.target.value)}
-                    placeholder="0.00"
+                    placeholder={t("cashout.placeholderAmount")}
                     style={{
                       width: "100%", boxSizing: "border-box",
                       padding: "12px 60px 12px 14px", height: 52,
@@ -324,8 +336,8 @@ export function Cashout(props: CashoutProps) {
             <div style={{ ...S.rowBetween, marginTop: 6 }}>
               <span style={{ ...S.faint }}>
                 {balanceDisplay !== null
-                  ? `Balance: ${balanceDisplay} USDC`
-                  : "Loading balance…"}
+                  ? t("cashout.balance", { balance: balanceDisplay })
+                  : t("cashout.loadingBalance")}
               </span>
               {!fiatMode && balance !== null && balance > 0n && (
                 <button
@@ -335,19 +347,19 @@ export function Cashout(props: CashoutProps) {
                     border: "none", background: "transparent", color: color.accent,
                     fontSize: font.sm, fontWeight: weight.semibold, cursor: "pointer", padding: 0,
                   }}
-                >Max</button>
+                >{t("cashout.max")}</button>
               )}
             </div>
             {insufficientBalance && (
               <p style={{ color: color.danger, fontSize: font.sm, marginTop: 4, marginBottom: 0 }}>
-                Insufficient USDC balance.
+                {t("cashout.insufficientBalance")}
               </p>
             )}
 
             {/* Currency picker */}
             {currencies.length > 0 && (
               <div style={{ marginTop: 20, marginBottom: 16 }}>
-                <p style={{ ...S.label, marginBottom: 8 }}>Receive in</p>
+                <p style={{ ...S.label, marginBottom: 8 }}>{t("cashout.receiveIn")}</p>
                 <div ref={dropdownRef} style={{ position: "relative" }}>
                   <button
                     type="button"
@@ -360,7 +372,7 @@ export function Cashout(props: CashoutProps) {
                       color: color.text, cursor: "pointer",
                     }}
                   >
-                    <CurrencyRow meta={resolveCurrencyMeta(selectedCurrency)} />
+                    <CurrencyRow meta={resolveCurrencyMeta(selectedCurrency, locale)} />
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                       strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
                       style={{ color: color.textMuted, transform: dropdownOpen ? "rotate(180deg)" : "none", transition: "transform 0.15s" }}>
@@ -375,7 +387,7 @@ export function Cashout(props: CashoutProps) {
                     }}>
                       {currencies.map((c) => {
                         const active = selectedCurrency.symbol === c.symbol;
-                        const meta = resolveCurrencyMeta(c);
+                        const meta = resolveCurrencyMeta(c, locale);
                         return (
                           <button key={c.symbol} type="button"
                             onClick={() => { setSelectedCurrency(c); setDropdownOpen(false); }}
@@ -414,33 +426,33 @@ export function Cashout(props: CashoutProps) {
                     leads with the USDC side (what the wallet is debited). */}
                 {!fiatMode && (
                   <div style={S.rowBetween}>
-                    <span style={{ ...S.label, color: color.text, fontWeight: weight.semibold }}>You receive</span>
+                    <span style={{ ...S.label, color: color.text, fontWeight: weight.semibold }}>{t("cashout.youReceive")}</span>
                     {isQuotePending
                       ? <Skeleton width={110} height={16} />
                       : <span style={{ ...S.body, fontWeight: weight.bold, ...S.num }}>{preview!.symbol} {preview!.receive}</span>}
                   </div>
                 )}
                 <div style={{ ...S.rowBetween, marginTop: fiatMode ? 0 : 8 }}>
-                  <span style={S.label}>{fiatMode ? "You sell" : "For"}</span>
+                  <span style={S.label}>{fiatMode ? t("cashout.youSell") : t("cashout.for")}</span>
                   {isQuotePending
                     ? <Skeleton width={70} />
-                    : <span style={{ ...S.body, ...S.num, color: color.textMuted }}>{preview!.principal} USDC</span>}
+                    : <span style={{ ...S.body, ...S.num, color: color.textMuted }}>{t("common.usdcSuffix", { amount: preview!.principal })}</span>}
                 </div>
                 {!isQuotePending && preview!.fee && (
                   <>
                     <div style={{ ...S.rowBetween, marginTop: 8 }}>
-                      <span style={S.label}>Service fee</span>
-                      <span style={{ ...S.body, ...S.num, color: color.textMuted }}>+ {preview!.fee} USDC</span>
+                      <span style={S.label}>{t("cashout.serviceFee")}</span>
+                      <span style={{ ...S.body, ...S.num, color: color.textMuted }}>{t("cashout.feePlusUsdc", { fee: preview!.fee })}</span>
                     </div>
                     <p style={{ ...S.faint, margin: "4px 0 0", lineHeight: 1.4 }}>
-                      Waived on orders above {thresholdLabel}.
+                      {t("cashout.waivedAbove", { thresholdLabel })}
                     </p>
                   </>
                 )}
                 {!isQuotePending && preview!.fee && (
                   <div style={{ ...S.rowBetween, marginTop: 10, paddingTop: 10, borderTop: `1px solid ${color.border}` }}>
-                    <span style={{ ...S.label, color: color.text, fontWeight: weight.semibold }}>Total charged</span>
-                    <span style={{ ...S.body, fontWeight: weight.semibold, ...S.num }}>{preview!.totalCharge} USDC</span>
+                    <span style={{ ...S.label, color: color.text, fontWeight: weight.semibold }}>{t("cashout.totalCharged")}</span>
+                    <span style={{ ...S.body, fontWeight: weight.semibold, ...S.num }}>{t("common.usdcSuffix", { amount: preview!.totalCharge })}</span>
                   </div>
                 )}
               </div>
@@ -459,8 +471,8 @@ export function Cashout(props: CashoutProps) {
               <div style={{ marginTop: 12, padding: "12px 14px", background: color.dangerSoft, border: `1px solid color-mix(in srgb, ${color.danger} 25%, transparent)`, borderRadius: radius.md }}>
                 <span style={{ color: color.danger, fontSize: font.md, lineHeight: 1.5 }}>
                   {fiatTooSmall
-                    ? "This payout is too small to withdraw. Please use a larger amount."
-                    : "Couldn't load the exchange rate for this payout. Please try again."}
+                    ? t("cashout.payoutTooSmallBody")
+                    : t("cashout.rateLoadFailed")}
                 </span>
               </div>
             )}
@@ -479,16 +491,16 @@ export function Cashout(props: CashoutProps) {
               {isQuotePending ? (
                 <>
                   <Spinner size={14} />
-                  Loading quote…
+                  {t("common.loadingQuote")}
                 </>
               ) : fiatTooSmall ? (
-                "Payout too small"
+                t("cashout.payoutTooSmall")
               ) : fiatRateUnavailable ? (
-                "Rate unavailable"
+                t("common.rateUnavailable")
               ) : preview ? (
-                `Withdraw ${preview.symbol} ${preview.receive}`
+                t("cashout.withdrawAmount", { symbol: preview.symbol, receive: preview.receive })
               ) : (
-                "Withdraw"
+                t("cashout.withdraw")
               )}
             </button>
           </div>
@@ -499,8 +511,8 @@ export function Cashout(props: CashoutProps) {
           <div style={{ ...S.card, padding: "32px" }}>
             <CenterStatus
               icon={<Spinner />}
-              title="Submitting withdrawal…"
-              subtitle="Setting up your withdrawal. Confirm any wallet prompts that pop up."
+              title={t("cashout.submittingTitle")}
+              subtitle={t("cashout.submittingSubtitle")}
             />
           </div>
         )}
@@ -514,8 +526,15 @@ export function Cashout(props: CashoutProps) {
               {state.phase === "placed" && (
                 <CenterStatus
                   icon={<PulseDot />}
-                  title="Matching your order"
-                  subtitle={`Order #${state.orderId}: We're matching your ${usdcDisplay ?? ""} USDC withdrawal with someone who will pay${state.currency ? ` ${state.currency.symbol}` : ""} into your ${state.currency?.paymentMethod ?? "account"}. This typically takes 2-3 minutes.`}
+                  title={t("cashout.matchingTitle")}
+                  subtitle={t("cashout.matchingSubtitle", {
+                    orderId: state.orderId,
+                    usdc: usdcDisplay ?? "",
+                    currencyClause: state.currency ? ` ${state.currency.symbol}` : "",
+                    paymentMethod: state.currency
+                      ? resolveCurrencyMeta(state.currency, locale).paymentMethod
+                      : t("common.paymentAppFallback"),
+                  })}
                 />
               )}
 
@@ -523,20 +542,20 @@ export function Cashout(props: CashoutProps) {
                 <div>
                   <CenterStatus
                     icon={<Spinner />}
-                    title="Sending payment details"
-                    subtitle="Securely sharing your payout details."
+                    title={t("cashout.sendingDetailsTitle")}
+                    subtitle={t("cashout.sendingDetailsSubtitle")}
                   />
                   <div style={{ ...S.cardFlat, padding: 14, marginTop: 16, background: color.surfaceAlt }}>
                     <div style={S.rowBetween}>
-                      <span style={S.label}>Order</span>
+                      <span style={S.label}>{t("common.order")}</span>
                       <span style={{ ...S.mono, fontSize: font.sm }}>#{state.orderId}</span>
                     </div>
                     <div style={S.rowBetween}>
-                      <span style={S.label}>Amount</span>
-                      <span style={{ ...S.mono, fontSize: font.sm }}>{usdcDisplay} USDC</span>
+                      <span style={S.label}>{t("common.amount")}</span>
+                      <span style={{ ...S.mono, fontSize: font.sm }}>{t("common.usdcSuffix", { amount: usdcDisplay })}</span>
                     </div>
                     <div style={S.rowBetween}>
-                      <span style={S.label}>Receive to</span>
+                      <span style={S.label}>{t("cashout.receiveTo")}</span>
                       <span style={{ ...S.mono, fontSize: font.sm }}>{state.paymentAddress}</span>
                     </div>
                   </div>
@@ -546,11 +565,15 @@ export function Cashout(props: CashoutProps) {
               {state.phase === "paid" && (
                 <CenterStatus
                   icon={<Spinner />}
-                  title="Payment in progress"
+                  title={t("cashout.paymentInProgress")}
                   subtitle={
                     fiatDisplay && state.currency
-                      ? `Watch for ${state.currency.symbol} ${fiatDisplay} arriving via ${state.currency.paymentMethod}.`
-                      : "Watch for the fiat to arrive in your account."
+                      ? t("cashout.watchForArrival", {
+                          symbol: state.currency.symbol,
+                          fiat: fiatDisplay,
+                          paymentMethod: resolveCurrencyMeta(state.currency, locale).paymentMethod,
+                        })
+                      : t("cashout.watchForFiat")
                   }
                 />
               )}
@@ -558,25 +581,28 @@ export function Cashout(props: CashoutProps) {
               {state.phase === "completed" && (
                 <div style={{ textAlign: "center" }}>
                   <SuccessIcon />
-                  <h1 style={{ ...S.h1, fontSize: font.xxl, marginTop: 8 }}>Withdrawn!</h1>
+                  <h1 style={{ ...S.h1, fontSize: font.xxl, marginTop: 8 }}>{t("cashout.withdrawn")}</h1>
                   {fiatDisplay && state.currency && (
                     <p style={{ ...S.muted, marginTop: 8 }}>
-                      You received <strong>{state.currency.symbol} {fiatDisplay}</strong> for{" "}
-                      <strong>{usdcDisplay} USDC</strong>.
+                      {t("cashout.receivedFor", {
+                        symbol: state.currency.symbol,
+                        fiat: fiatDisplay,
+                        usdc: usdcDisplay,
+                      })}
                     </p>
                   )}
                   <div style={{ ...S.cardFlat, padding: 14, marginTop: 18, background: color.surfaceAlt, textAlign: "left" as const }}>
                     <div style={S.rowBetween}>
-                      <span style={S.label}>Order</span>
+                      <span style={S.label}>{t("common.order")}</span>
                       <span style={{ ...S.mono, fontSize: font.sm }}>#{state.orderId}</span>
                     </div>
                     <div style={S.rowBetween}>
-                      <span style={S.label}>Paid to</span>
+                      <span style={S.label}>{t("cashout.paidTo")}</span>
                       <span style={{ ...S.mono, fontSize: font.sm }}>{state.paymentAddress}</span>
                     </div>
                   </div>
                   {onClose && (
-                    <button style={{ ...S.primaryBtn, marginTop: 20 }} onClick={onClose}>Done</button>
+                    <button style={{ ...S.primaryBtn, marginTop: 20 }} onClick={onClose}>{t("common.done")}</button>
                   )}
                 </div>
               )}
@@ -585,13 +611,13 @@ export function Cashout(props: CashoutProps) {
                 <div>
                   <CenterStatus
                     icon={<XIcon />}
-                    title="Order cancelled"
-                    subtitle="The order was cancelled and your funds were returned. You can try again any time."
+                    title={t("cashout.orderCancelled")}
+                    subtitle={t("cashout.cancelledSubtitle")}
                     variant="warning"
                   />
                   {canRetryPlace && (
                     <button style={{ ...S.primaryBtn, marginTop: 20 }} onClick={() => retryPlace()}>
-                      Try again
+                      {t("common.tryAgain")}
                     </button>
                   )}
                   {onClose && (
@@ -600,7 +626,7 @@ export function Cashout(props: CashoutProps) {
                         ? { ...S.ghostBtn, width: "100%", marginTop: 8, height: 40 }
                         : { ...S.primaryBtn, marginTop: 20 }}
                       onClick={onClose}
-                    >Close</button>
+                    >{t("common.close")}</button>
                   )}
                 </div>
               )}
@@ -609,23 +635,21 @@ export function Cashout(props: CashoutProps) {
                 <div>
                   <CenterStatus
                     icon={<XIcon />}
-                    title="Couldn't deliver payment details"
-                    subtitle={state.error ?? "Unknown error"}
+                    title={t("cashout.deliverFailedTitle")}
+                    subtitle={errorMessage}
                     variant="danger"
                   />
                   <div style={{ ...S.cardFlat, padding: 12, marginTop: 16, fontSize: font.md, color: color.textMuted, background: color.surfaceAlt }}>
-                    Your offramp order is still active on-chain (#{state.orderId}).
-                    The merchant accepted; we couldn't deliver your encrypted payment
-                    address. Retrying re-runs encryption + delivery against the same order.
+                    {t("cashout.deliverFailedBody", { orderId: state.orderId })}
                   </div>
                   {canRetry && (
                     <button style={{ ...S.primaryBtn, marginTop: 16 }} onClick={() => retryDeliver()}>
-                      Retry delivery
+                      {t("cashout.retryDelivery")}
                     </button>
                   )}
                   {onClose && (
                     <button style={{ ...S.ghostBtn, width: "100%", marginTop: 8, height: 40 }} onClick={onClose}>
-                      Close
+                      {t("common.close")}
                     </button>
                   )}
                 </div>
@@ -644,16 +668,16 @@ export function Cashout(props: CashoutProps) {
                 <line x1="9" y1="9" x2="15" y2="15" />
               </svg>
             </div>
-            <h2 style={{ ...S.h2, fontSize: font.xl, marginBottom: 8 }}>Couldn't place withdrawal</h2>
+            <h2 style={{ ...S.h2, fontSize: font.xl, marginBottom: 8 }}>{t("cashout.placeFailedTitle")}</h2>
             <p style={{ ...S.muted, lineHeight: 1.5, maxWidth: 380, margin: "0 auto 20px" }}>
-              {state.error}
+              {errorMessage}
             </p>
             <button style={S.primaryBtn} onClick={reset}>
-              Back to form
+              {t("cashout.backToForm")}
             </button>
             {onClose && (
               <button style={{ ...S.ghostBtn, width: "100%", marginTop: 8, height: 40 }} onClick={onClose}>
-                Close
+                {t("common.close")}
               </button>
             )}
           </div>

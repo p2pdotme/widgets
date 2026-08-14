@@ -31,6 +31,7 @@ import { grossFiatForOrder, computeAmountResolution, type AmountResolution } fro
 import { keepOnlyB2BPending } from "./b2b-orders";
 import { computeLivenessGate, createLivenessSession, redeemLivenessAttestation, openVerifyPopup } from "./liveness";
 import {
+  P2PError,
   toP2PError,
   noEligibleMerchantsError,
   missingRoutingInputsError,
@@ -45,7 +46,7 @@ interface OrderState {
   fiatAmount: bigint | null;
   currency: string;
   decryptedUpi: string | null;
-  error: string | null;
+  error: P2PError | null;
   // Pre-order quote — `buyPrice` is fiat-per-USDC at 6 decimals, fetched from
   // the diamond's `getPriceConfig`. Used to derive the routing `fiatAmount`
   // and to render the price breakdown before the user clicks "Pay now".
@@ -95,7 +96,7 @@ interface OrderState {
   // the integrator's gate is off. Passed to screening as `isLivenessVerified`
   // so a cleared user bypasses a `liveliness_required` response.
   livenessCleared: boolean;
-  livenessError: string | null;
+  livenessError: P2PError | null;
 }
 
 type OrderAction =
@@ -106,8 +107,8 @@ type OrderAction =
   | { type: "PAID" }
   | { type: "COMPLETED" }
   | { type: "CANCELLED" }
-  | { type: "ERROR"; message: string }
-  | { type: "INLINE_ERROR"; message: string | null }
+  | { type: "ERROR"; error: P2PError }
+  | { type: "INLINE_ERROR"; error: P2PError | null }
   | { type: "PRICE_CONFIG"; currency: string; buyPrice: bigint; smallOrderThreshold: bigint; smallOrderFixedFee: bigint }
   | { type: "PRICE_CONFIG_FAILED" }
   // Clears a stale failure flag at the start of a fresh price-config read
@@ -131,7 +132,7 @@ type OrderAction =
   | { type: "LIVENESS_REQUIRED" }
   | { type: "LIVENESS_VERIFYING" }
   | { type: "LIVENESS_VERIFIED" }
-  | { type: "LIVENESS_VERIFY_FAILED"; message: string };
+  | { type: "LIVENESS_VERIFY_FAILED"; error: P2PError };
 
 // Exported for unit tests (order-machine internals are not re-exported from the
 // package entrypoints, so this doesn't widen the public API).
@@ -162,8 +163,8 @@ export function reducer(state: OrderState, action: OrderAction): OrderState {
     case "PAID": return { ...state, phase: "paid", error: null };
     case "COMPLETED": return { ...state, phase: "completed" };
     case "CANCELLED": return { ...state, phase: "cancelled", error: null };
-    case "ERROR": return { ...state, phase: "error", error: action.message };
-    case "INLINE_ERROR": return { ...state, error: action.message };
+    case "ERROR": return { ...state, phase: "error", error: action.error };
+    case "INLINE_ERROR": return { ...state, error: action.error };
     case "PRICE_CONFIG": return {
       ...state, currency: action.currency, buyPrice: action.buyPrice,
       smallOrderThreshold: action.smallOrderThreshold, smallOrderFixedFee: action.smallOrderFixedFee,
@@ -194,7 +195,7 @@ export function reducer(state: OrderState, action: OrderAction): OrderState {
     case "LIVENESS_REQUIRED": return { ...state, phase: "checkout", livenessGate: "required", error: null };
     case "LIVENESS_VERIFYING": return { ...state, livenessGate: "verifying", livenessError: null };
     case "LIVENESS_VERIFIED": return { ...state, livenessGate: "ok", livenessCleared: true, livenessError: null };
-    case "LIVENESS_VERIFY_FAILED": return { ...state, livenessGate: "required", livenessError: action.message };
+    case "LIVENESS_VERIFY_FAILED": return { ...state, livenessGate: "required", livenessError: action.error };
     default: return state;
   }
 }
@@ -677,13 +678,34 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
     // click can't fire a zero/negative order before the rate lands (or when
     // the entered total is too small to cover the fee).
     if (!opts.demo && opts.fiatChargeAmount !== undefined && resolvedUsdcAmount === undefined) {
-      const message =
+      const inline =
         amountResolution.status === "too-small"
-          ? "This amount is too small to process — it doesn't cover the transaction fee. Please use a larger amount."
+          ? new P2PError({
+              code: "INPUT_INVALID",
+              category: "validation",
+              userMessage:
+                "This amount is too small to process — it doesn't cover the transaction fee. Please use a larger amount.",
+              i18nKey: "checkout.tooSmallInline",
+              retryable: false,
+            })
           : amountResolution.status === "unavailable"
-            ? "Couldn't load the exchange rate to price this order. Please try again."
-            : "Still loading the exchange rate — please wait a moment and try again.";
-      dispatch({ type: "INLINE_ERROR", message });
+            ? new P2PError({
+                code: "INPUT_INVALID",
+                category: "validation",
+                userMessage:
+                  "Couldn't load the exchange rate to price this order. Please try again.",
+                i18nKey: "checkout.rateLoadFailed",
+                retryable: true,
+              })
+            : new P2PError({
+                code: "INPUT_INVALID",
+                category: "validation",
+                userMessage:
+                  "Still loading the exchange rate — please wait a moment and try again.",
+                i18nKey: "checkout.rateStillLoading",
+                retryable: true,
+              });
+      dispatch({ type: "INLINE_ERROR", error: inline });
       return;
     }
 
@@ -853,7 +875,7 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
         dispatch({ type: "LIVENESS_REQUIRED" });
         return;
       }
-      dispatch({ type: "ERROR", message: p2p.userMessage });
+      dispatch({ type: "ERROR", error: p2p });
       opts.onError?.(p2p);
     }
   }, [opts]);
@@ -865,7 +887,7 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
       setTimeout(() => { dispatch({ type: "COMPLETED" }); opts.onComplete?.(state.orderId!); }, 10000);
       return;
     }
-    dispatch({ type: "INLINE_ERROR", message: null });
+    dispatch({ type: "INLINE_ERROR", error: null });
     try {
       const data = encodeFunctionData({ abi: DIAMOND_ABI, functionName: "paidBuyOrder", args: [BigInt(state.orderId)] });
       const { hash } = await opts.signer.sendTransaction({ to: opts.diamondAddress, data, gasLimit: 300000 });
@@ -881,14 +903,14 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
         diamondAddress: opts.diamondAddress,
         orderId: state.orderId ?? undefined,
       });
-      dispatch({ type: "INLINE_ERROR", message: p2p.userMessage });
+      dispatch({ type: "INLINE_ERROR", error: p2p });
     }
   }, [state.orderId, opts]);
 
   const cancelOrder = useCallback(async () => {
     if (!state.orderId) return;
     if (opts.demo) { dispatch({ type: "CANCELLED" }); opts.onCancel?.(state.orderId); return; }
-    dispatch({ type: "INLINE_ERROR", message: null });
+    dispatch({ type: "INLINE_ERROR", error: null });
     try {
       const data = encodeFunctionData({
         abi: [{ name: "cancelOrder", type: "function", stateMutability: "nonpayable", inputs: [{ name: "_orderId", type: "uint256" }], outputs: [] }],
@@ -909,7 +931,7 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
         diamondAddress: opts.diamondAddress,
         orderId: state.orderId ?? undefined,
       });
-      dispatch({ type: "INLINE_ERROR", message: p2p.userMessage });
+      dispatch({ type: "INLINE_ERROR", error: p2p });
     }
   }, [state.orderId, opts]);
 
@@ -934,7 +956,13 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
       if (!code) {
         dispatch({
           type: "LIVENESS_VERIFY_FAILED",
-          message: "Verification was not completed. Please try again.",
+          error: new P2PError({
+            code: "SCREENING_LIVENESS_REQUIRED",
+            category: "screening",
+            userMessage: "Verification was not completed. Please try again.",
+            i18nKey: "checkout.livenessIncomplete",
+            retryable: true,
+          }),
         });
         return;
       }
@@ -957,7 +985,7 @@ export function useOrderMachine(opts: UseOrderMachineOpts) {
         chainId: opts.chainId,
         user: opts.signer?.address,
       });
-      dispatch({ type: "LIVENESS_VERIFY_FAILED", message: p2p.userMessage });
+      dispatch({ type: "LIVENESS_VERIFY_FAILED", error: p2p });
     }
   }, [opts]);
 

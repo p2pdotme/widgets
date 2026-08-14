@@ -37,6 +37,7 @@ import type { OrderActionState } from "../core/order-action";
 import { formatRemaining } from "../core/order-action";
 import type { P2PTheme, SupportSigner } from "../types";
 import type { Address } from "viem";
+import { useT } from "../i18n";
 
 export interface ContactSupportProps {
   orderId: string;
@@ -97,6 +98,7 @@ export function ContactSupport(props: ContactSupportProps) {
     chatEnabled = false,
     theme,
   } = props;
+  const t = useT();
 
   // Local optimistic flip: when the dispute tx broadcasts we treat the
   // row as `dispute-raised` immediately so the next click opens chat
@@ -212,7 +214,7 @@ export function ContactSupport(props: ContactSupportProps) {
               ? "support-registered-title"
               : undefined
         }
-        ariaLabel="Contact Support"
+        ariaLabel={t("report.contactSupport")}
       >
         {modalState.kind === "report" && txSigner ? (
           <ReportProblemStep
@@ -254,11 +256,12 @@ function ReportChip({
   filled,
   onClick,
 }: ReportChipProps) {
+  const t = useT();
   return (
     <button
       type="button"
       data-contact-support-chip
-      aria-label="Contact Support"
+      aria-label={t("report.contactSupport")}
       onClick={onClick}
       style={{
         display: "inline-flex",
@@ -277,7 +280,7 @@ function ReportChip({
       }}
     >
       <Doughnut filled={filled} />
-      <span>Contact Support · {formatRemaining(remainingMs)}</span>
+      <span>{t("report.contactSupportCountdown", { remaining: formatRemaining(remainingMs, t) })}</span>
     </button>
   );
 }
@@ -289,6 +292,7 @@ function PlainButton({
   variant: "none" | "open" | "resolved";
   onClick: () => void;
 }) {
+  const t = useT();
   const dotColor =
     variant === "open"
       ? color.danger
@@ -299,7 +303,7 @@ function PlainButton({
     <button
       type="button"
       data-contact-support-button
-      aria-label="Contact Support"
+      aria-label={t("report.contactSupport")}
       onClick={onClick}
       style={{
         display: "inline-flex",
@@ -329,7 +333,7 @@ function PlainButton({
           }}
         />
       ) : null}
-      Contact Support
+      {t("report.contactSupport")}
     </button>
   );
 }
@@ -387,6 +391,7 @@ function Doughnut({ filled }: { filled: number }) {
  *  already have an open/resolved dispute on chain AND for in-window rows
  *  without a `txSigner`. Pure visual — no async work, no chain calls. */
 function RegisteredView({ onClose }: { onClose: () => void }) {
+  const t = useT();
   return (
     <div
       style={{
@@ -400,7 +405,7 @@ function RegisteredView({ onClose }: { onClose: () => void }) {
         id="support-registered-title"
         style={{ margin: 0, fontSize: 18, color: color.text }}
       >
-        Support request registered
+        {t("report.submittedTitle")}
       </h3>
       <p
         style={{
@@ -411,9 +416,7 @@ function RegisteredView({ onClose }: { onClose: () => void }) {
           marginBottom: 0,
         }}
       >
-        Your support request is on its way to the support team. Any stuck
-        funds will be refunded once it's resolved. Check back here in a
-        little while to see the updated status.
+        {t("report.submittedBody")}
       </p>
       <div
         style={{
@@ -436,7 +439,7 @@ function RegisteredView({ onClose }: { onClose: () => void }) {
             cursor: "pointer",
           }}
         >
-          Close
+          {t("common.close")}
         </button>
       </div>
     </div>

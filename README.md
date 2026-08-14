@@ -1146,10 +1146,28 @@ design.
 
 ### What's *not* themable
 
-Per-component CSS overrides, density/spacing, icon swaps, copy/i18n,
-and motion controls are intentionally out of scope. The variable
-contract is forward-compatible — additional `--p2p-*` vars can be added
-later without breaking callers.
+Per-component CSS overrides, density/spacing, icon swaps, and motion
+controls are intentionally out of scope. The variable contract is
+forward-compatible — additional `--p2p-*` vars can be added later
+without breaking callers.
+
+### Locale / i18n
+
+Widgets ship built-in copy for **`en`** (fallback), **`es`**, and
+**`pt-BR`**. Pass `locale` to pin a language; omit it to auto-detect
+from `navigator.language` / `navigator.languages` (e.g. `es-MX` → `es`,
+`pt` → `pt-BR`, anything else → `en`):
+
+```ts
+<Checkout locale="pt-BR" {/* ... */} />
+<Cashout locale="es" {/* ... */} />
+<PaymentHistory locale="en" {/* ... */} />
+<Support locale="pt-BR" {/* ... */} />
+```
+
+Helpers `resolveLocale`, `t`, `translateError`, `useT`, and
+`I18nProvider` are also exported from `@p2pdotme/widgets` for hosts that
+need the same catalogs outside the widgets.
 
 ---
 

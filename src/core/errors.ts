@@ -83,6 +83,12 @@ export interface P2PErrorInput {
   userMessage: string;
   /** Internal message — extra detail for the log + Error.message. Defaults to userMessage. */
   devMessage?: string;
+  /**
+   * Optional i18n catalog path (e.g. `"checkout.rateLoadFailed"`). When set,
+   * widget UI prefers `t(i18nKey)` via `translateError` over code-based maps.
+   * `userMessage` remains the English fallback for hosts / logs.
+   */
+  i18nKey?: string;
   retryable?: boolean;
   context?: P2PErrorContext;
   /** Raw 4-byte selector when category=revert. */
@@ -106,6 +112,7 @@ export class P2PError extends Error {
   readonly code: P2PErrorCode;
   readonly category: P2PErrorCategory;
   readonly userMessage: string;
+  readonly i18nKey?: string;
   readonly retryable: boolean;
   readonly context: P2PErrorContext;
   readonly revertSelector?: string;
@@ -121,6 +128,7 @@ export class P2PError extends Error {
     this.code = input.code;
     this.category = input.category;
     this.userMessage = input.userMessage;
+    this.i18nKey = input.i18nKey;
     this.retryable = input.retryable ?? true;
     this.context = input.context ?? {};
     this.revertSelector = input.revertSelector;
@@ -455,6 +463,7 @@ export function classifyError(err: unknown, ctx: P2PErrorContext = {}): P2PError
       code: err.code,
       category: err.category,
       userMessage: err.userMessage,
+      i18nKey: err.i18nKey,
       devMessage: err.message,
       retryable: err.retryable,
       context: { ...err.context, ...ctx },

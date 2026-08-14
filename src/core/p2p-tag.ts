@@ -8,14 +8,20 @@
 // signal, not something the user should worry about.
 
 import type { SupportP2PTag } from "../types";
+import { createTranslator, type Translator } from "../i18n/t";
 
-const COPY: Record<SupportP2PTag, string> = {
-  awaiting_user: "Awaiting your reply",
-  reviewing: "Our team is reviewing",
-  evidence: "We need a bit more info",
-  escalated: "Our team is reviewing",
+const TAG_KEYS: Record<SupportP2PTag, string> = {
+  awaiting_user: "p2pTag.awaitingUser",
+  reviewing: "p2pTag.reviewing",
+  evidence: "p2pTag.evidence",
+  escalated: "p2pTag.reviewing",
 };
 
-export function friendlyP2PTagCopy(tag: SupportP2PTag): string {
-  return COPY[tag];
+const defaultT = createTranslator("en");
+
+export function friendlyP2PTagCopy(
+  tag: SupportP2PTag,
+  t: Translator = defaultT,
+): string {
+  return t(TAG_KEYS[tag]);
 }
