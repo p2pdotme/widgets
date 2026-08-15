@@ -177,6 +177,8 @@ export const es: Messages = {
     matchingTitle: "Emparejando tu pedido",
     matchingSubtitle:
       "Pedido #{orderId}: Estamos emparejando tu retiro de {usdc} USDC con alguien que pagará{currencyClause} a tu {paymentMethod}. Suele tardar 2-3 minutos.",
+    matchingSubtitleAccount:
+      "Pedido #{orderId}: Estamos emparejando tu retiro de {usdc} USDC con alguien que pagará{currencyClause} a tu cuenta. Suele tardar 2-3 minutos.",
 
     sendingDetailsTitle: "Enviando datos de pago",
     sendingDetailsSubtitle: "Compartiendo tus datos de cobro de forma segura.",

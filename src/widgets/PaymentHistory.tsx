@@ -12,7 +12,7 @@ import { Spinner, CenterStatus, injectKeyframes } from "../ui/components";
 import { isOrderActionable } from "../core/order-action";
 import { fetchB2BMap, type B2BOrderMeta } from "../core/b2b-orders";
 import type { CheckoutSigner } from "../types";
-import { I18nProvider, useI18n, useT, type Translator } from "../i18n";
+import { I18nBoundary, useI18n, useT, type Translator } from "../i18n";
 
 export interface PaymentHistoryProps {
   signer: CheckoutSigner;
@@ -147,9 +147,9 @@ const PENDING_STATUSES: ReadonlyArray<Order["status"]> = ["placed", "accepted", 
 
 export function PaymentHistory(props: PaymentHistoryProps) {
   return (
-    <I18nProvider locale={props.locale}>
+    <I18nBoundary locale={props.locale}>
       <PaymentHistoryInner {...props} />
-    </I18nProvider>
+    </I18nBoundary>
   );
 }
 

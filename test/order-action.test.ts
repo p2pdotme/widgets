@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test } from "vitest";
 import assert from "node:assert";
 import type { Order } from "@p2pdotme/sdk/orders";
 import {
@@ -9,8 +9,8 @@ import {
   BUY_DISPUTE_CLOSE_MS,
   SELL_PAY_DISPUTE_OPEN_MS,
   SELL_PAY_DISPUTE_CLOSE_MS,
-} from "./order-action.ts";
-import { en } from "../i18n/locales/en.ts";
+} from "../src/core/order-action";
+import { en } from "../src/i18n/locales/en";
 function interpolate(
   template: string,
   params?: Record<string, string | number | null | undefined>,
@@ -93,6 +93,14 @@ test("placed: status only, no action", () => {
   const out = computeOrderAction(baseOrder({ status: "placed" }), PLACED_AT_MS, t);
   assert.strictEqual(out.statusText, "Placed · matching");
   assert.deepStrictEqual(out.action, { kind: "none" });
+});
+
+test("computeOrderAction: defaults to English copy when t is omitted", () => {
+  const out = computeOrderAction(
+    baseOrder({ status: "completed", type: "buy" }),
+    PLACED_AT_MS,
+  );
+  assert.strictEqual(out.statusText, "Completed");
 });
 
 test("placed: past staleness threshold surfaces 'taking longer'", () => {
@@ -345,6 +353,11 @@ const DY = 24 * HR;
 test("formatRemaining: 0s for non-positive input", () => {
   assert.strictEqual(formatRemaining(0, t), "0s");
   assert.strictEqual(formatRemaining(-1, t), "0s");
+});
+
+test("formatRemaining: defaults to English when t is omitted", () => {
+  assert.strictEqual(formatRemaining(42 * SEC), "42s");
+  assert.strictEqual(formatRemaining(0), "0s");
 });
 
 test("formatRemaining: 0s for non-finite input", () => {

@@ -23,7 +23,7 @@ import {
   signInWithBridge,
   type TicketSummary,
 } from "../api/bridge";
-import { useT, I18nProvider } from "../i18n";
+import { useT, I18nBoundary } from "../i18n";
 
 type SupportConfig = Pick<
   SupportProps,
@@ -112,9 +112,9 @@ export function PaymentHistoryWithSupport(
   props: PaymentHistoryWithSupportProps,
 ) {
   return (
-    <I18nProvider locale={props.locale}>
+    <I18nBoundary locale={props.locale}>
       <PaymentHistoryWithSupportInner {...props} />
-    </I18nProvider>
+    </I18nBoundary>
   );
 }
 

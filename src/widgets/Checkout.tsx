@@ -14,7 +14,7 @@ import {
   CopyRow, Stepper, CountdownRing, Skeleton, injectKeyframes,
   StepHeader, useCountdown, formatCountdown, P2PMark,
 } from "../ui/components";
-import { I18nProvider, useT, useI18n, translateError } from "../i18n";
+import { I18nBoundary, useT, useI18n, translateError } from "../i18n";
 import type { Translator } from "../i18n";
 import { P2PError } from "../core/errors";
 
@@ -89,9 +89,9 @@ function buildBrlQrPayload(
 
 export function Checkout(props: CheckoutProps) {
   return (
-    <I18nProvider locale={props.locale}>
+    <I18nBoundary locale={props.locale}>
       <CheckoutInner {...props} />
-    </I18nProvider>
+    </I18nBoundary>
   );
 }
 

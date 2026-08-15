@@ -12,7 +12,7 @@ import {
   type SignInResponse,
 } from "../state/sessionCache";
 import { OpsSupportPanel } from "./OpsSupportPanel";
-import { I18nProvider, useT, useI18nContext } from "../i18n";
+import { I18nBoundary, useT } from "../i18n";
 
 type ErrorKind = "userRejected" | "network" | "auth" | "chatwoot" | "unknown";
 
@@ -71,14 +71,10 @@ function classifyError(err: unknown): { kind: ErrorKind; reason: string } {
 }
 
 export function Support(props: SupportProps) {
-  // Inherit a parent I18nProvider locale when the host didn't pin one
-  // (e.g. nested under PaymentHistoryWithSupport). Explicit `locale` wins.
-  const parent = useI18nContext();
-  const preferred = props.locale ?? parent?.locale ?? null;
   return (
-    <I18nProvider locale={preferred}>
+    <I18nBoundary locale={props.locale}>
       {props.mode === "ops" ? <OpsSupport {...props} /> : <CustomerSupport {...props} />}
-    </I18nProvider>
+    </I18nBoundary>
   );
 }
 

@@ -38,6 +38,20 @@ export function I18nProvider({ locale: preferred, children }: I18nProviderProps)
   return createElement(I18nContext.Provider, { value }, children);
 }
 
+/**
+ * Widget-entry wrapper: inherit a host-mounted I18nProvider when `locale`
+ * is omitted; mount our own only when pinning a locale or when no parent
+ * provider exists. Checkout / Cashout / PaymentHistory always remounting
+ * their own provider would otherwise ignore a host's locale.
+ */
+export function I18nBoundary({ locale, children }: I18nProviderProps) {
+  const parent = useI18nContext();
+  if (parent && (locale == null || locale === "")) {
+    return children;
+  }
+  return createElement(I18nProvider, { locale, children });
+}
+
 /** Read the nearest I18nProvider. Falls back to English when absent. */
 export function useI18n(): I18nValue {
   const ctx = useContext(I18nContext);

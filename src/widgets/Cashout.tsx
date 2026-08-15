@@ -21,7 +21,7 @@ import { PaymentAddressInput } from "../ui/PaymentAddressInput";
 import { CurrencyRow } from "../ui/CurrencyRow";
 import { ERC20_READ_ABI, DIAMOND_ABI, readSmallOrderFixedFee } from "../core/contracts";
 import { resolveCurrencyMeta } from "../core/currency-meta";
-import { I18nProvider, useT, useI18n, translateError } from "../i18n";
+import { I18nBoundary, useT, useI18n, translateError } from "../i18n";
 
 const USDC_DECIMALS = 6;
 
@@ -41,9 +41,9 @@ const USDC_DECIMALS = 6;
  */
 export function Cashout(props: CashoutProps) {
   return (
-    <I18nProvider locale={props.locale}>
+    <I18nBoundary locale={props.locale}>
       <CashoutInner {...props} />
-    </I18nProvider>
+    </I18nBoundary>
   );
 }
 
@@ -527,14 +527,20 @@ function CashoutInner(props: CashoutProps) {
                 <CenterStatus
                   icon={<PulseDot />}
                   title={t("cashout.matchingTitle")}
-                  subtitle={t("cashout.matchingSubtitle", {
-                    orderId: state.orderId,
-                    usdc: usdcDisplay ?? "",
-                    currencyClause: state.currency ? ` ${state.currency.symbol}` : "",
-                    paymentMethod: state.currency
-                      ? resolveCurrencyMeta(state.currency, locale).paymentMethod
-                      : t("common.paymentAppFallback"),
-                  })}
+                  subtitle={
+                    state.currency
+                      ? t("cashout.matchingSubtitle", {
+                          orderId: state.orderId,
+                          usdc: usdcDisplay ?? "",
+                          currencyClause: ` ${state.currency.symbol}`,
+                          paymentMethod: resolveCurrencyMeta(state.currency, locale).paymentMethod,
+                        })
+                      : t("cashout.matchingSubtitleAccount", {
+                          orderId: state.orderId,
+                          usdc: usdcDisplay ?? "",
+                          currencyClause: "",
+                        })
+                  }
                 />
               )}
 

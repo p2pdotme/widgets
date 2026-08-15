@@ -9,7 +9,7 @@ export { LOCALE_TAG } from "./types";
 export { resolveLocale } from "./resolveLocale";
 export { t, createTranslator, getCatalog, interpolate } from "./t";
 export type { MessageKey, Translator } from "./t";
-export { I18nProvider, useI18n, useT, useI18nContext } from "./context";
+export { I18nProvider, I18nBoundary, useI18n, useT, useI18nContext } from "./context";
 export type { I18nProviderProps, I18nValue } from "./context";
 export { en } from "./locales/en";
 export type { Messages } from "./locales/en";

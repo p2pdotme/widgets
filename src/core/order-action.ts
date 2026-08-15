@@ -24,9 +24,15 @@
 // Date.now()).
 
 import type { Order } from "@p2pdotme/sdk/orders";
-import type { Translator } from "../i18n/t";
+import { t as catalogT, type Translator } from "../i18n/t";
 
 export type { Translator };
+
+/** English translator — default for the public bit of this module so
+ *  pre-i18n callers (`computeOrderAction(order, Date.now())`) keep the
+ *  same copy they got in 1.8.0. Do not default to `noopT`: that returns
+ *  key paths and would render `"orderAction.completed"` in order lists. */
+const enT: Translator = (path, params) => catalogT("en", path, params);
 
 // Compact remaining-time formatter inlined here (vs. a peer file
 // imported by relative path) because node:test for the bridge runs
@@ -42,7 +48,7 @@ export type { Translator };
 // Negative or non-finite input clamps to "0s" so the formatter never
 // returns an empty or negative-looking string when a state machine
 // slips one tick past its window.
-export function formatRemaining(remainingMs: number, t: Translator): string {
+export function formatRemaining(remainingMs: number, t: Translator = enT): string {
   if (!Number.isFinite(remainingMs) || remainingMs <= 0) {
     return t("orderAction.remainingSeconds", { n: 0 });
   }
@@ -128,7 +134,7 @@ const noopT: Translator = (path) => path;
 export function computeOrderAction(
   order: Order,
   nowMs: number,
-  t: Translator,
+  t: Translator = enT,
 ): OrderActionState {
   // Dispute lifecycle is short-circuited at the top. A raised or settled
   // dispute is always the most relevant state; downstream status flow

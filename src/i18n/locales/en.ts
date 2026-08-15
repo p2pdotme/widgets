@@ -178,6 +178,8 @@ export const en = {
     matchingTitle: "Matching your order",
     matchingSubtitle:
       "Order #{orderId}: We're matching your {usdc} USDC withdrawal with someone who will pay{currencyClause} into your {paymentMethod}. This typically takes 2-3 minutes.",
+    matchingSubtitleAccount:
+      "Order #{orderId}: We're matching your {usdc} USDC withdrawal with someone who will pay{currencyClause} into your account. This typically takes 2-3 minutes.",
 
     sendingDetailsTitle: "Sending payment details",
     sendingDetailsSubtitle: "Securely sharing your payout details.",

@@ -13,9 +13,11 @@ const CODE_KEYS: Partial<Record<P2PErrorCode, string>> = {
   ENCRYPTION_FAILED: "errors.encryptionFailed",
   ORDER_BAD_STATUS: "errors.orderBadStatus",
   SCREENING_API_ERROR: "errors.screeningApi",
-  SCREENING_REJECTED: "errors.screeningRejected",
-  SCREENING_LIVENESS_REQUIRED: "errors.livenessRequired",
-  UNKNOWN: "errors.unknown",
+  // UNKNOWN / SCREENING_REJECTED / SCREENING_LIVENESS_REQUIRED carry a
+  // runtime-built `userMessage` (backend `res.message`, unclassified
+  // throw text). They must not map to a static catalog entry — that
+  // would collapse them to a generic string. Opt in via `i18nKey` when
+  // a static translation genuinely applies.
 };
 
 const REVERT_KEYS: Record<string, string> = {
@@ -58,6 +60,10 @@ export function translateError(err: P2PError, t: Translator): string {
   if (err.code === "REVERT_KNOWN" && err.revertName) {
     const key = REVERT_KEYS[err.revertName];
     if (key) return t(key);
+    // Host-registered custom reverts (`registerRevertSelectors`) ship
+    // copy on `userMessage`. Prefer that over the generic fallback so
+    // unmapped names don't drop host wording.
+    if (err.userMessage) return err.userMessage;
     return t("errors.revertNamedFallback", { name: err.revertName });
   }
 

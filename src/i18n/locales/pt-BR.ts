@@ -177,6 +177,8 @@ export const ptBR: Messages = {
     matchingTitle: "Pareando seu pedido",
     matchingSubtitle:
       "Pedido #{orderId}: Estamos pareando seu saque de {usdc} USDC com alguém que pagará{currencyClause} no seu {paymentMethod}. Geralmente leva 2-3 minutos.",
+    matchingSubtitleAccount:
+      "Pedido #{orderId}: Estamos pareando seu saque de {usdc} USDC com alguém que pagará{currencyClause} na sua conta. Geralmente leva 2-3 minutos.",
 
     sendingDetailsTitle: "Enviando dados de pagamento",
     sendingDetailsSubtitle: "Compartilhando seus dados de recebimento com segurança.",

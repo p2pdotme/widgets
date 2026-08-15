@@ -718,21 +718,27 @@ export function screeningRejectedError(
   const restrictedUntil = res.restricted_until ?? undefined;
 
   let userMessage: string;
+  let i18nKey: string | undefined;
   if (reason === "user_restricted") {
     userMessage = "We saw unusual activity - pls wait for sometime as a minor update";
+    i18nKey = "errors.screeningRestricted";
   } else if (reason === "cluster_blacklisted") {
     userMessage =
       "This order cannot be processed. Please contact support if you believe this is in error.";
+    i18nKey = "errors.screeningRejected";
+  } else if (res.message) {
+    userMessage = res.message;
   } else {
     userMessage =
-      res.message ||
       "This order cannot be processed. Please contact support if you believe this is in error.";
+    i18nKey = "errors.screeningRejected";
   }
 
   return new P2PError({
     code: "SCREENING_REJECTED",
     category: "screening",
     userMessage,
+    i18nKey,
     devMessage: `Screening rejected (reason=${reason})`,
     retryable: false,
     context: { ...ctx, screeningReason: reason, restrictedUntil },
@@ -749,11 +755,12 @@ export function livenessRequiredError(
   res: { message?: string | null },
   ctx: P2PErrorContext,
 ): P2PError {
+  const fallback = "Quick human check required before you can continue.";
   return new P2PError({
     code: "SCREENING_LIVENESS_REQUIRED",
     category: "screening",
-    userMessage:
-      res.message || "Quick human check required before you can continue.",
+    userMessage: res.message || fallback,
+    i18nKey: res.message ? undefined : "errors.livenessRequired",
     devMessage: "Screening requires liveness verification",
     retryable: true,
     context: { ...ctx, screeningReason: "liveliness_required" },
