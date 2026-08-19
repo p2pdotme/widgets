@@ -7,6 +7,13 @@ and the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format. While
 the package is `0.x`, minor releases may introduce additive prop changes;
 patch releases stay backward-compatible.
 
+## [1.8.1](https://github.com/p2pdotme/widgets/compare/v1.8.0...v1.8.1) (2026-08-19)
+
+
+### Bug Fixes
+
+* **checkout:** render QR codes locally instead of via a third-party image API ([#78](https://github.com/p2pdotme/widgets/issues/78)) ([43195c8](https://github.com/p2pdotme/widgets/commit/43195c80c6c73484d4683c4b921afb6fe08f2bba))
+
 ## [1.8.0](https://github.com/p2pdotme/widgets/compare/v1.7.2...v1.8.0) (2026-08-10)
 
 
