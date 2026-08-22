@@ -23,6 +23,7 @@ import {
   signInWithBridge,
   type TicketSummary,
 } from "../api/bridge";
+import { useT, I18nBoundary } from "../i18n";
 
 type SupportConfig = Pick<
   SupportProps,
@@ -110,8 +111,19 @@ export interface PaymentHistoryWithSupportProps
 export function PaymentHistoryWithSupport(
   props: PaymentHistoryWithSupportProps,
 ) {
+  return (
+    <I18nBoundary locale={props.locale}>
+      <PaymentHistoryWithSupportInner {...props} />
+    </I18nBoundary>
+  );
+}
+
+function PaymentHistoryWithSupportInner(
+  props: PaymentHistoryWithSupportProps,
+) {
   const { support, actionMode = "smart", ...orderHistoryProps } = props;
   const { activeOrderIds, tagByOrder } = useActiveSupportTickets(support);
+  const t = useT();
 
   if (!support) {
     return <PaymentHistory {...orderHistoryProps} />;
@@ -155,7 +167,7 @@ export function PaymentHistoryWithSupport(
             order={order}
             signer={support.signer}
             bridgeUrl={support.bridgeUrl}
-            originApp={support.originApp ?? "this app"}
+            originApp={support.originApp ?? t("support.defaultOriginApp")}
             txSigner={support.txSigner}
             diamondAddress={
               support.diamondAddress ?? orderHistoryProps.diamondAddress
@@ -202,6 +214,7 @@ export function PaymentHistoryWithSupport(
           chatwootBaseUrl={support.chatwootBaseUrl}
           chatwootInboxIdentifier={support.chatwootInboxIdentifier}
           theme={support.theme}
+          locale={props.locale}
         />
       )}
     />
@@ -209,11 +222,12 @@ export function PaymentHistoryWithSupport(
 }
 
 function ActiveSupportPip() {
+  const t = useT();
   return (
     <span
       data-support-active-pip
-      aria-label="Active support conversation"
-      title="You have an active support conversation on this order"
+      aria-label={t("support.activeSupportAria")}
+      title={t("support.activeSupportTitle")}
       style={{
         display: "inline-flex",
         alignItems: "center",
@@ -235,7 +249,7 @@ function ActiveSupportPip() {
           background: "rgb(22, 163, 74)",
         }}
       />
-      Active support
+      {t("support.activeSupport")}
     </span>
   );
 }

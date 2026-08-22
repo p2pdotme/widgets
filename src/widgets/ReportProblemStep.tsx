@@ -27,6 +27,7 @@ import {
 } from "../core/contracts";
 import { color, radius, themeToCssVars, type P2PTheme } from "../ui/theme";
 import type { SupportTheme } from "../types";
+import { useT, type Translator } from "../i18n";
 
 export interface RaiseDisputeSigner {
   address: `0x${string}`;
@@ -60,21 +61,15 @@ export interface ReportProblemStepProps {
   theme?: SupportTheme;
 }
 
-/** Map known custom-error names to human-friendly explanations. */
-const REVERT_MESSAGES: Record<string, string> = {
-  NotAuthorized:
-    "Only the wallet that placed the order can contact support for it.",
-  DisputeTimeNotReached:
-    "Support isn't available yet — please wait a few minutes and try again.",
-  DisputeTimeExpired:
-    "The review window for this order has closed.",
-  InvalidOrderStatusToRaiseDispute:
-    "This order isn't in a state where a report can be filed yet. Wait for it to expire or be completed.",
-  CannotRaiseDisputeTwice:
-    "A report has already been filed on this order.",
-  DisputeAlreadySettled:
-    "This order's report has already been resolved.",
-  InvalidOrderType: "Reports aren't supported for this order type.",
+/** Map known custom-error names to catalog keys. */
+const REVERT_KEYS: Record<string, string> = {
+  NotAuthorized: "report.revertNotAuthorized",
+  DisputeTimeNotReached: "report.revertDisputeTimeNotReached",
+  DisputeTimeExpired: "report.revertDisputeTimeExpired",
+  InvalidOrderStatusToRaiseDispute: "report.revertInvalidOrderStatus",
+  CannotRaiseDisputeTwice: "report.revertCannotRaiseTwice",
+  DisputeAlreadySettled: "report.revertAlreadySettled",
+  InvalidOrderType: "report.revertInvalidOrderType",
 };
 
 interface RevertInfo {
@@ -89,7 +84,7 @@ interface RevertInfo {
  *  and falls back to a manual property probe for non-viem shapes
  *  (eg test fixtures, wallet-side errors that don't subclass BaseError).
  */
-function extractRevert(err: unknown): RevertInfo {
+function extractRevert(err: unknown, t: Translator): RevertInfo {
   let name: string | undefined;
   // 1. Preferred: viem's BaseError.walk. Resolves through nested
   //    `cause` chains regardless of depth.
@@ -113,8 +108,8 @@ function extractRevert(err: unknown): RevertInfo {
       probe = (probe as { cause?: unknown }).cause;
     }
   }
-  if (name && REVERT_MESSAGES[name]) {
-    return { errorName: name, message: REVERT_MESSAGES[name] };
+  if (name && REVERT_KEYS[name]) {
+    return { errorName: name, message: t(REVERT_KEYS[name]) };
   }
   // No decoded name — surface the friendliest message we can find.
   const e = err as {
@@ -123,7 +118,7 @@ function extractRevert(err: unknown): RevertInfo {
     cause?: { shortMessage?: string };
   };
   const fallback =
-    e.shortMessage ?? e.cause?.shortMessage ?? e.message ?? "Unknown error.";
+    e.shortMessage ?? e.cause?.shortMessage ?? e.message ?? t("report.unknownError");
   return { errorName: name, message: fallback };
 }
 
@@ -151,6 +146,7 @@ export function ReportProblemStep(props: ReportProblemStepProps) {
   // without passing `diamondAddress` — better than silently calling
   // a non-existent contract on mainnet.
   const diamondAddress = resolveDiamondAddress(chainId, props.diamondAddress);
+  const t = useT();
   const [phase, setPhase] = useState<Phase>({ kind: "confirm" });
   const [redactInput, setRedactInput] = useState<string>("");
   const [inputError, setInputError] = useState<string | null>(null);
@@ -164,7 +160,7 @@ export function ReportProblemStep(props: ReportProblemStepProps) {
   const handleSubmit = useCallback(async () => {
     setInputError(null);
     if (!REDACT_PATTERN.test(redactInput)) {
-      setInputError("Enter the last 4 digits of the transaction id.");
+      setInputError(t("report.last4Error"));
       return;
     }
     setPhase({ kind: "submitting" });
@@ -188,7 +184,7 @@ export function ReportProblemStep(props: ReportProblemStepProps) {
         account: signer.address,
       });
     } catch (err) {
-      const info = extractRevert(err);
+      const info = extractRevert(err, t);
       setPhase({ kind: "error", reason: info.message });
       onError?.(err instanceof Error ? err : new Error(info.message));
       return;
@@ -210,7 +206,7 @@ export function ReportProblemStep(props: ReportProblemStepProps) {
       onSubmitted?.(hash);
       setPhase({ kind: "submitted", txHash: hash });
     } catch (err) {
-      const info = extractRevert(err);
+      const info = extractRevert(err, t);
       setPhase({ kind: "error", reason: info.message });
       onError?.(err instanceof Error ? err : new Error(info.message));
     }
@@ -223,6 +219,7 @@ export function ReportProblemStep(props: ReportProblemStepProps) {
     chainId,
     onSubmitted,
     onError,
+    t,
   ]);
 
   const handleRetry = useCallback(() => {
@@ -277,32 +274,24 @@ interface ConfirmViewProps {
 }
 
 function ConfirmView({ onCancel, onContinue }: ConfirmViewProps) {
+  const t = useT();
   return (
     <div>
       <h3 id="report-problem-title" style={titleStyle}>
-        Contact Support
+        {t("report.confirmTitle")}
       </h3>
-      <p style={paragraphStyle}>Before you continue, please note:</p>
+      <p style={paragraphStyle}>{t("report.confirmIntro")}</p>
       <ul style={listStyle}>
-        <li>
-          You must have already paid the order. The review needs your
-          payment receipt details.
-        </li>
-        <li>
-          The support team will review both sides. Resolution typically
-          takes 24 to 72 hours.
-        </li>
-        <li>
-          Reports filed in bad faith may result in reputation penalties.
-          Only file a report if your paid order has not been completed.
-        </li>
+        <li>{t("report.confirmBullet1")}</li>
+        <li>{t("report.confirmBullet2")}</li>
+        <li>{t("report.confirmBullet3")}</li>
       </ul>
       <div style={rowStyle}>
         <Button variant="ghost" onClick={onCancel} data-action="cancel">
-          Cancel
+          {t("common.cancel")}
         </Button>
         <Button variant="primary" onClick={onContinue} data-action="continue">
-          Continue
+          {t("common.continue")}
         </Button>
       </div>
     </div>
@@ -328,6 +317,7 @@ function FormView({
   onSubmit,
   onCancel,
 }: FormViewProps) {
+  const t = useT();
   return (
     <form
       onSubmit={(e) => {
@@ -336,16 +326,13 @@ function FormView({
       }}
     >
       <h3 id="report-problem-title" style={titleStyle}>
-        Confirm transaction details
+        {t("report.formTitle")}
       </h3>
       <p style={paragraphStyle}>
-        Order #{shortenId(orderId)}. Enter the last 4 digits of the
-        transaction id you used for payment. This helps the support team
-        match your payment against the other side's records. Submitting
-        opens the support thread for this order.
+        {t("report.formBody", { shortId: shortenId(orderId) })}
       </p>
       <label style={labelStyle}>
-        <span>Last 4 digits</span>
+        <span>{t("report.last4Label")}</span>
         <input
           type="text"
           inputMode="numeric"
@@ -358,7 +345,7 @@ function FormView({
           disabled={submitting}
           aria-invalid={inputError ? "true" : "false"}
           aria-describedby={inputError ? "report-redact-error" : undefined}
-          aria-label="last 4 digits of transaction id"
+          aria-label={t("report.last4Aria")}
           style={inputStyle}
         />
       </label>
@@ -374,7 +361,7 @@ function FormView({
           disabled={submitting}
           data-action="cancel"
         >
-          Cancel
+          {t("common.cancel")}
         </Button>
         <Button
           variant="danger"
@@ -382,7 +369,7 @@ function FormView({
           disabled={submitting}
           data-action="submit"
         >
-          {submitting ? "Submitting…" : "Submit"}
+          {submitting ? t("report.submitting") : t("report.submit")}
         </Button>
       </div>
     </form>
@@ -395,19 +382,16 @@ interface SubmittedViewProps {
 }
 
 function SubmittedView({ txHash: _txHash, onClose }: SubmittedViewProps) {
+  const t = useT();
   return (
     <div>
       <h3 id="report-problem-title" style={titleStyle}>
-        Support request registered
+        {t("report.submittedTitle")}
       </h3>
-      <p style={paragraphStyle}>
-        Your support request is on its way to the support team. Any stuck
-        funds will be refunded once it's resolved. Check back here in a
-        little while to see the updated status.
-      </p>
+      <p style={paragraphStyle}>{t("report.submittedBody")}</p>
       <div style={rowStyle}>
         <Button variant="primary" onClick={onClose}>
-          Close
+          {t("common.close")}
         </Button>
       </div>
     </div>
@@ -421,18 +405,19 @@ interface ErrorViewProps {
 }
 
 function ErrorView({ reason, onRetry, onClose }: ErrorViewProps) {
+  const t = useT();
   return (
     <div>
       <h3 id="report-problem-title" style={titleStyle}>
-        Could not submit report
+        {t("report.errorTitle")}
       </h3>
       <p style={paragraphStyle}>{reason}</p>
       <div style={rowStyle}>
         <Button variant="ghost" onClick={onClose}>
-          Cancel
+          {t("common.cancel")}
         </Button>
         <Button variant="primary" onClick={onRetry}>
-          Try again
+          {t("common.tryAgain")}
         </Button>
       </div>
     </div>

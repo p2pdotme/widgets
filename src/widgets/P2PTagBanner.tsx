@@ -12,6 +12,7 @@
 import type { SupportP2PTag } from "../types";
 import { friendlyP2PTagCopy } from "../core/p2p-tag";
 import { color, radius, font, weight } from "../ui/theme";
+import { useT } from "../i18n";
 
 export interface P2PTagBannerProps {
   /** Operator-set tag carried on the conversation, if any. */
@@ -21,6 +22,7 @@ export interface P2PTagBannerProps {
 }
 
 export function P2PTagBanner({ tag, status }: P2PTagBannerProps) {
+  const t = useT();
   if (status === "resolved") {
     return (
       <div
@@ -36,7 +38,7 @@ export function P2PTagBanner({ tag, status }: P2PTagBannerProps) {
           fontWeight: weight.medium,
         }}
       >
-        Chat closed by support
+        {t("p2pTag.chatClosedBySupport")}
       </div>
     );
   }
@@ -69,7 +71,7 @@ export function P2PTagBanner({ tag, status }: P2PTagBannerProps) {
           flexShrink: 0,
         }}
       />
-      {friendlyP2PTagCopy(tag)}
+      {friendlyP2PTagCopy(tag, t)}
     </div>
   );
 }

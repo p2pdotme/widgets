@@ -8,6 +8,8 @@ import {
   noEligibleMerchantsError,
   missingRoutingInputsError,
   encryptionPreflightError,
+  screeningRejectedError,
+  livenessRequiredError,
 } from "./errors.ts";
 
 // Silence the structured `console.error` that the classifier's logger emits
@@ -222,6 +224,38 @@ test("encryptionPreflightError: classifies as encryption with a user-friendly me
   assert.ok(p.message.includes("crypto.subtle"));
   // user-facing message is jargon-free
   assert.ok(!p.userMessage.includes("crypto.subtle"));
+});
+
+test("screeningRejectedError: dynamic backend message has no i18nKey", () => {
+  const p = screeningRejectedError(
+    { reason: "manual_review", message: "Region not eligible for this product." },
+    { flow: "screening" },
+  );
+  assert.strictEqual(p.code, "SCREENING_REJECTED");
+  assert.strictEqual(p.userMessage, "Region not eligible for this product.");
+  assert.strictEqual(p.i18nKey, undefined);
+});
+
+test("screeningRejectedError: static reasons opt in via i18nKey", () => {
+  const restricted = screeningRejectedError(
+    { reason: "user_restricted" },
+    { flow: "screening" },
+  );
+  assert.strictEqual(restricted.i18nKey, "errors.screeningRestricted");
+  const blacklisted = screeningRejectedError(
+    { reason: "cluster_blacklisted" },
+    { flow: "screening" },
+  );
+  assert.strictEqual(blacklisted.i18nKey, "errors.screeningRejected");
+});
+
+test("livenessRequiredError: keeps backend message and skips i18nKey", () => {
+  const p = livenessRequiredError(
+    { message: "Please complete face check in the Lotpot app." },
+    { flow: "liveness" },
+  );
+  assert.strictEqual(p.userMessage, "Please complete face check in the Lotpot app.");
+  assert.strictEqual(p.i18nKey, undefined);
 });
 
 // ─── P2PError instance basics ──────────────────────────────────────

@@ -1,6 +1,7 @@
 import React from "react";
 import type { CurrencyMeta } from "../core/currency-meta";
 import { color, radius, font, weight } from "./theme";
+import { useT } from "../i18n";
 
 /**
  * Currency row used inside the selector dropdown — both the trigger
@@ -10,6 +11,7 @@ import { color, radius, font, weight } from "./theme";
  * as secondary text underneath.
  */
 export function CurrencyRow({ meta }: { meta: CurrencyMeta }) {
+  const t = useT();
   return (
     <span style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
       <span
@@ -46,7 +48,7 @@ export function CurrencyRow({ meta }: { meta: CurrencyMeta }) {
                 fontWeight: weight.semibold,
               }}
             >
-              Alpha
+              {t("common.alpha")}
             </span>
           )}
         </span>

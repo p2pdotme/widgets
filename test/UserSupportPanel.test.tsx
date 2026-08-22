@@ -74,7 +74,7 @@ describe("UserSupportPanel — failure paths (W2/W3/W4/W5)", () => {
     fireEvent.click(screen.getByRole("button", { name: /^send$/i }));
 
     // The reason is shown (no internal vocab) ...
-    await screen.findByText(/Support isn’t ready yet/i);
+    await screen.findByText(/Support isn['\u2019]t ready yet/i);
     // ... the draft is restored so the user doesn't lose their text ...
     expect(box.value).toBe("please help");
     // ... and the optimistic bubble is rolled back (no user message bubble
@@ -115,7 +115,7 @@ describe("UserSupportPanel — failure paths (W2/W3/W4/W5)", () => {
     );
     renderPanel();
 
-    await screen.findByText(/couldn’t verify your wallet/i);
+    await screen.findByText(/couldn['\u2019]t verify your wallet/i);
     // The read was never attempted — no auto-prompt loop.
     expect(userBridge.fetchUserThread).not.toHaveBeenCalled();
 
