@@ -9,6 +9,7 @@ import { CurrencyRow } from "../ui/CurrencyRow";
 import { DEFAULT_DIAMOND_ADDRESS, USDC_DECIMALS } from "../core/contracts";
 import { color, radius, font, weight, shadow, S, themeToCssVars } from "../ui/theme";
 import { Modal } from "../ui/Modal";
+import { QrCode } from "../ui/QrCode";
 import {
   Spinner, PulseDot, CenterStatus, SuccessIcon, XIcon,
   CopyRow, Stepper, CountdownRing, Skeleton, injectKeyframes,
@@ -911,7 +912,7 @@ function CheckoutInner(props: CheckoutProps) {
                       // strong "I'm paying now" signal.
                       const qrImg = (
                         <div style={{ padding: 12, background: "#fff", borderRadius: radius.md, border: `1px solid ${color.border}` }}>
-                          <img src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&margin=0&data=${encodeURIComponent(qrData)}`} alt="QR" style={{ width: 180, height: 180, display: "block" }} />
+                          <QrCode data={qrData} size={180} />
                         </div>
                       );
                       return (
