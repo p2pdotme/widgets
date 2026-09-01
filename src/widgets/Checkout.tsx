@@ -4,6 +4,7 @@ import type { CheckoutProps } from "../types";
 import { useOrderMachine } from "../core/order-machine";
 import { usdcToFiat } from "../core/price-math";
 import { resolveCurrencyMeta } from "../core/currency-meta";
+import { resolvePaymentDisplay } from "../core/payment-display";
 import { buildStaticPixPayload, normalizePixKey, detectPixKeyType } from "../core/pix-brcode";
 import { CurrencyRow } from "../ui/CurrencyRow";
 import { DEFAULT_DIAMOND_ADDRESS, USDC_DECIMALS } from "../core/contracts";
@@ -428,7 +429,14 @@ export function Checkout(props: CheckoutProps) {
     };
   })();
   const compoundFields = acceptedMeta?.compoundFields ?? null;
-  const compoundParts = state.decryptedUpi && compoundFields ? state.decryptedUpi.split("|") : [];
+  // Catalog-driven presentation of the decrypted address: SDK helpers
+  // unpack plain, `a|b|c` compound, and packed `qr||a|b|c` shapes (VEN /
+  // BOB / PEN) and hand back a scannable payload when the rail has one.
+  // Never split the raw string here — packed IDs made that a bug.
+  const paymentDisplay =
+    state.decryptedUpi && state.currency
+      ? resolvePaymentDisplay(state.currency, state.decryptedUpi, fiatDisplay)
+      : null;
 
   const stepIndex = state.phase === "completed" ? 3 : state.phase === "paid" ? 2 : state.phase === "accepted" ? 1 : 0;
   const hasPlaceOrder = Boolean(placeOrder);
@@ -837,7 +845,7 @@ export function Checkout(props: CheckoutProps) {
                         background: color.accentSoft, color: color.accent,
                         fontSize: font.sm, fontWeight: weight.semibold, letterSpacing: "0.02em",
                       }}>
-                        Pay via {acceptedMeta.paymentMethod} and confirm
+                        Pay via {acceptedMeta.paymentMethodDisplay} and confirm
                       </span>
                     </div>
                   )}
@@ -849,27 +857,39 @@ export function Checkout(props: CheckoutProps) {
                       n={1}
                       done={paymentIntent}
                       title={fiatDisplay ? `Send ${state.currency} ${fiatDisplay}` : "Send the payment"}
-                      subtitle={`To the ${acceptedMeta?.paymentAddressLabel ?? "payment address"} below, from any ${acceptedMeta?.paymentMethod ?? "payment"} app.`}
+                      subtitle={`To the ${acceptedMeta?.paymentAddressLabel ?? "payment address"} below, from any ${acceptedMeta?.paymentMethodDisplay ?? "payment"} app.`}
                     />
                   </div>
 
                   <div style={{ ...S.cardFlat, padding: "20px", background: color.surfaceAlt }}>
                     <div style={S.rowBetween}>
-                      <span style={S.label}>{acceptedMeta?.paymentMethod ?? "Payment"}</span>
+                      <span style={S.label}>{acceptedMeta?.paymentMethodDisplay ?? "Payment"}</span>
                       <span style={S.faint}>Order #{state.orderId}</span>
                     </div>
                     <div style={{ marginTop: 12 }}>
-                      {compoundFields ? (
+                      {compoundFields && paymentDisplay?.rows ? (
                         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                          {compoundFields.map((field, i) => (
-                            <div key={field.key}>
-                              <p style={{ ...S.label, marginBottom: 4 }}>{field.label}</p>
-                              <CopyRow value={compoundParts[i] ?? "…"} copied={copied === field.key} onCopy={() => copy(compoundParts[i], field.key)} />
+                          {/* Rows come from the SDK's stored-id parser
+                              (packed-aware), matched to catalog labels by
+                              key. Empty optional fields (PEN) are already
+                              dropped; an empty required field renders "…"
+                              (legacy ids that predate the field). */}
+                          {paymentDisplay.rows.map((row) => (
+                            <div key={row.key}>
+                              <p style={{ ...S.label, marginBottom: 4 }}>
+                                {compoundFields.find((f) => f.key === row.key)?.label ?? row.key}
+                              </p>
+                              <CopyRow value={row.value || "…"} copied={copied === row.key} onCopy={() => row.value && copy(row.value, row.key)} />
                             </div>
                           ))}
                         </div>
-                      ) : state.decryptedUpi ? (
-                        <CopyRow value={state.decryptedUpi} copied={copied === "upi"} onCopy={() => copy(state.decryptedUpi!, "upi")} />
+                      ) : paymentDisplay ? (
+                        // Single-field rail. A QR-only stored id (packed
+                        // with no typed part) has nothing to copy — the
+                        // scannable QR below is the payment instrument.
+                        paymentDisplay.single === "" && paymentDisplay.qrPayload ? null : (
+                          <CopyRow value={paymentDisplay.single || state.decryptedUpi!} copied={copied === "upi"} onCopy={() => copy(paymentDisplay.single || state.decryptedUpi!, "upi")} />
+                        )
                       ) : (
                         <p style={S.muted}>Decrypting payment details…</p>
                       )}
@@ -877,25 +897,39 @@ export function Checkout(props: CheckoutProps) {
                     {/* INR gets a real payable QR (upi://pay deep link — any UPI
                         app can act on it directly). BRL gets a real payable
                         Pix BR Code (EMV QRCPS-MPM, CRC16-sealed — any bank/Pix
-                        app can scan-to-pay it directly). Other rails (CBU-alias
-                        / ARS, etc.) don't have an equivalent deep-link or
-                        checksummed-payload scheme the widget can synthesize
-                        from a bare payout id, so those still render a QR that
-                        just encodes the PLAIN payout id as text (same value as
-                        the CopyRow above) — scan it with any QR reader to
-                        read/copy the id into your banking app, rather than
-                        "scan to pay". */}
-                    {state.decryptedUpi && !compoundFields && (() => {
+                        app can scan-to-pay it directly). Rails whose stored
+                        payment id carries its own QR payload (VEN Pago Móvil,
+                        BOB QR Simple, PEN Yape/Plin) render that payload —
+                        the same scannable the merchant's own bank app emitted —
+                        and CUP builds the Transfermóvil transfer payload, both
+                        matching user-app. Remaining single-field rails
+                        (CBU-alias / ARS, etc.) have no payable scheme the
+                        widget can synthesize from a bare payout id, so those
+                        render a QR encoding the PLAIN payout id as text (same
+                        value as the CopyRow above) — scan it with any QR
+                        reader to read/copy the id into your banking app.
+                        Multi-field rails without a stored QR show no QR at
+                        all, matching user-app. */}
+                    {state.decryptedUpi && (() => {
+                      const railQr = paymentDisplay?.qrPayload ?? null;
                       const brlPayload =
                         state.currency === "BRL"
                           ? buildBrlQrPayload(state.decryptedUpi, state.orderId, fiatDisplay, pixMerchantName, pixMerchantCity, productName)
+                          : null;
+                      const copyPageValue =
+                        !compoundFields && paymentDisplay?.single
+                          ? paymentDisplay.single
                           : null;
                       const qrData =
                         state.currency === "INR"
                           ? `upi://pay?pa=${state.decryptedUpi}&am=${fiatDisplay}&cu=INR&tr=${state.orderId}`
                           : brlPayload ??
-                            `${COPY_PAGE_URL}/#${new URLSearchParams({ v: state.decryptedUpi!, l: acceptedMeta?.paymentAddressLabel ?? "Payment ID" }).toString()}`;
-                      const isPayableQr = state.currency === "INR" || brlPayload !== null;
+                            railQr ??
+                            (copyPageValue
+                              ? `${COPY_PAGE_URL}/#${new URLSearchParams({ v: copyPageValue, l: acceptedMeta?.paymentAddressLabel ?? "Payment ID" }).toString()}`
+                              : null);
+                      if (!qrData) return null;
+                      const isPayableQr = state.currency === "INR" || brlPayload !== null || railQr !== null;
                       // NOTE: no tap-to-open UPI deep link here. A tappable
                       // `upi://pay` affordance was tried and pulled: on a real
                       // handset the app opened and parsed the payload fine, but
@@ -925,6 +959,11 @@ export function Checkout(props: CheckoutProps) {
                             >
                               {copied === "pix-code" ? "Pix code copied" : "Copy Pix code (Copia e Cola)"}
                             </button>
+                          )}
+                          {railQr && !brlPayload && (
+                            <p style={{ ...S.faint, color: color.textMuted, textAlign: "center", marginTop: 8 }}>
+                              Scan this QR code with your payment app
+                            </p>
                           )}
                           {!isPayableQr && (() => {
                             const cap = nonInrQrCaption(state.currency, acceptedMeta?.paymentAddressLabel ?? "payment");
@@ -963,7 +1002,7 @@ export function Checkout(props: CheckoutProps) {
                         borderRadius: radius.md, fontSize: font.md, color: color.text, lineHeight: 1.45,
                         animation: "p2p-nudge-in 0.25s ease-out",
                       }} role="status">
-                        <strong>Back from your {acceptedMeta?.paymentMethod ?? "payment"} app?</strong>{" "}
+                        <strong>Back from your {acceptedMeta?.paymentMethodDisplay ?? "payment"} app?</strong>{" "}
                         {fiatDisplay ? `If you sent ${state.currency} ${fiatDisplay}, confirm below` : "If you've sent the payment, confirm below"} — the order won't settle until you do.
                       </div>
                     )}
@@ -1094,7 +1133,7 @@ export function Checkout(props: CheckoutProps) {
                       fontWeight: returnedFromPayment ? weight.semibold : weight.medium,
                     }}>
                       {returnedFromPayment
-                        ? `Back from your ${acceptedMeta?.paymentMethod ?? "payment"} app? Confirm to settle your order.`
+                        ? `Back from your ${acceptedMeta?.paymentMethodDisplay ?? "payment"} app? Confirm to settle your order.`
                         : "Step 2 · Confirm once you've paid"}
                     </p>
                     <button

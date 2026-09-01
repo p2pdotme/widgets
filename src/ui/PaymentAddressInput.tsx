@@ -5,6 +5,7 @@ import {
   getPlaceholderFor,
   getPaymentLabelFor,
 } from "../core/currencies";
+import { paymentMethodDisplayFor } from "../core/currency-meta";
 import type { CurrencyOption } from "../types";
 
 export interface PaymentAddressInputProps {
@@ -38,7 +39,7 @@ export function PaymentAddressInput(props: PaymentAddressInputProps) {
       <label style={{ ...S.label, color: color.textMuted }}>
         {label}
         <span style={{ marginLeft: 6, color: color.textFaint, textTransform: "none", letterSpacing: 0 }}>
-          ({currency.paymentMethod})
+          ({paymentMethodDisplayFor(currency.paymentMethod)})
         </span>
       </label>
       <input
