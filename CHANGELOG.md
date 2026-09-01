@@ -7,6 +7,13 @@ and the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format. While
 the package is `0.x`, minor releases may introduce additive prop changes;
 patch releases stay backward-compatible.
 
+## [1.9.0](https://github.com/p2pdotme/widgets/compare/v1.8.1...v1.9.0) (2026-09-01)
+
+
+### Features
+
+* **checkout:** catalog-driven payment display — packed IDs, rail QRs, canonical labels ([#80](https://github.com/p2pdotme/widgets/issues/80)) ([5718cd3](https://github.com/p2pdotme/widgets/commit/5718cd38cc6fae1d397cd5002e56a149c24c7abe))
+
 ## [1.8.1](https://github.com/p2pdotme/widgets/compare/v1.8.0...v1.8.1) (2026-08-19)
 
 
