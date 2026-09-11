@@ -116,6 +116,43 @@ export function __resetUserFlightForTests(): void {
 }
 
 /**
+ * Return a valid WALLET-lane session (no order bound) for the signer. This is
+ * what the general (order-less) support panel authenticates with: the sign-in
+ * carries no `orderId`, so the bridge resolves role/currencies but no per-order
+ * conversation. Cache + in-flight collapse work exactly like `ensureUserSession`,
+ * keyed without an order so it never collides with a per-order session.
+ */
+export async function ensureWalletSession(opts: {
+  signer: SupportSigner;
+  bridgeUrl: string;
+}): Promise<SignInResponse | null> {
+  const cached = readCachedSession(opts.bridgeUrl, opts.signer.address);
+  if (cached) return cached;
+
+  const key = cacheKey(opts.bridgeUrl, opts.signer.address);
+  const existing = inFlight.get(key);
+  if (existing) return existing;
+
+  if (!opts.signer.signMessage) return null;
+
+  const promise = (async () => {
+    const fresh = await signInWithBridge({
+      signer: opts.signer,
+      bridgeUrl: opts.bridgeUrl,
+    });
+    writeCachedSession(opts.bridgeUrl, opts.signer.address, fresh);
+    return fresh;
+  })();
+
+  inFlight.set(key, promise);
+  try {
+    return await promise;
+  } finally {
+    inFlight.delete(key);
+  }
+}
+
+/**
  * Return a valid per-order user session for the signer. Reads the customer
  * cache first; on a miss, signs in (binding the `orderId` so the bridge
  * resolves the per-side conversation), writes the cache, and returns.
