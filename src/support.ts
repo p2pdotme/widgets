@@ -23,6 +23,10 @@ export {
   type UserSupportPanelProps,
 } from "./widgets/UserSupportPanel";
 export {
+  GeneralSupportPanel,
+  type GeneralSupportPanelProps,
+} from "./widgets/GeneralSupportPanel";
+export {
   P2PTagBanner,
   type P2PTagBannerProps,
 } from "./widgets/P2PTagBanner";
