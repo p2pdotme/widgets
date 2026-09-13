@@ -693,5 +693,16 @@ function CashoutInner(props: CashoutProps) {
   );
 
   if (mode === "modal") return <Modal open={open} onClose={onClose} themeStyle={themeStyle}>{content}</Modal>;
-  return <div style={{ ...S.card, overflow: "hidden" }}>{content}</div>;
+  return (
+    <div
+      style={{
+        ...themeStyle,
+        ...S.card,
+        overflow: "hidden",
+        ...(theme?.colors?.bg ? { background: theme.colors.bg } : null),
+      }}
+    >
+      {content}
+    </div>
+  );
 }

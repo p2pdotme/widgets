@@ -1216,5 +1216,20 @@ function CheckoutInner(props: CheckoutProps) {
   );
 
   if (mode === "modal") return <Modal open={open} onClose={onClose} themeStyle={themeStyle}>{content}</Modal>;
-  return <div style={{ ...S.card, overflow: "hidden" }}>{content}</div>;
+  // themeStyle must sit on the same node as S.card so `--p2p-color-bg`
+  // resolves for the surface. Also set `background` from the theme prop
+  // directly — relying only on `var(--p2p-color-bg)` on the declaring
+  // element has been flaky under Vite's prebundle cache of linked packages.
+  return (
+    <div
+      style={{
+        ...themeStyle,
+        ...S.card,
+        overflow: "hidden",
+        ...(theme?.colors?.bg ? { background: theme.colors.bg } : null),
+      }}
+    >
+      {content}
+    </div>
+  );
 }
