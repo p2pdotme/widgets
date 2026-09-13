@@ -1,5 +1,26 @@
 import React from "react";
 import { color, radius, font, weight, S } from "./theme";
+import { useT } from "../i18n";
+
+/** Official P2PKit mark (from p2pkit.com/favicon.svg), sized for widget headers. */
+export function P2PMark({ size = 28 }: { size?: number }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 96 96"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      aria-hidden
+      style={{ display: "block", flexShrink: 0 }}
+    >
+      <rect x="1" y="1" width="94" height="94" rx="21" fill="#FFFFFF" stroke="#E4E7EC" strokeWidth="2" />
+      <rect x="12" y="36" width="22" height="24" rx="7" fill="#0B0D12" />
+      <rect x="62" y="36" width="22" height="24" rx="7" fill="#0B0D12" />
+      <rect x="38" y="26" width="20" height="44" rx="7" fill="#4F5BFF" />
+    </svg>
+  );
+}
 
 export function Spinner({ size = 32 }: { size?: number }) {
   return <div style={{
@@ -10,6 +31,7 @@ export function Spinner({ size = 32 }: { size?: number }) {
     animation: "p2p-spin 800ms linear infinite",
   }} />;
 }
+
 
 export function PulseDot() {
   return (
@@ -74,6 +96,7 @@ export function XIcon() {
 export function CopyRow({ value, copied, onCopy, disabled }: {
   value: string; copied: boolean; onCopy: () => void; disabled?: boolean;
 }) {
+  const t = useT();
   return (
     <div style={{
       display: "flex", alignItems: "center", gap: 8,
@@ -87,14 +110,15 @@ export function CopyRow({ value, copied, onCopy, disabled }: {
           background: copied ? color.successSoft : color.surfaceAlt,
           color: copied ? color.success : color.text,
           border: "none", borderRadius: radius.sm, fontSize: font.sm, fontWeight: weight.medium, cursor: "pointer",
-        }} onClick={onCopy}>{copied ? "Copied" : "Copy"}</button>
+        }} onClick={onCopy}>{copied ? t("common.copied") : t("common.copy")}</button>
       )}
     </div>
   );
 }
 
 export function Stepper({ stepIndex }: { stepIndex: number }) {
-  const steps = ["Matching", "Payment", "Complete"];
+  const t = useT();
+  const steps = [t("stepper.matching"), t("stepper.payment"), t("stepper.complete")];
   return (
     <div className="p2p-stepper" style={{
       display: "flex", alignItems: "center", gap: 0,
@@ -237,6 +261,7 @@ export function CountdownRing({ deadline, totalMs, onExpire, size = 76, stroke =
   size?: number;
   stroke?: number;
 }) {
+  const t = useT();
   const remaining = useCountdown(deadline);
   const calledExpire = React.useRef(false);
 
@@ -285,7 +310,7 @@ export function CountdownRing({ deadline, totalMs, onExpire, size = 76, stroke =
           {expired ? "0:00" : text}
         </div>
         <div style={{ fontSize: 9, fontWeight: weight.semibold, textTransform: "uppercase", letterSpacing: "0.06em", marginTop: 3, opacity: 0.75 }}>
-          {expired ? "expired" : "left"}
+          {expired ? t("common.expired") : t("common.left")}
         </div>
       </div>
     </div>

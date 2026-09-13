@@ -35,6 +35,7 @@ import {
 import { P2PTagBanner } from "./P2PTagBanner";
 import { Spinner, injectKeyframes } from "../ui/components";
 import { color, radius, font, weight, S } from "../ui/theme";
+import { useT, type Translator } from "../i18n";
 
 const POLL_INTERVAL_MS = 7_000;
 
@@ -63,21 +64,21 @@ function isAuthFailure(err: unknown): boolean {
 
 /** Friendly, vocabulary-clean copy for a failed send, keyed on the bridge's
  *  `reason`. Avoids protocol-internal terms (no "dispute"/"conversation"). */
-function sendFailureMessage(err: unknown): string {
+function sendFailureMessage(err: unknown, t: Translator): string {
   if (err instanceof UserBridgeError) {
     switch (err.reason) {
       case "conversation_not_ready":
-        return "Support isn’t ready yet. Please try again in a moment.";
+        return t("userSupport.sendConversationNotReady");
       case "content_too_long":
-        return `Message is too long (max ${MAX_MESSAGE_LENGTH} characters).`;
+        return t("userSupport.sendTooLong", { max: MAX_MESSAGE_LENGTH });
       case "empty_content":
-        return "Please write a message first.";
+        return t("userSupport.sendEmpty");
       case "chatwoot_disabled":
       case "chatwoot_unreachable":
-        return "Support is temporarily unavailable. Please try again shortly.";
+        return t("userSupport.sendUnavailable");
     }
   }
-  return "Your message couldn’t be sent. Please try again.";
+  return t("userSupport.sendFailed");
 }
 
 /** An optimistic user message. `id` is a temp negative value (stable React key
@@ -96,6 +97,7 @@ export function UserSupportPanel({
   signer,
   bridgeUrl,
 }: UserSupportPanelProps) {
+  const t = useT();
   const [thread, setThread] = useState<UserThread | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   // Set when sign-in itself fails (declined signature, bridge sign-in down, or
@@ -183,12 +185,12 @@ export function UserSupportPanel({
         // Stop the poll from re-prompting the wallet; require an explicit retry.
         pausedRef.current = true;
         setLoadError(null);
-        setAuthError("We couldn’t verify your wallet for support.");
+        setAuthError(t("userSupport.authFailed"));
       } else {
         setLoadError(err instanceof Error ? err.message : String(err));
       }
     }
-  }, [withAuth, bridgeUrl, orderId]);
+  }, [withAuth, bridgeUrl, orderId, t]);
 
   // Initial load + 7s poll. Single request per tick; cleanup on unmount. The
   // tick is skipped while paused (auth failure) so it never re-prompts.
@@ -220,7 +222,7 @@ export function UserSupportPanel({
     const content = draft.trim();
     if (!content || sending || isResolved) return;
     if (content.length > MAX_MESSAGE_LENGTH) {
-      setSendError(`Message is too long (max ${MAX_MESSAGE_LENGTH} characters).`);
+      setSendError(t("userSupport.sendTooLong", { max: MAX_MESSAGE_LENGTH }));
       return;
     }
     setSending(true);
@@ -231,7 +233,7 @@ export function UserSupportPanel({
       content,
       direction: "user",
       createdAt: Date.now(),
-      senderName: "You",
+      senderName: t("common.you"),
     };
     setOptimistic((prev) => [...prev, temp]);
     setDraft("");
@@ -258,15 +260,15 @@ export function UserSupportPanel({
         setDraft(content);
         if (isAuthFailure(err)) {
           pausedRef.current = true;
-          setAuthError("We couldn’t verify your wallet for support.");
+          setAuthError(t("userSupport.authFailed"));
         } else {
-          setSendError(sendFailureMessage(err));
+          setSendError(sendFailureMessage(err, t));
         }
       }
     } finally {
       if (mountedRef.current) setSending(false);
     }
-  }, [draft, sending, isResolved, withAuth, bridgeUrl, orderId, loadThread]);
+  }, [draft, sending, isResolved, withAuth, bridgeUrl, orderId, loadThread, t]);
 
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -311,8 +313,8 @@ export function UserSupportPanel({
         >
           <span>
             {authError
-              ? "Your support session needs to reconnect."
-              : "Reconnecting…"}
+              ? t("userSupport.reconnectHint")
+              : t("userSupport.reconnecting")}
           </span>
           {authError && (
             <button
@@ -328,7 +330,7 @@ export function UserSupportPanel({
                 fontWeight: weight.medium,
               }}
             >
-              Reconnect
+              {t("userSupport.reconnect")}
             </button>
           )}
         </div>
@@ -363,18 +365,18 @@ export function UserSupportPanel({
             style={{ display: "flex", alignItems: "center", gap: 10, color: color.textMuted }}
           >
             <Spinner size={18} />
-            <span style={{ ...S.muted }}>Loading conversation…</span>
+            <span style={{ ...S.muted }}>{t("userSupport.loadingConversation")}</span>
           </div>
         ) : messages.length === 0 ? (
           <div style={{ ...S.muted, margin: "auto", textAlign: "center" }}>
-            No messages yet. Send a message and the support team will reply here.
+            {t("userSupport.empty")}
           </div>
         ) : (
           messages.map((m) => <MessageBubble key={m.id} message={m} />)
         )}
         {loadError && thread === null && !authError && (
           <div style={{ ...S.faint, color: color.danger }}>
-            Couldn’t load the conversation. Retrying…
+            {t("userSupport.loadFailed")}
           </div>
         )}
       </div>
@@ -392,7 +394,7 @@ export function UserSupportPanel({
       >
         {isResolved ? (
           <div style={{ ...S.faint, color: color.textMuted }}>
-            This conversation has been closed by support.
+            {t("userSupport.closedBySupport")}
           </div>
         ) : (
           <>
@@ -402,8 +404,8 @@ export function UserSupportPanel({
               </div>
             )}
             <textarea
-              aria-label="Message"
-              placeholder="Write a message…"
+              aria-label={t("userSupport.messageAria")}
+              placeholder={t("userSupport.placeholder")}
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={onKeyDown}
@@ -437,7 +439,7 @@ export function UserSupportPanel({
                   opacity: draft.trim().length === 0 ? 0.6 : 1,
                 }}
               >
-                {sending ? "Sending…" : "Send"}
+                {sending ? t("common.sending") : t("common.send")}
               </button>
             </div>
           </>
@@ -457,6 +459,7 @@ function AuthErrorView({
   message: string;
   onRetry: () => void;
 }) {
+  const t = useT();
   return (
     <div
       role="alert"
@@ -482,13 +485,14 @@ function AuthErrorView({
           fontSize: font.md,
         }}
       >
-        Try again
+        {t("common.tryAgain")}
       </button>
     </div>
   );
 }
 
 function MessageBubble({ message }: { message: UserThreadMessage }) {
+  const t = useT();
   const isMine = message.direction === "user";
   return (
     <div
@@ -519,7 +523,7 @@ function MessageBubble({ message }: { message: UserThreadMessage }) {
             sender name — so a per-operator identity can't leak to the user
             (identity-masking contract, bridge D-003-v2), even if ops later
             replies under a named agent account. */}
-        {isMine ? "You" : "Support"}
+        {isMine ? t("common.you") : t("common.support")}
       </div>
       {message.content}
     </div>

@@ -20,6 +20,7 @@ import {
   encryptionPreflightError,
   encryptionFailedError,
   orderBadStatusError,
+  P2PError,
   type P2PErrorContext,
 } from "./errors";
 
@@ -51,7 +52,7 @@ interface OfframpState {
   /** Small-order fee retained so a retry-from-cancelled can recompute the charge. */
   feeUsdc: bigint | null;
   fiatAmount: bigint | null;
-  error: string | null;
+  error: P2PError | null;
 }
 
 type OfframpAction =
@@ -63,7 +64,7 @@ type OfframpAction =
   | { type: "COMPLETED" }
   | { type: "CANCELLED" }
   | { type: "RESET" }
-  | { type: "ERROR"; message: string };
+  | { type: "ERROR"; error: P2PError };
 
 const INITIAL: OfframpState = {
   phase: "form",
@@ -80,7 +81,7 @@ function reducer(s: OfframpState, a: OfframpAction): OfframpState {
     case "PAID": return { ...s, phase: "paid", fiatAmount: a.fiatAmount };
     case "COMPLETED": return { ...s, phase: "completed" };
     case "CANCELLED": return { ...s, phase: "cancelled" };
-    case "ERROR": return { ...s, phase: "error", error: a.message };
+    case "ERROR": return { ...s, phase: "error", error: a.error };
     case "RESET": return INITIAL;
     default: return s;
   }
@@ -215,7 +216,7 @@ export function useOfframpMachine(opts: UseOfframpMachineOpts) {
         opts.onOrderPlaced?.(result.orderId, result.txHash);
       } catch (err: unknown) {
         const p2p = toP2PError(err, errorCtx);
-        dispatch({ type: "ERROR", message: p2p.userMessage });
+        dispatch({ type: "ERROR", error: p2p });
         opts.onError?.(p2p);
       }
     },
@@ -280,7 +281,7 @@ export function useOfframpMachine(opts: UseOfframpMachineOpts) {
             diamondAddress: opts.diamondAddress,
             orderId: state.orderId ?? undefined,
           });
-          dispatch({ type: "ERROR", message: p2p.userMessage });
+          dispatch({ type: "ERROR", error: p2p });
           opts.onError?.(p2p);
         }
         return;
@@ -343,7 +344,7 @@ export function useOfframpMachine(opts: UseOfframpMachineOpts) {
       await encryptAndDeliver(order.pubkey);
     } catch (err: unknown) {
       const p2p = toP2PError(err, ctx);
-      dispatch({ type: "ERROR", message: p2p.userMessage });
+      dispatch({ type: "ERROR", error: p2p });
       opts.onError?.(p2p);
     }
   }, [state.orderId, publicClient, opts, encryptAndDeliver]);

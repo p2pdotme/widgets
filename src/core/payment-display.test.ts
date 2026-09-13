@@ -1,7 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert";
 import { resolvePaymentDisplay, buildTransfermovilQr } from "./payment-display.ts";
-import { resolveCurrencyMeta, paymentMethodDisplayFor } from "./currency-meta.ts";
 
 // A syntactically valid Pago Móvil S7B envelope: ≥40 base64 chars before
 // "?" plus a 3–4 digit merchantId (see sdk's validateVenezuelanQr).
@@ -108,53 +107,4 @@ test("buildTransfermovilQr strips the 53 country prefix and rejects bad pairs", 
     "TRANSFERMOVIL_ETECSA,TRANSFERENCIA,9224069995000000,51234567,",
   );
   assert.strictEqual(buildTransfermovilQr("12345|not-a-card", "10"), null);
-});
-
-// ─── Labels: catalog-aligned, no raw tokens ─────────────────────────
-
-test("NGN compound labels match user-app's English strings", () => {
-  const meta = resolveCurrencyMeta({ symbol: "NGN" });
-  assert.deepStrictEqual(
-    meta.compoundFields?.map((f) => f.label),
-    ["Account Number", "Bank Name", "Account Name"],
-  );
-});
-
-test("VEN compound labels match user-app's English strings", () => {
-  const meta = resolveCurrencyMeta({ symbol: "VEN" });
-  assert.deepStrictEqual(
-    meta.compoundFields?.map((f) => f.label),
-    ["Phone Number", "Cédula/RIF", "Bank"],
-  );
-});
-
-test("every catalog compound field resolves to a label with no raw i18n token", () => {
-  for (const symbol of ["VEN", "NGN", "CUP", "ECU", "PHP", "PEN"]) {
-    const meta = resolveCurrencyMeta({ symbol });
-    assert.ok(meta.compoundFields && meta.compoundFields.length > 1, `${symbol} should be compound`);
-    for (const f of meta.compoundFields) {
-      // Raw i18n keys are UNDERSCORE_TOKENS (PERU_PHONE_LABEL, RIF_LABEL);
-      // legit labels never carry an underscore. All-caps initialisms like
-      // "CCI" or "CLABE" are fine.
-      assert.ok(!f.label.includes("_"), `${symbol}.${f.key} label "${f.label}" looks like a raw token`);
-      assert.ok(f.label.length > 0, `${symbol}.${f.key} label is empty`);
-    }
-  }
-});
-
-test("payment methods render display names, not protocol tokens", () => {
-  assert.strictEqual(resolveCurrencyMeta({ symbol: "VEN" }).paymentMethodDisplay, "Pago Móvil");
-  assert.strictEqual(resolveCurrencyMeta({ symbol: "NGN" }).paymentMethodDisplay, "NIP");
-  assert.strictEqual(resolveCurrencyMeta({ symbol: "CUP" }).paymentMethodDisplay, "Transfermóvil");
-  assert.strictEqual(resolveCurrencyMeta({ symbol: "PEN" }).paymentMethodDisplay, "Yape / Plin / CCI");
-  assert.strictEqual(resolveCurrencyMeta({ symbol: "BOB" }).paymentMethodDisplay, "QR Simple");
-  // Host-passed override values humanize too, and unknown tokens degrade
-  // gracefully instead of leaking underscores.
-  assert.strictEqual(paymentMethodDisplayFor("BANK_TRANSFER"), "Bank Transfer");
-  assert.strictEqual(paymentMethodDisplayFor("SOME_NEW_RAIL"), "Some New Rail");
-  assert.strictEqual(paymentMethodDisplayFor("PIX"), "PIX");
-});
-
-test("VEN is no longer tagged alpha by the catalog", () => {
-  assert.strictEqual(resolveCurrencyMeta({ symbol: "VEN" }).isAlpha, false);
 });

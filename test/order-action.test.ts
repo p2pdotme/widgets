@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test } from "vitest";
 import assert from "node:assert";
 import type { Order } from "@p2pdotme/sdk/orders";
 import {
@@ -9,7 +9,25 @@ import {
   BUY_DISPUTE_CLOSE_MS,
   SELL_PAY_DISPUTE_OPEN_MS,
   SELL_PAY_DISPUTE_CLOSE_MS,
-} from "./order-action.ts";
+} from "../src/core/order-action";
+import { en } from "../src/i18n/locales/en";
+function interpolate(
+  template: string,
+  params?: Record<string, string | number | null | undefined>,
+): string {
+  if (!params) return template;
+  return template.replace(/\{(\w+)\}/g, (_, key: string) => {
+    const v = params[key];
+    return v === null || v === undefined ? `{${key}}` : String(v);
+  });
+}
+
+const t = (path: string, params?: Record<string, string | number | null | undefined>): string => {
+  const [ns, key] = path.split(".");
+  const msg =
+    (en as Record<string, Record<string, string>>)[ns]?.[key] ?? path;
+  return interpolate(msg, params);
+};
 
 // All test cases pin `placedAt` to a fixed epoch second and pass `now`
 // as the placedAt+elapsed time. This keeps the elapsed math explicit at
@@ -52,7 +70,7 @@ function baseOrder(overrides: Partial<Order> = {}): Order {
 test("disputeStatus=open short-circuits regardless of order.status", () => {
   const out = computeOrderAction(
     baseOrder({ status: "paid", disputeStatus: "open" }),
-    PLACED_AT_MS,
+    PLACED_AT_MS, t
   );
   assert.strictEqual(out.statusText, "Under review");
   assert.deepStrictEqual(out.action, { kind: "none" });
@@ -62,7 +80,7 @@ test("disputeStatus=open short-circuits regardless of order.status", () => {
 test("disputeStatus=resolved short-circuits regardless of order.status", () => {
   const out = computeOrderAction(
     baseOrder({ status: "completed", disputeStatus: "resolved" }),
-    PLACED_AT_MS,
+    PLACED_AT_MS, t
   );
   assert.strictEqual(out.statusText, "Resolved");
   assert.deepStrictEqual(out.action, { kind: "none" });
@@ -72,15 +90,25 @@ test("disputeStatus=resolved short-circuits regardless of order.status", () => {
 // ─── placed ────────────────────────────────────────────────────────────
 
 test("placed: status only, no action", () => {
-  const out = computeOrderAction(baseOrder({ status: "placed" }), PLACED_AT_MS);
+  const out = computeOrderAction(baseOrder({ status: "placed" }), PLACED_AT_MS, t);
   assert.strictEqual(out.statusText, "Placed · matching");
   assert.deepStrictEqual(out.action, { kind: "none" });
+});
+
+test("computeOrderAction: defaults to English copy when t is omitted", () => {
+  const out = computeOrderAction(
+    baseOrder({ status: "completed", type: "buy" }),
+    PLACED_AT_MS,
+  );
+  assert.strictEqual(out.statusText, "Completed");
 });
 
 test("placed: past staleness threshold surfaces 'taking longer'", () => {
   const out = computeOrderAction(
     baseOrder({ status: "placed" }),
-    PLACED_AT_MS + 6 * 60 * 1000, // 6 minutes after placement, past 5-min threshold
+    // 6 minutes after placement, past 5-min threshold
+    PLACED_AT_MS + 6 * 60 * 1000,
+    t,
   );
   assert.match(out.statusText, /taking longer than usual/);
   assert.deepStrictEqual(out.action, { kind: "none" });
@@ -91,7 +119,7 @@ test("placed: past staleness threshold surfaces 'taking longer'", () => {
 test("accepted BUY: resume action surfaces", () => {
   const out = computeOrderAction(
     baseOrder({ status: "accepted", type: "buy" }),
-    PLACED_AT_MS,
+    PLACED_AT_MS, t
   );
   assert.strictEqual(out.statusText, "Accepted · awaiting your payment");
   assert.deepStrictEqual(out.action, { kind: "resume" });
@@ -100,7 +128,7 @@ test("accepted BUY: resume action surfaces", () => {
 test("accepted SELL: status only (merchant pays user)", () => {
   const out = computeOrderAction(
     baseOrder({ status: "accepted", type: "sell" }),
-    PLACED_AT_MS,
+    PLACED_AT_MS, t
   );
   assert.strictEqual(out.statusText, "Accepted · processing payment");
   assert.deepStrictEqual(out.action, { kind: "none" });
@@ -109,7 +137,7 @@ test("accepted SELL: status only (merchant pays user)", () => {
 test("accepted PAY: status only", () => {
   const out = computeOrderAction(
     baseOrder({ status: "accepted", type: "pay" }),
-    PLACED_AT_MS,
+    PLACED_AT_MS, t
   );
   assert.strictEqual(out.statusText, "Accepted · processing payment");
   assert.deepStrictEqual(out.action, { kind: "none" });
@@ -139,7 +167,7 @@ test("paid BUY: status escalates by elapsed, no action (chain requires CANCELLED
   for (const { elapsed, expect } of cases) {
     const out = computeOrderAction(
       baseOrder({ status: "paid", type: "buy", paidAt: 1n }),
-      PLACED_AT_MS + elapsed,
+      PLACED_AT_MS + elapsed, t
     );
     if (typeof expect === "string") {
       assert.strictEqual(out.statusText, expect, `elapsed=${elapsed}ms`);
@@ -163,7 +191,7 @@ test("paid BUY: live flag is set only for the 'will resolve within' countdown ti
   for (const { elapsed, live } of cases) {
     const out = computeOrderAction(
       baseOrder({ status: "paid", type: "buy", paidAt: 1n }),
-      PLACED_AT_MS + elapsed,
+      PLACED_AT_MS + elapsed, t
     );
     assert.strictEqual(out.live === true, live, `elapsed=${elapsed}ms`);
   }
@@ -175,7 +203,7 @@ test("cancelled BUY before window opens (paidAt > 0): countdown in status, no ac
   const elapsed = 5 * 60 * 1000;
   const out = computeOrderAction(
     baseOrder({ status: "cancelled", type: "buy", paidAt: 1n }),
-    PLACED_AT_MS + elapsed,
+    PLACED_AT_MS + elapsed, t
   );
   assert.strictEqual(
     out.statusText,
@@ -188,7 +216,7 @@ test("cancelled BUY at open boundary: report-problem, ring full, paidAt>0 requir
   const elapsed = BUY_DISPUTE_OPEN_MS;
   const out = computeOrderAction(
     baseOrder({ status: "cancelled", type: "buy", paidAt: 1n }),
-    PLACED_AT_MS + elapsed,
+    PLACED_AT_MS + elapsed, t
   );
   assert.strictEqual(
     out.statusText,
@@ -205,7 +233,7 @@ test("cancelled BUY mid-window: ring fill proportional", () => {
   const elapsed = 10 * 60 * 60 * 1000;
   const out = computeOrderAction(
     baseOrder({ status: "cancelled", type: "buy", paidAt: 1n }),
-    PLACED_AT_MS + elapsed,
+    PLACED_AT_MS + elapsed, t
   );
   if (out.action.kind !== "report-problem") {
     throw new Error("expected report-problem action");
@@ -221,7 +249,7 @@ test("cancelled BUY past window: no action, review window closed", () => {
   const elapsed = BUY_DISPUTE_CLOSE_MS + 1;
   const out = computeOrderAction(
     baseOrder({ status: "cancelled", type: "buy", paidAt: 1n }),
-    PLACED_AT_MS + elapsed,
+    PLACED_AT_MS + elapsed, t
   );
   assert.strictEqual(out.statusText, "Cancelled · review window closed");
   assert.deepStrictEqual(out.action, { kind: "none" });
@@ -230,7 +258,7 @@ test("cancelled BUY past window: no action, review window closed", () => {
 test("cancelled BUY with paidAt == 0: no action — order expired before user paid", () => {
   const out = computeOrderAction(
     baseOrder({ status: "cancelled", type: "buy", paidAt: 0n }),
-    PLACED_AT_MS + BUY_DISPUTE_OPEN_MS + 60 * 60 * 1000,
+    PLACED_AT_MS + BUY_DISPUTE_OPEN_MS + 60 * 60 * 1000, t
   );
   assert.strictEqual(out.statusText, "Cancelled");
   assert.deepStrictEqual(out.action, { kind: "none" });
@@ -241,7 +269,7 @@ test("cancelled BUY with paidAt == 0: no action — order expired before user pa
 test("paid SELL: merchant-paid status, no dispute affordance (user must confirm)", () => {
   const out = computeOrderAction(
     baseOrder({ status: "paid", type: "sell" }),
-    PLACED_AT_MS + 60 * 60 * 1000,
+    PLACED_AT_MS + 60 * 60 * 1000, t
   );
   assert.strictEqual(out.statusText, "Payment received · confirm to complete");
   assert.deepStrictEqual(out.action, { kind: "none" });
@@ -252,7 +280,7 @@ test("paid SELL: merchant-paid status, no dispute affordance (user must confirm)
 test("completed BUY: terminal, no action regardless of elapsed", () => {
   const out = computeOrderAction(
     baseOrder({ status: "completed", type: "buy" }),
-    PLACED_AT_MS + 30 * 60 * 1000,
+    PLACED_AT_MS + 30 * 60 * 1000, t
   );
   assert.strictEqual(out.statusText, "Completed");
   assert.deepStrictEqual(out.action, { kind: "none" });
@@ -264,7 +292,7 @@ test("completed SELL before window opens: status carries countdown", () => {
   const elapsed = 10 * 60 * 1000;
   const out = computeOrderAction(
     baseOrder({ status: "completed", type: "sell" }),
-    PLACED_AT_MS + elapsed,
+    PLACED_AT_MS + elapsed, t
   );
   assert.strictEqual(
     out.statusText,
@@ -277,7 +305,7 @@ test("completed PAY inside window (1h elapsed): report-problem available", () =>
   const elapsed = 60 * 60 * 1000;
   const out = computeOrderAction(
     baseOrder({ status: "completed", type: "pay" }),
-    PLACED_AT_MS + elapsed,
+    PLACED_AT_MS + elapsed, t
   );
   assert.strictEqual(out.statusText, "Completed");
   if (out.action.kind !== "report-problem") {
@@ -298,7 +326,7 @@ test("completed SELL past 7d: window closed", () => {
   const elapsed = SELL_PAY_DISPUTE_CLOSE_MS + 1;
   const out = computeOrderAction(
     baseOrder({ status: "completed", type: "sell" }),
-    PLACED_AT_MS + elapsed,
+    PLACED_AT_MS + elapsed, t
   );
   assert.strictEqual(out.statusText, "Completed · review window closed");
   assert.deepStrictEqual(out.action, { kind: "none" });
@@ -309,7 +337,7 @@ test("completed SELL past 7d: window closed", () => {
 test("cancelled SELL: terminal, no action", () => {
   const out = computeOrderAction(
     baseOrder({ status: "cancelled", type: "sell" }),
-    PLACED_AT_MS + 60 * 60 * 1000,
+    PLACED_AT_MS + 60 * 60 * 1000, t
   );
   assert.strictEqual(out.statusText, "Cancelled");
   assert.deepStrictEqual(out.action, { kind: "none" });
@@ -323,46 +351,51 @@ const HR = 60 * MN;
 const DY = 24 * HR;
 
 test("formatRemaining: 0s for non-positive input", () => {
+  assert.strictEqual(formatRemaining(0, t), "0s");
+  assert.strictEqual(formatRemaining(-1, t), "0s");
+});
+
+test("formatRemaining: defaults to English when t is omitted", () => {
+  assert.strictEqual(formatRemaining(42 * SEC), "42s");
   assert.strictEqual(formatRemaining(0), "0s");
-  assert.strictEqual(formatRemaining(-1), "0s");
 });
 
 test("formatRemaining: 0s for non-finite input", () => {
-  assert.strictEqual(formatRemaining(Number.NaN), "0s");
-  assert.strictEqual(formatRemaining(Number.POSITIVE_INFINITY), "0s");
+  assert.strictEqual(formatRemaining(Number.NaN, t), "0s");
+  assert.strictEqual(formatRemaining(Number.POSITIVE_INFINITY, t), "0s");
 });
 
 test("formatRemaining: sub-minute → seconds", () => {
-  assert.strictEqual(formatRemaining(1 * SEC), "1s");
-  assert.strictEqual(formatRemaining(42 * SEC), "42s");
-  assert.strictEqual(formatRemaining(59 * SEC + 999), "59s");
+  assert.strictEqual(formatRemaining(1 * SEC, t), "1s");
+  assert.strictEqual(formatRemaining(42 * SEC, t), "42s");
+  assert.strictEqual(formatRemaining(59 * SEC + 999, t), "59s");
 });
 
 test("formatRemaining: minute boundary", () => {
-  assert.strictEqual(formatRemaining(60 * SEC), "1m");
+  assert.strictEqual(formatRemaining(60 * SEC, t), "1m");
 });
 
 test("formatRemaining: sub-hour → minutes", () => {
-  assert.strictEqual(formatRemaining(12 * MN), "12m");
-  assert.strictEqual(formatRemaining(59 * MN + 59 * SEC), "59m");
+  assert.strictEqual(formatRemaining(12 * MN, t), "12m");
+  assert.strictEqual(formatRemaining(59 * MN + 59 * SEC, t), "59m");
 });
 
 test("formatRemaining: hour boundary as 1h 0m", () => {
-  assert.strictEqual(formatRemaining(60 * MN), "1h 0m");
+  assert.strictEqual(formatRemaining(60 * MN, t), "1h 0m");
 });
 
 test("formatRemaining: sub-day → <h>h <m>m", () => {
-  assert.strictEqual(formatRemaining(4 * HR + 23 * MN), "4h 23m");
-  assert.strictEqual(formatRemaining(23 * HR + 59 * MN), "23h 59m");
+  assert.strictEqual(formatRemaining(4 * HR + 23 * MN, t), "4h 23m");
+  assert.strictEqual(formatRemaining(23 * HR + 59 * MN, t), "23h 59m");
 });
 
 test("formatRemaining: day boundary as 1d 0h", () => {
-  assert.strictEqual(formatRemaining(24 * HR), "1d 0h");
+  assert.strictEqual(formatRemaining(24 * HR, t), "1d 0h");
 });
 
 test("formatRemaining: multi-day → <d>d <h>h", () => {
-  assert.strictEqual(formatRemaining(2 * DY + 4 * HR), "2d 4h");
-  assert.strictEqual(formatRemaining(7 * DY), "7d 0h");
+  assert.strictEqual(formatRemaining(2 * DY + 4 * HR, t), "2d 4h");
+  assert.strictEqual(formatRemaining(7 * DY, t), "7d 0h");
 });
 
 // Helper used by the order-action cases above. Same logic as

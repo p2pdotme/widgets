@@ -5,8 +5,9 @@ import {
   getPlaceholderFor,
   getPaymentLabelFor,
 } from "../core/currencies";
-import { paymentMethodDisplayFor } from "../core/currency-meta";
+import { resolveCurrencyMeta } from "../core/currency-meta";
 import type { CurrencyOption } from "../types";
+import { useI18n, useT } from "../i18n";
 
 export interface PaymentAddressInputProps {
   currency: CurrencyOption;
@@ -20,11 +21,22 @@ export interface PaymentAddressInputProps {
 
 export function PaymentAddressInput(props: PaymentAddressInputProps) {
   const { currency, value, onChange, onValidityChange, disabled, autoFocus } = props;
+  const t = useT();
+  const { locale } = useI18n();
   const [touched, setTouched] = useState(false);
 
-  const validator = getValidatorFor(currency.symbol, currency.validatePaymentAddress);
-  const placeholder = getPlaceholderFor(currency.symbol, currency.paymentAddressPlaceholder);
-  const label = getPaymentLabelFor(currency.symbol);
+  const validator = getValidatorFor(
+    currency.symbol,
+    currency.validatePaymentAddress,
+    locale,
+  );
+  const placeholder = getPlaceholderFor(
+    currency.symbol,
+    currency.paymentAddressPlaceholder,
+    locale,
+  );
+  const label = getPaymentLabelFor(currency.symbol, locale);
+  const paymentMethodDisplay = resolveCurrencyMeta(currency, locale).paymentMethodDisplay;
 
   const error = value.length > 0 ? validator(value) : null;
   const isEmpty = value.trim().length === 0;
@@ -39,7 +51,7 @@ export function PaymentAddressInput(props: PaymentAddressInputProps) {
       <label style={{ ...S.label, color: color.textMuted }}>
         {label}
         <span style={{ marginLeft: 6, color: color.textFaint, textTransform: "none", letterSpacing: 0 }}>
-          ({paymentMethodDisplayFor(currency.paymentMethod)})
+          ({paymentMethodDisplay})
         </span>
       </label>
       <input
@@ -69,11 +81,11 @@ export function PaymentAddressInput(props: PaymentAddressInputProps) {
       <div style={{ minHeight: 16, fontSize: font.sm }}>
         {showError ? (
           <span style={{ color: color.danger }}>
-            {isEmpty ? `${label} required` : error}
+            {isEmpty ? t("paymentAddress.required", { label }) : error}
           </span>
         ) : (
           <span style={{ color: color.textFaint }}>
-            Encrypted and shared securely once your order is accepted.
+            {t("paymentAddress.encryptedHint")}
           </span>
         )}
       </div>

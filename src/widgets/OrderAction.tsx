@@ -25,6 +25,7 @@ import {
 } from "../core/order-action";
 import { ContactSupport } from "./ContactSupport";
 import type { RaiseDisputeSigner } from "./ReportProblemStep";
+import { useT } from "../i18n";
 
 /** Force a re-render once per second ONLY while `active` — i.e. while a
  *  live countdown (the report-problem doughnut + remaining time) is on
@@ -86,8 +87,9 @@ export function OrderAction(props: OrderActionProps) {
     chatEnabled,
     theme,
   } = props;
+  const t = useT();
 
-  const state = computeOrderAction(order, Date.now());
+  const state = computeOrderAction(order, Date.now(), t);
   // Tick only rows that change with time: a live countdown (report-problem
   // chip, "review opens in", "will resolve within") or a dispute-window
   // boundary the row will cross. `state.live` is set by computeOrderAction
@@ -158,6 +160,7 @@ export function OrderAction(props: OrderActionProps) {
 }
 
 function ResumeButton({ onClick }: { onClick: () => void }) {
+  const t = useT();
   return (
     <button
       type="button"
@@ -171,7 +174,7 @@ function ResumeButton({ onClick }: { onClick: () => void }) {
         fontWeight: weight.medium,
       }}
     >
-      Resume order
+      {t("orderAction.resumeOrder")}
     </button>
   );
 }

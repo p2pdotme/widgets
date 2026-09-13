@@ -4,6 +4,9 @@ import {
   type CountryOption,
 } from "@p2pdotme/sdk/country";
 import type { CurrencyOption } from "../types";
+import { t } from "../i18n/t";
+import { resolveLocale } from "../i18n/resolveLocale";
+import type { Locale } from "../i18n/types";
 
 /**
  * Per-currency UI metadata resolved against the SDK as the source of truth.
@@ -26,7 +29,7 @@ import type { CurrencyOption } from "../types";
 export interface CompoundField {
   /** Stable key for React lists (`phone`, `bank`, …). */
   key: string;
-  /** English label for the field (e.g. "Bank name", "RIF"). */
+  /** Localized label for the field (e.g. "Bank name", "RIF"). */
   label: string;
 }
 
@@ -60,54 +63,71 @@ const SDK_INDEX: Record<string, CountryOption> = Object.fromEntries(
   COUNTRY_OPTIONS.map((c) => [c.currency, c]),
 );
 
-// SDK ships translation keys (e.g. "PIX_ID", "PAGO_MOVIL_DETAILS"); the
-// widget has no i18n layer, so we map them to English here. Keep aligned
-// with user-app-spa's i18n bundle when adding currencies. Falls back to a
-// kebab-cased version of the key for unmapped values.
-const ADDRESS_LABEL: Record<string, string> = {
-  UPI_ID: "UPI ID",
-  PIX_ID: "PIX ID",
-  ALIAS_ID: "Alias",
-  CLABE_ID: "CLABE",
-  PHONE_NUMBER: "phone number",
-  ACCOUNT_NUMBER: "account number",
-  PAGO_MOVIL_DETAILS: "Pago Móvil details",
-  QR_SIMPLE_DETAILS: "QR Simple details",
-  ALIAS_TRANSFERENCIA: "Bre-B Key",
-  TRANSFERMOVIL_DETAILS: "Transfermóvil details",
-  ECU_BANK_DETAILS: "bank details",
-  YAPE_PLIN_CCI_DETAILS: "Yape / Plin QR",
-  REVOLUT_ID: "Revolut ID",
-};
+/** SDK address-label keys that map to `currency.*` catalog entries. */
+const ADDRESS_KEYS = new Set([
+  "UPI_ID",
+  "PIX_ID",
+  "ALIAS_ID",
+  "CLABE_ID",
+  "PHONE_NUMBER",
+  "ACCOUNT_NUMBER",
+  "PAGO_MOVIL_DETAILS",
+  "QR_SIMPLE_DETAILS",
+  "ALIAS_TRANSFERENCIA",
+  "TRANSFERMOVIL_DETAILS",
+  "ECU_BANK_DETAILS",
+  "YAPE_PLIN_CCI_DETAILS",
+  "REVOLUT_ID",
+]);
 
-// Compound-field i18n keys → English. Used for the per-field breakdown
-// rows in the accepted-phase screen (NGN account/bank/name, VEN
-// phone/RIF/bank, CUP phone/card, ECU, PHP, PEN). Covers every label key
-// in the SDK catalog; unmapped keys fall back to the SDK field's own
-// `displayLabel` so a new currency renders sensibly before this map
-// learns about it.
-const FIELD_LABEL: Record<string, string> = {
-  UPI_ID: "UPI ID",
-  PIX_ID: "PIX ID",
-  ALIAS_ID: "Alias",
-  CLABE_ID: "CLABE",
-  PHONE_NUMBER: "Phone Number",
-  ACCOUNT_NUMBER: "Account Number",
-  ACCOUNT_NUMBER_LABEL: "Account Number",
-  BANK_NAME_LABEL: "Bank Name",
-  BANK_NAME: "Bank Name",
-  ACCOUNT_NAME: "Account Name",
-  BANK_LABEL: "Bank",
-  RIF_LABEL: "Cédula/RIF",
-  CARD_NUMBER: "Card Number",
-  ACCOUNT_TYPE: "Account Type",
-  NAME: "Name",
-  CEDULA: "Cédula",
-  ALIAS_TRANSFERENCIA: "Bre-B Key",
-  PERU_PHONE_LABEL: "Yape / Plin phone",
-  PERU_CCI_LABEL: "CCI",
-  REVOLUT_ID: "Revolut ID",
-};
+/** Map SDK address-label keys → `currency.*` catalog entries. */
+function labelFor(key: string, locale: Locale): string {
+  if (ADDRESS_KEYS.has(key)) return t(locale, `currency.${key}`);
+  return key.replace(/_/g, " ").toLowerCase();
+}
+
+/**
+ * Map SDK compound-field i18n keys → `currency.*` catalog entries.
+ * PHONE_NUMBER / ACCOUNT_NUMBER use the `_FIELD` variants; others share
+ * address keys or dedicated label keys. Unmapped keys fall back to the
+ * SDK field's `displayLabel` so a new currency renders before the catalog
+ * learns about it.
+ */
+function fieldLabelFor(
+  field: { label: string; displayLabel?: string | null },
+  locale: Locale,
+): string {
+  switch (field.label) {
+    case "PHONE_NUMBER":
+      return t(locale, "currency.PHONE_NUMBER_FIELD");
+    case "ACCOUNT_NUMBER":
+      return t(locale, "currency.ACCOUNT_NUMBER_FIELD");
+    case "UPI_ID":
+    case "PIX_ID":
+    case "ALIAS_ID":
+    case "CLABE_ID":
+    case "ACCOUNT_NUMBER_LABEL":
+    case "BANK_NAME_LABEL":
+    case "BANK_NAME":
+    case "ACCOUNT_NAME":
+    case "BANK_LABEL":
+    case "RIF_LABEL":
+    case "CARD_NUMBER":
+    case "ACCOUNT_TYPE":
+    case "NAME":
+    case "CEDULA":
+    case "ALIAS_TRANSFERENCIA":
+    case "PERU_PHONE_LABEL":
+    case "PERU_CCI_LABEL":
+    case "REVOLUT_ID":
+      return t(locale, `currency.${field.label}`);
+    default:
+      return (
+        field.displayLabel ??
+        field.label.replace(/_/g, " ").toLowerCase()
+      );
+  }
+}
 
 // Payment-method tokens → display names, matching user-app's English
 // i18n bundle. The protocol token (e.g. "PAGO_MOVIL") stays the stable
@@ -130,21 +150,13 @@ const PAYMENT_METHOD_DISPLAY: Record<string, string> = {
   BANK_TRANSFER: "Bank Transfer",
 };
 
-function labelFor(key: string): string {
-  return ADDRESS_LABEL[key] ?? key.replace(/_/g, " ").toLowerCase();
-}
-
-function fieldLabelFor(field: { label: string; displayLabel?: string | null }): string {
-  return FIELD_LABEL[field.label] ?? field.displayLabel ?? field.label.replace(/_/g, " ").toLowerCase();
-}
-
 /** Display name for a payment-method token ("PAGO_MOVIL" → "Pago Móvil").
  *  Unknown tokens with underscores are title-cased; plain values pass through
  *  (hosts may already send a display string like "Bank Transfer"). */
 export function paymentMethodDisplayFor(token: string): string {
   const mapped = PAYMENT_METHOD_DISPLAY[token];
   if (mapped) return mapped;
-  if (!token.includes("_") ) return token;
+  if (!token.includes("_")) return token;
   return token
     .toLowerCase()
     .split("_")
@@ -160,11 +172,14 @@ export function paymentMethodDisplayFor(token: string): string {
  */
 export function resolveCurrencyMeta(
   opt: { symbol: string } & Partial<CurrencyOption>,
+  locale?: string,
 ): CurrencyMeta {
+  const loc = resolveLocale(locale);
   const sdk = SDK_INDEX[opt.symbol];
   const paymentAddressName = sdk?.paymentAddressName ?? "PAYMENT_ID";
   const fields = PAYMENT_ID_FIELDS[opt.symbol as keyof typeof PAYMENT_ID_FIELDS] ?? [];
-  const paymentMethod = opt.paymentMethod ?? sdk?.paymentMethod ?? "Payment";
+  const paymentMethod =
+    opt.paymentMethod ?? sdk?.paymentMethod ?? t(loc, "currency.paymentFallback");
   return {
     symbol: opt.symbol,
     symbolNative: opt.symbolNative ?? sdk?.symbolNative ?? opt.symbol,
@@ -173,11 +188,11 @@ export function resolveCurrencyMeta(
     paymentMethod,
     paymentMethodDisplay: paymentMethodDisplayFor(paymentMethod),
     paymentAddressName,
-    paymentAddressLabel: labelFor(paymentAddressName),
+    paymentAddressLabel: labelFor(paymentAddressName, loc),
     isAlpha: opt.isAlpha ?? sdk?.isAlpha ?? false,
     compoundFields:
       fields.length > 1
-        ? fields.map((f) => ({ key: f.key, label: fieldLabelFor(f) }))
+        ? fields.map((f) => ({ key: f.key, label: fieldLabelFor(f, loc) }))
         : null,
   };
 }

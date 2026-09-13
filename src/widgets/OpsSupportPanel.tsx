@@ -39,6 +39,7 @@ import {
 import { Modal } from "../ui/Modal";
 import { Spinner, injectKeyframes } from "../ui/components";
 import { color, radius, font, weight, S } from "../ui/theme";
+import { useT } from "../i18n";
 
 const POLL_INTERVAL_MS = 7_000;
 
@@ -50,15 +51,12 @@ type OptimisticMessage = OpsThreadMessage & { serverId?: number };
 // Operator-facing labels as a Record over SupportP2PTag so adding a tag to
 // the union forces a label here — and TAG_OPTIONS (the dropdown, derived
 // below) can't silently ship missing the new tag.
-const TAG_LABELS: Record<SupportP2PTag, string> = {
-  awaiting_user: "Awaiting user",
-  reviewing: "Reviewing",
-  evidence: "Evidence",
-  escalated: "Escalated",
+const TAG_KEYS: Record<SupportP2PTag, string> = {
+  awaiting_user: "opsSupport.tagAwaitingUser",
+  reviewing: "opsSupport.tagReviewing",
+  evidence: "opsSupport.tagEvidence",
+  escalated: "opsSupport.tagEscalated",
 };
-const TAG_OPTIONS: Array<{ value: SupportP2PTag; label: string }> = (
-  Object.keys(TAG_LABELS) as SupportP2PTag[]
-).map((value) => ({ value, label: TAG_LABELS[value] }));
 
 const STATUS_STYLE: Record<SupportChatStatus, { bg: string; fg: string }> = {
   open: { bg: color.successSoft, fg: color.success },
@@ -80,6 +78,10 @@ export function OpsSupportPanel({
   bridgeUrl,
   onChatResolved,
 }: OpsSupportPanelProps) {
+  const t = useT();
+  const tagOptions: Array<{ value: SupportP2PTag; label: string }> = (
+    Object.keys(TAG_KEYS) as SupportP2PTag[]
+  ).map((value) => ({ value, label: t(TAG_KEYS[value]) }));
   const [thread, setThread] = useState<OpsThread | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
@@ -192,7 +194,7 @@ export function OpsSupportPanel({
       content,
       direction: "ops",
       createdAt: Date.now(),
-      senderName: "You",
+      senderName: t("common.you"),
     };
     setOptimistic((prev) => [...prev, temp]);
     setDraft("");
@@ -220,7 +222,7 @@ export function OpsSupportPanel({
     } finally {
       if (mountedRef.current) setSending(false);
     }
-  }, [draft, sending, isResolved, withAuth, bridgeUrl, orderId, loadThread]);
+  }, [draft, sending, isResolved, withAuth, bridgeUrl, orderId, loadThread, t]);
 
   const handleTagChange = useCallback(
     async (raw: string) => {
@@ -302,7 +304,7 @@ export function OpsSupportPanel({
         <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
           <StatusPill status={status} />
           <span style={{ ...S.faint, fontFamily: "ui-monospace, monospace" }}>
-            Order {shortenId(orderId)}
+            {t("opsSupport.orderLabel", { shortId: shortenId(orderId) })}
           </span>
         </div>
         <label
@@ -314,9 +316,9 @@ export function OpsSupportPanel({
             color: color.textMuted,
           }}
         >
-          <span>P2P tag</span>
+          <span>{t("opsSupport.p2pTag")}</span>
           <select
-            aria-label="P2P tag"
+            aria-label={t("opsSupport.p2pTagAria")}
             value={effectiveTag ?? ""}
             disabled={isResolved}
             onChange={(e) => void handleTagChange(e.target.value)}
@@ -331,8 +333,8 @@ export function OpsSupportPanel({
               cursor: isResolved ? "not-allowed" : "pointer",
             }}
           >
-            <option value="">Clear</option>
-            {TAG_OPTIONS.map((o) => (
+            <option value="">{t("opsSupport.clearTag")}</option>
+            {tagOptions.map((o) => (
               <option key={o.value} value={o.value}>
                 {o.label}
               </option>
@@ -361,16 +363,16 @@ export function OpsSupportPanel({
             style={{ display: "flex", alignItems: "center", gap: 10, color: color.textMuted }}
           >
             <Spinner size={18} />
-            <span style={{ ...S.muted }}>Loading conversation…</span>
+            <span style={{ ...S.muted }}>{t("opsSupport.loadingConversation")}</span>
           </div>
         ) : messages.length === 0 ? (
-          <div style={{ ...S.muted, margin: "auto" }}>No messages yet.</div>
+          <div style={{ ...S.muted, margin: "auto" }}>{t("opsSupport.noMessages")}</div>
         ) : (
           messages.map((m) => <MessageBubble key={m.id} message={m} />)
         )}
         {loadError && thread === null && (
           <div style={{ ...S.faint, color: color.danger }}>
-            Couldn’t load the conversation. Retrying…
+            {t("opsSupport.loadFailed")}
           </div>
         )}
       </div>
@@ -388,12 +390,12 @@ export function OpsSupportPanel({
       >
         {isResolved && (
           <div style={{ ...S.faint, color: color.textMuted }}>
-            This conversation is resolved. Set the status back to open to reply.
+            {t("opsSupport.resolvedFooter")}
           </div>
         )}
         <textarea
-          aria-label="Reply"
-          placeholder="Write a reply…"
+          aria-label={t("opsSupport.replyAria")}
+          placeholder={t("opsSupport.replyPlaceholder")}
           value={draft}
           disabled={isResolved}
           onChange={(e) => setDraft(e.target.value)}
@@ -427,7 +429,7 @@ export function OpsSupportPanel({
               cursor: isResolved ? "not-allowed" : "pointer",
             }}
           >
-            Resolve chat
+            {t("opsSupport.resolveChat")}
           </button>
           <button
             type="button"
@@ -442,7 +444,7 @@ export function OpsSupportPanel({
               opacity: isResolved || draft.trim().length === 0 ? 0.6 : 1,
             }}
           >
-            {sending ? "Sending…" : "Send"}
+            {sending ? t("common.sending") : t("common.send")}
           </button>
         </div>
       </div>
@@ -458,11 +460,10 @@ export function OpsSupportPanel({
             id="ops-resolve-title"
             style={{ ...S.h2, fontSize: font.lg, marginBottom: 8 }}
           >
-            Resolve this chat?
+            {t("opsSupport.resolveTitle")}
           </h2>
           <p style={{ ...S.muted, marginTop: 0, marginBottom: 16, lineHeight: 1.5 }}>
-            The user’s input is locked and they see a “chat closed” notice.
-            Set the status back to open to reply again.
+            {t("opsSupport.resolveBody")}
           </p>
           <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
             <button
@@ -470,7 +471,7 @@ export function OpsSupportPanel({
               onClick={() => setConfirmResolve(false)}
               style={{ ...S.secondaryBtn, height: 40, padding: "0 16px" }}
             >
-              Cancel
+              {t("common.cancel")}
             </button>
             <button
               type="button"
@@ -478,7 +479,7 @@ export function OpsSupportPanel({
               disabled={resolving}
               style={{ ...S.primaryBtn, width: "auto", height: 40, padding: "0 18px" }}
             >
-              {resolving ? "Resolving…" : "Resolve"}
+              {resolving ? t("opsSupport.resolving") : t("opsSupport.resolve")}
             </button>
           </div>
         </div>
@@ -488,20 +489,29 @@ export function OpsSupportPanel({
 }
 
 function StatusPill({ status }: { status: SupportChatStatus | null }) {
+  const t = useT();
   if (!status) {
     return (
       <span
         data-ops-status="none"
         style={pillStyle(color.surfaceAlt, color.textMuted)}
       >
-        No conversation
+        {t("opsSupport.noConversation")}
       </span>
     );
   }
   const s = STATUS_STYLE[status];
+  const label =
+    status === "open"
+      ? t("opsSupport.statusOpen")
+      : status === "pending"
+        ? t("opsSupport.statusPending")
+        : status === "snoozed"
+          ? t("opsSupport.statusSnoozed")
+          : t("opsSupport.statusResolved");
   return (
     <span data-ops-status={status} style={pillStyle(s.bg, s.fg)}>
-      {status}
+      {label}
     </span>
   );
 }
@@ -522,6 +532,7 @@ function pillStyle(bg: string, fg: string): React.CSSProperties {
 }
 
 function MessageBubble({ message }: { message: OpsThreadMessage }) {
+  const t = useT();
   const isOps = message.direction === "ops";
   return (
     <div
@@ -548,7 +559,7 @@ function MessageBubble({ message }: { message: OpsThreadMessage }) {
           color: color.textMuted,
         }}
       >
-        {message.senderName ?? (isOps ? "Support" : "Customer")}
+        {message.senderName ?? (isOps ? t("common.support") : t("opsSupport.customer"))}
       </div>
       {message.content}
     </div>

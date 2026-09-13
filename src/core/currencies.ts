@@ -1,5 +1,8 @@
 import type { PaymentAddressValidator } from "../types";
 import { normalizePixKey, detectPixKeyType } from "./pix-brcode";
+import { t } from "../i18n/t";
+import { resolveLocale } from "../i18n/resolveLocale";
+import type { Locale } from "../i18n/types";
 
 /**
  * Default validators per currency symbol. Mirrors the format expectations
@@ -10,57 +13,107 @@ import { normalizePixKey, detectPixKeyType } from "./pix-brcode";
  * The validators are intentionally permissive — the merchant's bank/PSP is
  * the source of truth for whether an address is actually deliverable. We
  * only catch obvious typos client-side.
+ *
+ * English-only map kept for backward-compatible public exports. Prefer
+ * `getValidatorFor(symbol, override, locale)` for localized messages.
  */
-export const DEFAULT_VALIDATORS: Record<string, PaymentAddressValidator> = {
-  // UPI handle: name@bank
-  INR: (s) =>
-    /^[\w.\-]{3,}@[\w]{2,}$/.test(s.trim())
-      ? null
-      : "UPI handle must look like name@bank (e.g. example@upi)",
+function localizePixError(err: unknown, locale: Locale): string {
+  if (!(err instanceof Error)) return t(locale, "paymentAddress.errPixInvalid");
+  const msg = err.message;
 
-  // PIX key: CPF, CNPJ, email, phone, or random (EVP/UUID) key. Key type
-  // isn't collected separately from the merchant, so we detect it from
-  // shape, then run the same normalization used to build the BR Code QR —
-  // a key that fails here would also fail (or corrupt) the QR payload.
-  BRL: (s) => {
-    const trimmed = s.trim();
-    if (trimmed.length === 0) return "PIX key required (CPF, CNPJ, email, phone, or random key)";
-    try {
-      normalizePixKey(trimmed, detectPixKeyType(trimmed));
-      return null;
-    } catch (err) {
-      return err instanceof Error ? err.message : "Invalid PIX key";
-    }
-  },
+  const cpf = /^CPF key must be 11 digits, got (\d+): (.+)$/.exec(msg);
+  if (cpf) return t(locale, "paymentAddress.errCpf", { n: cpf[1], raw: cpf[2] });
 
-  // IBAN: 2 letters + 2 digits + 11..30 alphanumerics, no spaces.
-  EUR: (s) => {
-    const v = s.replace(/\s+/g, "").toUpperCase();
-    return /^[A-Z]{2}\d{2}[\dA-Z]{11,30}$/.test(v)
-      ? null
-      : "IBAN format: CC## + alphanumerics (no spaces)";
-  },
+  const cnpj = /^CNPJ key must be 14 digits, got (\d+): (.+)$/.exec(msg);
+  if (cnpj) return t(locale, "paymentAddress.errCnpj", { n: cnpj[1], raw: cnpj[2] });
 
-  // US bank: account number ≥4 digits.
-  USD: (s) =>
-    /^\d{4,}$/.test(s.trim())
-      ? null
-      : "Account number required (digits only)",
+  const phone = /^Phone key should resolve to \+55 \+ area code \+ number, got: (.+)$/.exec(msg);
+  if (phone) return t(locale, "paymentAddress.errPhone", { raw: phone[1] });
 
-  // SGD: PayNow ID (NRIC, mobile, UEN). Permissive non-empty for v1.
-  SGD: (s) =>
-    s.trim().length >= 4
-      ? null
-      : "PayNow ID required (NRIC, mobile, or UEN)",
+  const email = /^Invalid email key: (.+)$/.exec(msg);
+  if (email) return t(locale, "paymentAddress.errEmail", { raw: email[1] });
 
-  // Mexican CLABE: 18 digits.
-  MXN: (s) =>
-    /^\d{18}$/.test(s.replace(/\s+/g, ""))
-      ? null
-      : "CLABE must be 18 digits",
-};
+  const evp = /^Invalid random\/EVP key, expected UUID format: (.+)$/.exec(msg);
+  if (evp) return t(locale, "paymentAddress.errEvp", { raw: evp[1] });
+
+  return t(locale, "paymentAddress.errPixInvalid");
+}
+
+function makeValidators(locale: Locale): Record<string, PaymentAddressValidator> {
+  return {
+    // UPI handle: name@bank
+    INR: (s) =>
+      /^[\w.\-]{3,}@[\w]{2,}$/.test(s.trim())
+        ? null
+        : t(locale, "paymentAddress.errUpi"),
+
+    // PIX key: CPF, CNPJ, email, phone, or random (EVP/UUID) key. Key type
+    // isn't collected separately from the merchant, so we detect it from
+    // shape, then run the same normalization used to build the BR Code QR —
+    // a key that fails here would also fail (or corrupt) the QR payload.
+    BRL: (s) => {
+      const trimmed = s.trim();
+      if (trimmed.length === 0) return t(locale, "paymentAddress.errPixRequired");
+      try {
+        normalizePixKey(trimmed, detectPixKeyType(trimmed));
+        return null;
+      } catch (err) {
+        return localizePixError(err, locale);
+      }
+    },
+
+    // IBAN: 2 letters + 2 digits + 11..30 alphanumerics, no spaces.
+    EUR: (s) => {
+      const v = s.replace(/\s+/g, "").toUpperCase();
+      return /^[A-Z]{2}\d{2}[\dA-Z]{11,30}$/.test(v)
+        ? null
+        : t(locale, "paymentAddress.errIban");
+    },
+
+    // US bank: account number ≥4 digits.
+    USD: (s) =>
+      /^\d{4,}$/.test(s.trim())
+        ? null
+        : t(locale, "paymentAddress.errUsd"),
+
+    // SGD: PayNow ID (NRIC, mobile, UEN). Permissive non-empty for v1.
+    SGD: (s) =>
+      s.trim().length >= 4
+        ? null
+        : t(locale, "paymentAddress.errSgd"),
+
+    // Mexican CLABE: 18 digits.
+    MXN: (s) =>
+      /^\d{18}$/.test(s.replace(/\s+/g, ""))
+        ? null
+        : t(locale, "paymentAddress.errMxn"),
+  };
+}
+
+export const DEFAULT_VALIDATORS: Record<string, PaymentAddressValidator> =
+  makeValidators("en");
 
 /** Per-currency placeholder shown in the input. */
+const PLACEHOLDER_KEYS: Record<string, string> = {
+  INR: "paymentAddress.placeholderInr",
+  BRL: "paymentAddress.placeholderBrl",
+  EUR: "paymentAddress.placeholderEur",
+  USD: "paymentAddress.placeholderUsd",
+  SGD: "paymentAddress.placeholderSgd",
+  MXN: "paymentAddress.placeholderMxn",
+};
+
+/** Per-currency input label for the form field. */
+const LABEL_KEYS: Record<string, string> = {
+  INR: "paymentAddress.labelUpi",
+  BRL: "paymentAddress.labelPix",
+  EUR: "paymentAddress.labelIban",
+  USD: "paymentAddress.labelBankAccount",
+  SGD: "paymentAddress.labelPayNow",
+  MXN: "paymentAddress.labelClabe",
+};
+
+/** English placeholders — public export for backward compatibility. */
 export const DEFAULT_PLACEHOLDERS: Record<string, string> = {
   INR: "name@upi",
   BRL: "PIX key (CPF, email, phone, or random)",
@@ -70,7 +123,7 @@ export const DEFAULT_PLACEHOLDERS: Record<string, string> = {
   MXN: "18-digit CLABE",
 };
 
-/** Per-currency input label for the form field. */
+/** English labels — public export for backward compatibility. */
 export const PAYMENT_METHOD_LABEL: Record<string, string> = {
   INR: "UPI handle",
   BRL: "PIX key",
@@ -86,19 +139,32 @@ export const FALLBACK_VALIDATOR: PaymentAddressValidator = (s) =>
 
 export function getValidatorFor(
   symbol: string,
-  override?: PaymentAddressValidator
+  override?: PaymentAddressValidator,
+  locale?: string,
 ): PaymentAddressValidator {
   if (override) return override;
-  return DEFAULT_VALIDATORS[symbol] ?? FALLBACK_VALIDATOR;
+  const loc = resolveLocale(locale);
+  const validators = makeValidators(loc);
+  return (
+    validators[symbol] ??
+    ((s) =>
+      s.trim().length >= 3 ? null : t(loc, "paymentAddress.errFallback"))
+  );
 }
 
 export function getPlaceholderFor(
   symbol: string,
-  override?: string
+  override?: string,
+  locale?: string,
 ): string {
-  return override ?? DEFAULT_PLACEHOLDERS[symbol] ?? "Payment address";
+  if (override) return override;
+  const loc = resolveLocale(locale);
+  const key = PLACEHOLDER_KEYS[symbol];
+  return key ? t(loc, key) : t(loc, "paymentAddress.placeholderFallback");
 }
 
-export function getPaymentLabelFor(symbol: string): string {
-  return PAYMENT_METHOD_LABEL[symbol] ?? "Payment address";
+export function getPaymentLabelFor(symbol: string, locale?: string): string {
+  const loc = resolveLocale(locale);
+  const key = LABEL_KEYS[symbol];
+  return key ? t(loc, key) : t(loc, "paymentAddress.labelFallback");
 }

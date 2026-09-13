@@ -24,6 +24,15 @@
 // Date.now()).
 
 import type { Order } from "@p2pdotme/sdk/orders";
+import { t as catalogT, type Translator } from "../i18n/t";
+
+export type { Translator };
+
+/** English translator — default for the public bit of this module so
+ *  pre-i18n callers (`computeOrderAction(order, Date.now())`) keep the
+ *  same copy they got in 1.8.0. Do not default to `noopT`: that returns
+ *  key paths and would render `"orderAction.completed"` in order lists. */
+const enT: Translator = (path, params) => catalogT("en", path, params);
 
 // Compact remaining-time formatter inlined here (vs. a peer file
 // imported by relative path) because node:test for the bridge runs
@@ -39,18 +48,32 @@ import type { Order } from "@p2pdotme/sdk/orders";
 // Negative or non-finite input clamps to "0s" so the formatter never
 // returns an empty or negative-looking string when a state machine
 // slips one tick past its window.
-export function formatRemaining(remainingMs: number): string {
-  if (!Number.isFinite(remainingMs) || remainingMs <= 0) return "0s";
+export function formatRemaining(remainingMs: number, t: Translator = enT): string {
+  if (!Number.isFinite(remainingMs) || remainingMs <= 0) {
+    return t("orderAction.remainingSeconds", { n: 0 });
+  }
   const totalSeconds = Math.floor(remainingMs / 1000);
-  if (totalSeconds < 60) return `${totalSeconds}s`;
+  if (totalSeconds < 60) {
+    return t("orderAction.remainingSeconds", { n: totalSeconds });
+  }
   const totalMinutes = Math.floor(totalSeconds / 60);
-  if (totalMinutes < 60) return `${totalMinutes}m`;
+  if (totalMinutes < 60) {
+    return t("orderAction.remainingMinutes", { n: totalMinutes });
+  }
   const totalHours = Math.floor(totalMinutes / 60);
   const remainderMinutes = totalMinutes - totalHours * 60;
-  if (totalHours < 24) return `${totalHours}h ${remainderMinutes}m`;
+  if (totalHours < 24) {
+    return t("orderAction.remainingHoursMinutes", {
+      h: totalHours,
+      m: remainderMinutes,
+    });
+  }
   const totalDays = Math.floor(totalHours / 24);
   const remainderHours = totalHours - totalDays * 24;
-  return `${totalDays}d ${remainderHours}h`;
+  return t("orderAction.remainingDaysHours", {
+    d: totalDays,
+    h: remainderHours,
+  });
 }
 
 export type ActionVariant =
@@ -105,23 +128,27 @@ export const PLACED_STALE_THRESHOLD_MS = 5 * MIN;
 // (24h after placement) — the chain's outermost resolution deadline.
 export const BUY_PAID_PROCESSING_WINDOW_MS = 30 * MIN;
 
+/** Dummy translator for callers that only inspect `action.kind` (not copy). */
+const noopT: Translator = (path) => path;
+
 export function computeOrderAction(
   order: Order,
   nowMs: number,
+  t: Translator = enT,
 ): OrderActionState {
   // Dispute lifecycle is short-circuited at the top. A raised or settled
   // dispute is always the most relevant state; downstream status flow
   // becomes secondary.
   if (order.disputeStatus === "open") {
     return {
-      statusText: "Under review",
+      statusText: t("orderAction.underReview"),
       action: { kind: "none" },
       disputeState: "open",
     };
   }
   if (order.disputeStatus === "resolved") {
     return {
-      statusText: "Resolved",
+      statusText: t("orderAction.resolved"),
       action: { kind: "none" },
       disputeState: "resolved",
     };
@@ -138,17 +165,15 @@ export function computeOrderAction(
       // the staleness in the row so users don't keep waiting on an order
       // that no merchant can pick up anymore.
       if (elapsed >= PLACED_STALE_THRESHOLD_MS) {
-        return noAction(
-          "Placed · still matching, this is taking longer than usual",
-        );
+        return noAction(t("orderAction.placedStale"));
       }
-      return noAction("Placed · matching");
+      return noAction(t("orderAction.placedMatching"));
 
     case "accepted":
       if (order.type === "buy") {
-        return resumeable("Accepted · awaiting your payment");
+        return resumeable(t("orderAction.acceptedAwaitingPayment"));
       }
-      return noAction("Accepted · processing payment");
+      return noAction(t("orderAction.acceptedProcessing"));
 
     case "paid": {
       if (order.type === "buy") {
@@ -168,36 +193,37 @@ export function computeOrderAction(
           const remaining = BUY_DISPUTE_CLOSE_MS - elapsed;
           if (remaining > 0) {
             return noAction(
-              `Paid · processing payment · will resolve within ${formatRemaining(remaining)}`,
+              t("orderAction.paidWillResolveWithin", {
+                remaining: formatRemaining(remaining, t),
+              }),
               true,
             );
           }
-          return noAction("Paid · processing payment");
+          return noAction(t("orderAction.paidProcessing"));
         }
         if (elapsed >= PLACED_STALE_THRESHOLD_MS) {
-          return noAction(
-            "Paid · processing payment · taking longer than usual",
-          );
+          return noAction(t("orderAction.paidTakingLonger"));
         }
-        return noAction("Paid · processing payment");
+        return noAction(t("orderAction.paidProcessing"));
       }
       // SELL or PAY in PAID state means the user has been paid; they
       // mark complete next.
-      return noAction("Payment received · confirm to complete");
+      return noAction(t("orderAction.paymentReceivedConfirm"));
     }
 
     case "completed": {
       if (order.type === "buy") {
         // BUY/COMPLETED is terminal-good — no dispute affordance.
-        return noAction("Completed");
+        return noAction(t("orderAction.completed"));
       }
       return computeDisputeWindow({
         openMs: SELL_PAY_DISPUTE_OPEN_MS,
         closeMs: SELL_PAY_DISPUTE_CLOSE_MS,
         elapsed,
-        beforeOpenLabel: "Completed",
-        insideLabel: "Completed",
-        afterCloseLabel: "Completed · review window closed",
+        beforeOpenLabel: t("orderAction.completed"),
+        insideLabel: t("orderAction.completed"),
+        afterCloseLabel: t("orderAction.completedReviewClosed"),
+        t,
       });
     }
 
@@ -207,20 +233,21 @@ export function computeOrderAction(
         // before cancellation. Without paidAt > 0 the order expired before
         // any USDC was pulled — nothing to recover.
         if (order.paidAt === 0n) {
-          return noAction("Cancelled");
+          return noAction(t("orderAction.cancelled"));
         }
         return computeDisputeWindow({
           openMs: BUY_DISPUTE_OPEN_MS,
           closeMs: BUY_DISPUTE_CLOSE_MS,
           elapsed,
-          beforeOpenLabel: "Cancelled",
-          insideLabel: "Cancelled · contact support to recover funds",
-          afterCloseLabel: "Cancelled · review window closed",
+          beforeOpenLabel: t("orderAction.cancelled"),
+          insideLabel: t("orderAction.cancelledContactSupport"),
+          afterCloseLabel: t("orderAction.cancelledReviewClosed"),
+          t,
         });
       }
       // SELL/PAY cancelled = terminal-bad (e.g. merchant refunded). No
       // dispute path.
-      return noAction("Cancelled");
+      return noAction(t("orderAction.cancelled"));
     }
 
     default:
@@ -228,7 +255,7 @@ export function computeOrderAction(
       // rather than crashing the row. The actual SDK union is closed, but
       // an over-the-wire change could surface a new value before the
       // widget catches up.
-      return noAction("Status unavailable");
+      return noAction(t("orderAction.statusUnavailable"));
   }
 }
 
@@ -249,7 +276,7 @@ export function isOrderActionable(
   nowMs: number = Date.now(),
 ): boolean {
   if (order.disputeStatus === "open") return true;
-  const state = computeOrderAction(order, nowMs);
+  const state = computeOrderAction(order, nowMs, noopT);
   return state.action.kind !== "none";
 }
 
@@ -268,16 +295,27 @@ interface DisputeWindowInput {
    *  the countdown; this label stays static for readability. */
   insideLabel: string;
   afterCloseLabel: string;
+  t: Translator;
 }
 
 function computeDisputeWindow(input: DisputeWindowInput): OrderActionState {
-  const { openMs, closeMs, elapsed, beforeOpenLabel, insideLabel, afterCloseLabel } =
-    input;
+  const {
+    openMs,
+    closeMs,
+    elapsed,
+    beforeOpenLabel,
+    insideLabel,
+    afterCloseLabel,
+    t,
+  } = input;
 
   if (elapsed < openMs) {
     const remaining = openMs - elapsed;
     return {
-      statusText: `${beforeOpenLabel} · review opens in ${formatRemaining(remaining)}`,
+      statusText: t("orderAction.reviewOpensIn", {
+        label: beforeOpenLabel,
+        remaining: formatRemaining(remaining, t),
+      }),
       action: { kind: "none" },
       disputeState: "none",
       // Live: ticking the countdown also re-renders the row the instant it

@@ -83,6 +83,12 @@ export interface P2PErrorInput {
   userMessage: string;
   /** Internal message — extra detail for the log + Error.message. Defaults to userMessage. */
   devMessage?: string;
+  /**
+   * Optional i18n catalog path (e.g. `"checkout.rateLoadFailed"`). When set,
+   * widget UI prefers `t(i18nKey)` via `translateError` over code-based maps.
+   * `userMessage` remains the English fallback for hosts / logs.
+   */
+  i18nKey?: string;
   retryable?: boolean;
   context?: P2PErrorContext;
   /** Raw 4-byte selector when category=revert. */
@@ -106,6 +112,7 @@ export class P2PError extends Error {
   readonly code: P2PErrorCode;
   readonly category: P2PErrorCategory;
   readonly userMessage: string;
+  readonly i18nKey?: string;
   readonly retryable: boolean;
   readonly context: P2PErrorContext;
   readonly revertSelector?: string;
@@ -121,6 +128,7 @@ export class P2PError extends Error {
     this.code = input.code;
     this.category = input.category;
     this.userMessage = input.userMessage;
+    this.i18nKey = input.i18nKey;
     this.retryable = input.retryable ?? true;
     this.context = input.context ?? {};
     this.revertSelector = input.revertSelector;
@@ -455,6 +463,7 @@ export function classifyError(err: unknown, ctx: P2PErrorContext = {}): P2PError
       code: err.code,
       category: err.category,
       userMessage: err.userMessage,
+      i18nKey: err.i18nKey,
       devMessage: err.message,
       retryable: err.retryable,
       context: { ...err.context, ...ctx },
@@ -709,21 +718,27 @@ export function screeningRejectedError(
   const restrictedUntil = res.restricted_until ?? undefined;
 
   let userMessage: string;
+  let i18nKey: string | undefined;
   if (reason === "user_restricted") {
     userMessage = "We saw unusual activity - pls wait for sometime as a minor update";
+    i18nKey = "errors.screeningRestricted";
   } else if (reason === "cluster_blacklisted") {
     userMessage =
       "This order cannot be processed. Please contact support if you believe this is in error.";
+    i18nKey = "errors.screeningRejected";
+  } else if (res.message) {
+    userMessage = res.message;
   } else {
     userMessage =
-      res.message ||
       "This order cannot be processed. Please contact support if you believe this is in error.";
+    i18nKey = "errors.screeningRejected";
   }
 
   return new P2PError({
     code: "SCREENING_REJECTED",
     category: "screening",
     userMessage,
+    i18nKey,
     devMessage: `Screening rejected (reason=${reason})`,
     retryable: false,
     context: { ...ctx, screeningReason: reason, restrictedUntil },
@@ -740,11 +755,12 @@ export function livenessRequiredError(
   res: { message?: string | null },
   ctx: P2PErrorContext,
 ): P2PError {
+  const fallback = "Quick human check required before you can continue.";
   return new P2PError({
     code: "SCREENING_LIVENESS_REQUIRED",
     category: "screening",
-    userMessage:
-      res.message || "Quick human check required before you can continue.",
+    userMessage: res.message || fallback,
+    i18nKey: res.message ? undefined : "errors.livenessRequired",
     devMessage: "Screening requires liveness verification",
     retryable: true,
     context: { ...ctx, screeningReason: "liveliness_required" },

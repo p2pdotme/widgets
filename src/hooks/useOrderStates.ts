@@ -33,6 +33,7 @@ import {
   computeOrderAction,
   type OrderActionState,
 } from "../core/order-action";
+import { useT } from "../i18n";
 
 // Canonical Multicall3 deployment (deterministic CREATE2 address; same on
 // Base mainnet and Base Sepolia).
@@ -323,15 +324,16 @@ export function useOrderStates(
   // also drives the tick loop — it re-runs on `tickToken` bumps so the
   // statusText / remainingMs stays current without re-fetching from
   // chain.
+  const t = useT();
   const [tickToken, setTickToken] = useState(0);
   useEffect(() => {
     const now = Date.now() + clockSkewMs.current;
     const next = new Map<string, OrderStateRow>();
     for (const [id, order] of orders) {
-      next.set(id, { order, state: computeOrderAction(order, now) });
+      next.set(id, { order, state: computeOrderAction(order, now, t) });
     }
     setRows(next);
-  }, [orders, tickToken]);
+  }, [orders, tickToken, t]);
 
   // Poll + sub-tick. Two intervals: a slow one that triggers a fresh
   // chain read every `pollIntervalMs` and a fast one that re-derives

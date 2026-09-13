@@ -87,3 +87,17 @@ export type {
   ScreeningUserDetails,
   P2PTheme,
 } from "./types";
+
+// ─── i18n ──────────────────────────────────────────────────────────────
+export {
+  resolveLocale,
+  t,
+  createTranslator,
+  translateError,
+  I18nProvider,
+  useI18n,
+  useT,
+  useI18nContext,
+  LOCALE_TAG,
+} from "./i18n";
+export type { Locale, MessageParams, Translator, Messages } from "./i18n";

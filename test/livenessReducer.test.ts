@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { reducer, INITIAL } from "../src/core/order-machine";
+import { P2PError } from "../src/core/errors";
 
 // Focused coverage of the anti-sybil liveness state machine (verify-once +
 // screening-flag trigger). The pure gate math lives in liveness.test.ts; this
@@ -49,10 +50,15 @@ describe("liveness reducer transitions", () => {
 
   it("verify failure returns to the block with an error, staying on the form", () => {
     const gated = reducer(reducer(INITIAL, { type: "PLACING" }), { type: "LIVENESS_REQUIRED" });
-    const failed = reducer(gated, { type: "LIVENESS_VERIFY_FAILED", message: "nope" });
+    const err = new P2PError({
+      code: "UNKNOWN",
+      category: "unknown",
+      userMessage: "nope",
+    });
+    const failed = reducer(gated, { type: "LIVENESS_VERIFY_FAILED", error: err });
     expect(failed.phase).toBe("checkout");
     expect(failed.livenessGate).toBe("required");
-    expect(failed.livenessError).toBe("nope");
+    expect(failed.livenessError).toBe(err);
     expect(failed.livenessCleared).toBe(false); // still not cleared
   });
 });

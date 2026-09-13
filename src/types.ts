@@ -262,6 +262,11 @@ export interface CheckoutProps {
   demo?: boolean;
   /** Optional theming overrides. See `P2PTheme` for the surface. */
   theme?: P2PTheme;
+  /**
+   * UI locale (`en` | `es` | `pt-BR`). When omitted, derived from
+   * `navigator.language` with English as the fallback.
+   */
+  locale?: string;
 
   // Optional B2B fraud screening. When provided, the widget logs the
   // buy attempt to the fraud engine before invoking `placeOrder`, then
@@ -500,6 +505,11 @@ export interface CashoutProps {
   open?: boolean;
   /** Optional theming overrides. See `P2PTheme` for the surface. */
   theme?: P2PTheme;
+  /**
+   * UI locale (`en` | `es` | `pt-BR`). When omitted, derived from
+   * `navigator.language` with English as the fallback.
+   */
+  locale?: string;
 
   // ─── Events ──────────────────────────────────────────────────────
   onOrderPlaced?: (orderId: string, txHash: string) => void;
@@ -620,6 +630,11 @@ export interface SupportProps {
    */
   chatEnabled?: boolean;
   theme?: SupportTheme;
+  /**
+   * UI locale (`en` | `es` | `pt-BR`). When omitted, derived from
+   * `navigator.language` with English as the fallback.
+   */
+  locale?: string;
   onOpen?: () => void;
   onClose?: () => void;
   /**
