@@ -533,7 +533,7 @@ function CashoutInner(props: CashoutProps) {
                           orderId: state.orderId,
                           usdc: usdcDisplay ?? "",
                           currencyClause: ` ${state.currency.symbol}`,
-                          paymentMethod: resolveCurrencyMeta(state.currency, locale).paymentMethod,
+                          paymentMethod: resolveCurrencyMeta(state.currency, locale).paymentMethodDisplay,
                         })
                       : t("cashout.matchingSubtitleAccount", {
                           orderId: state.orderId,
@@ -577,7 +577,7 @@ function CashoutInner(props: CashoutProps) {
                       ? t("cashout.watchForArrival", {
                           symbol: state.currency.symbol,
                           fiat: fiatDisplay,
-                          paymentMethod: resolveCurrencyMeta(state.currency, locale).paymentMethod,
+                          paymentMethod: resolveCurrencyMeta(state.currency, locale).paymentMethodDisplay,
                         })
                       : t("cashout.watchForFiat")
                   }

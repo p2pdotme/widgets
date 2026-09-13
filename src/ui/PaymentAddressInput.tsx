@@ -36,7 +36,7 @@ export function PaymentAddressInput(props: PaymentAddressInputProps) {
     locale,
   );
   const label = getPaymentLabelFor(currency.symbol, locale);
-  const paymentMethod = resolveCurrencyMeta(currency, locale).paymentMethod;
+  const paymentMethodDisplay = resolveCurrencyMeta(currency, locale).paymentMethodDisplay;
 
   const error = value.length > 0 ? validator(value) : null;
   const isEmpty = value.trim().length === 0;
@@ -51,7 +51,7 @@ export function PaymentAddressInput(props: PaymentAddressInputProps) {
       <label style={{ ...S.label, color: color.textMuted }}>
         {label}
         <span style={{ marginLeft: 6, color: color.textFaint, textTransform: "none", letterSpacing: 0 }}>
-          ({paymentMethod})
+          ({paymentMethodDisplay})
         </span>
       </label>
       <input

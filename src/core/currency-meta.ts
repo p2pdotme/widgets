@@ -41,8 +41,12 @@ export interface CurrencyMeta {
   country: string;
   /** Country flag emoji. */
   flag: string;
-  /** Payment-method short name (e.g. "PIX", "UPI", "Alias"). */
+  /** Payment-method token as the protocol knows it (e.g. "PIX", "PAGO_MOVIL").
+   *  Stable id — never render it directly; use `paymentMethodDisplay`. */
   paymentMethod: string;
+  /** Human-readable payment-method name for copy (e.g. "Pago Móvil",
+   *  "Yape / Plin / CCI"). Matches user-app's English i18n strings. */
+  paymentMethodDisplay: string;
   /** SDK's i18n key for the address field (e.g. "PIX_ID"). Useful as a stable id. */
   paymentAddressName: string;
   /** Human-readable label used in copy ("PIX ID", "Alias", "CLABE"). */
@@ -59,6 +63,7 @@ const SDK_INDEX: Record<string, CountryOption> = Object.fromEntries(
   COUNTRY_OPTIONS.map((c) => [c.currency, c]),
 );
 
+/** SDK address-label keys that map to `currency.*` catalog entries. */
 const ADDRESS_KEYS = new Set([
   "UPI_ID",
   "PIX_ID",
@@ -67,6 +72,12 @@ const ADDRESS_KEYS = new Set([
   "PHONE_NUMBER",
   "ACCOUNT_NUMBER",
   "PAGO_MOVIL_DETAILS",
+  "QR_SIMPLE_DETAILS",
+  "ALIAS_TRANSFERENCIA",
+  "TRANSFERMOVIL_DETAILS",
+  "ECU_BANK_DETAILS",
+  "YAPE_PLIN_CCI_DETAILS",
+  "REVOLUT_ID",
 ]);
 
 /** Map SDK address-label keys → `currency.*` catalog entries. */
@@ -78,10 +89,15 @@ function labelFor(key: string, locale: Locale): string {
 /**
  * Map SDK compound-field i18n keys → `currency.*` catalog entries.
  * PHONE_NUMBER / ACCOUNT_NUMBER use the `_FIELD` variants; others share
- * address keys or dedicated `*_LABEL` keys.
+ * address keys or dedicated label keys. Unmapped keys fall back to the
+ * SDK field's `displayLabel` so a new currency renders before the catalog
+ * learns about it.
  */
-function fieldLabelFor(key: string, locale: Locale): string {
-  switch (key) {
+function fieldLabelFor(
+  field: { label: string; displayLabel?: string | null },
+  locale: Locale,
+): string {
+  switch (field.label) {
     case "PHONE_NUMBER":
       return t(locale, "currency.PHONE_NUMBER_FIELD");
     case "ACCOUNT_NUMBER":
@@ -92,12 +108,60 @@ function fieldLabelFor(key: string, locale: Locale): string {
     case "CLABE_ID":
     case "ACCOUNT_NUMBER_LABEL":
     case "BANK_NAME_LABEL":
+    case "BANK_NAME":
+    case "ACCOUNT_NAME":
     case "BANK_LABEL":
     case "RIF_LABEL":
-      return t(locale, `currency.${key}`);
+    case "CARD_NUMBER":
+    case "ACCOUNT_TYPE":
+    case "NAME":
+    case "CEDULA":
+    case "ALIAS_TRANSFERENCIA":
+    case "PERU_PHONE_LABEL":
+    case "PERU_CCI_LABEL":
+    case "REVOLUT_ID":
+      return t(locale, `currency.${field.label}`);
     default:
-      return key.replace(/_/g, " ").toLowerCase();
+      return (
+        field.displayLabel ??
+        field.label.replace(/_/g, " ").toLowerCase()
+      );
   }
+}
+
+// Payment-method tokens → display names, matching user-app's English
+// i18n bundle. The protocol token (e.g. "PAGO_MOVIL") stays the stable
+// id; only rendering goes through this map. BANK_TRANSFER is not an SDK
+// token but a value existing hosts pass as a CurrencyOption override.
+const PAYMENT_METHOD_DISPLAY: Record<string, string> = {
+  UPI: "UPI",
+  QRIS: "QRIS",
+  PIX: "PIX",
+  ALIAS: "Alias",
+  SPEI: "SPEI",
+  PAGO_MOVIL: "Pago Móvil",
+  QR_SIMPLE: "QR Simple",
+  NIP: "NIP",
+  TRANSFERENCIA: "Bank Transfer",
+  TRANSFERMOVIL: "Transfermóvil",
+  YAPE_PLIN_CCI: "Yape / Plin / CCI",
+  INSTAPAY: "InstaPay",
+  REVOLUT: "Revolut",
+  BANK_TRANSFER: "Bank Transfer",
+};
+
+/** Display name for a payment-method token ("PAGO_MOVIL" → "Pago Móvil").
+ *  Unknown tokens with underscores are title-cased; plain values pass through
+ *  (hosts may already send a display string like "Bank Transfer"). */
+export function paymentMethodDisplayFor(token: string): string {
+  const mapped = PAYMENT_METHOD_DISPLAY[token];
+  if (mapped) return mapped;
+  if (!token.includes("_")) return token;
+  return token
+    .toLowerCase()
+    .split("_")
+    .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w))
+    .join(" ");
 }
 
 /**
@@ -114,18 +178,21 @@ export function resolveCurrencyMeta(
   const sdk = SDK_INDEX[opt.symbol];
   const paymentAddressName = sdk?.paymentAddressName ?? "PAYMENT_ID";
   const fields = PAYMENT_ID_FIELDS[opt.symbol as keyof typeof PAYMENT_ID_FIELDS] ?? [];
+  const paymentMethod =
+    opt.paymentMethod ?? sdk?.paymentMethod ?? t(loc, "currency.paymentFallback");
   return {
     symbol: opt.symbol,
     symbolNative: opt.symbolNative ?? sdk?.symbolNative ?? opt.symbol,
     country: opt.country ?? sdk?.country ?? "",
     flag: opt.flag ?? sdk?.flag ?? "",
-    paymentMethod: opt.paymentMethod ?? sdk?.paymentMethod ?? t(loc, "currency.paymentFallback"),
+    paymentMethod,
+    paymentMethodDisplay: paymentMethodDisplayFor(paymentMethod),
     paymentAddressName,
     paymentAddressLabel: labelFor(paymentAddressName, loc),
     isAlpha: opt.isAlpha ?? sdk?.isAlpha ?? false,
     compoundFields:
       fields.length > 1
-        ? fields.map((f) => ({ key: f.key, label: fieldLabelFor(f.label, loc) }))
+        ? fields.map((f) => ({ key: f.key, label: fieldLabelFor(f, loc) }))
         : null,
   };
 }
