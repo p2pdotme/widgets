@@ -3,6 +3,7 @@ import { createPublicClient, http, formatUnits, parseUnits, stringToHex } from "
 import { baseSepolia, base } from "viem/chains";
 import type { CashoutProps, CurrencyOption } from "../types";
 import { useOfframpMachine } from "../core/offramp-machine";
+import { cashoutStepIndex } from "../core/stepper";
 import { resolveSellAmount, usdcToFiat } from "../core/price-math";
 import { color, radius, font, weight, shadow, S, themeToCssVars } from "../ui/theme";
 import { Modal } from "../ui/Modal";
@@ -247,11 +248,7 @@ export function Cashout(props: CashoutProps) {
 
   const canSubmit = paymentValid && parsedAmount !== null && !insufficientBalance && !isQuotePending;
 
-  const stepIndex =
-    state.phase === "completed" ? 3 :
-    state.phase === "paid" ? 2 :
-    state.phase === "accepted" || state.phase === "encrypting" ? 1 :
-    0;
+  const stepIndex = cashoutStepIndex(state.phase);
 
   const showTracking =
     ["placed", "accepted", "encrypting", "paid", "completed", "cancelled"].includes(state.phase) ||

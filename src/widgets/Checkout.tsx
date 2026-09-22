@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { formatUnits } from "viem";
 import type { CheckoutProps } from "../types";
 import { useOrderMachine } from "../core/order-machine";
+import { checkoutStepIndex } from "../core/stepper";
 import { usdcToFiat } from "../core/price-math";
 import { resolveCurrencyMeta } from "../core/currency-meta";
 import { resolvePaymentDisplay } from "../core/payment-display";
@@ -438,7 +439,7 @@ export function Checkout(props: CheckoutProps) {
       ? resolvePaymentDisplay(state.currency, state.decryptedUpi, fiatDisplay)
       : null;
 
-  const stepIndex = state.phase === "completed" ? 3 : state.phase === "paid" ? 2 : state.phase === "accepted" ? 1 : 0;
+  const stepIndex = checkoutStepIndex(state.phase);
   const hasPlaceOrder = Boolean(placeOrder);
 
   // Narrow the gate union once so the JSX render block doesn't have to
