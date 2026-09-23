@@ -25,10 +25,12 @@ import {
 import type { SupportSigner, SupportP2PTag, SupportChatStatus } from "../types";
 import {
   fetchOpsThread,
+  fetchOpsOperators,
   postOpsMessage,
   patchOpsP2pTag,
   resolveOpsChat,
   OpsBridgeError,
+  type OpsOperatorNames,
   type OpsThread,
   type OpsThreadMessage,
 } from "../api/opsBridge";
@@ -97,6 +99,11 @@ export function OpsSupportPanel({
     SupportP2PTag | null | undefined
   >(undefined);
 
+  // Operator names from commops (via the bridge), to label replies the same
+  // way ops-app's general chat does. Fetched once; a failure just leaves the
+  // wallet as the label.
+  const [operators, setOperators] = useState<OpsOperatorNames>({});
+
   const tempIdRef = useRef(-1);
   const mountedRef = useRef(true);
 
@@ -164,6 +171,14 @@ export function OpsSupportPanel({
       setLoadError(err instanceof Error ? err.message : String(err));
     }
   }, [withAuth, bridgeUrl, orderId]);
+
+  useEffect(() => {
+    void withAuth((token) => fetchOpsOperators({ bridgeUrl, sessionToken: token }))
+      .then((names) => {
+        if (mountedRef.current && names) setOperators(names);
+      })
+      .catch(() => {});
+  }, [withAuth, bridgeUrl]);
 
   // Initial load + 7s poll. Single request per tick; cleanup on unmount.
   useEffect(() => {
@@ -366,7 +381,9 @@ export function OpsSupportPanel({
         ) : messages.length === 0 ? (
           <div style={{ ...S.muted, margin: "auto" }}>No messages yet.</div>
         ) : (
-          messages.map((m) => <MessageBubble key={m.id} message={m} />)
+          messages.map((m) => (
+            <MessageBubble key={m.id} message={m} label={senderLabel(m, operators)} />
+          ))
         )}
         {loadError && thread === null && (
           <div style={{ ...S.faint, color: color.danger }}>
@@ -521,7 +538,23 @@ function pillStyle(bg: string, fg: string): React.CSSProperties {
   };
 }
 
-function MessageBubble({ message }: { message: OpsThreadMessage }) {
+/**
+ * Who a bubble is from. Customer messages say "Customer". An ops reply sent
+ * through the bridge carries the operator's wallet: show their commops name,
+ * else the shortened wallet. Anything unstamped — the dispute opener, a
+ * Chatwoot-console reply — is "Support": the Chatwoot account name is the one
+ * shared API account (it would print the same person's name on everything).
+ */
+export function senderLabel(m: OpsThreadMessage, operators: OpsOperatorNames): string {
+  if (m.direction === "user") return "Customer";
+  if (m.senderName === "You") return "You";
+  if (m.opsAddress) {
+    return operators[m.opsAddress.toLowerCase()] ?? shortenId(m.opsAddress);
+  }
+  return "Support";
+}
+
+function MessageBubble({ message, label }: { message: OpsThreadMessage; label: string }) {
   const isOps = message.direction === "ops";
   return (
     <div
@@ -548,7 +581,7 @@ function MessageBubble({ message }: { message: OpsThreadMessage }) {
           color: color.textMuted,
         }}
       >
-        {message.senderName ?? (isOps ? "Support" : "Customer")}
+        {label}
       </div>
       {message.content}
     </div>

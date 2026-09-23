@@ -64,6 +64,10 @@ export interface OpsThreadMessage {
   direction: "user" | "ops";
   createdAt: number;
   senderName: string | null;
+  /** Wallet of the operator who sent this reply through the bridge. Null on a
+   *  customer message, and on anything posted without a stamp (the dispute
+   *  opener, a Chatwoot-console reply). Older bridges omit it. */
+  opsAddress?: string | null;
 }
 
 export interface OpsThread {
@@ -137,4 +141,21 @@ export async function resolveOpsChat(
     { method: "POST" },
     opts.sessionToken,
   )) as OpsResolveResult;
+}
+
+/** Lowercased wallet -> display name, from the commops operator registry
+ *  (served by the bridge). A wallet with no name is simply absent. */
+export type OpsOperatorNames = Record<string, string>;
+
+/** Operator display names for labelling replies. Presentation only. */
+export async function fetchOpsOperators(opts: {
+  bridgeUrl: string;
+  sessionToken: string;
+}): Promise<OpsOperatorNames> {
+  const body = (await opsFetch(
+    `${trim(opts.bridgeUrl)}/ops/operators`,
+    { method: "GET" },
+    opts.sessionToken,
+  )) as { ok?: boolean; operators?: OpsOperatorNames };
+  return body.ok && body.operators ? body.operators : {};
 }

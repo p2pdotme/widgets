@@ -374,6 +374,35 @@ describe("<Support mode=\"ops\">", () => {
     expect(screen.getByRole("button", { name: /resolve chat/i })).toBeDisabled();
   });
 
+  it("labels replies by commops operator name, never the shared Chatwoot account", async () => {
+    const OPS = "0x5E2d90000000000000000000000000000007b31C8";
+    globalThis.fetch = vi.fn(async (url: string) => {
+      const u = String(url);
+      if (u.endsWith("/ops/operators")) {
+        return jsonRes({ ok: true, operators: { [OPS.toLowerCase()]: "Priya" } });
+      }
+      if (u.endsWith("/thread")) {
+        return jsonRes(
+          threadBody({
+            messages: [
+              { id: 1, content: "A dispute has been raised on this order.", direction: "ops", createdAt: 1, senderName: "0xkeccak", opsAddress: null },
+              { id: 2, content: "Paid, no USDC", direction: "user", createdAt: 2, senderName: "Customer" },
+              { id: 3, content: "Checking now", direction: "ops", createdAt: 3, senderName: "0xkeccak", opsAddress: OPS },
+            ],
+          }),
+        );
+      }
+      return jsonRes({ ok: false }, 500);
+    }) as unknown as typeof fetch;
+
+    render(
+      <Support mode="ops" orderId={ORDER} signer={signer} bridgeUrl={BASE} layout="inline" />,
+    );
+    await screen.findByText("Priya");
+    expect(screen.getByText("Support")).toBeTruthy();
+    expect(screen.queryByText("0xkeccak")).toBeNull();
+  });
+
   it("renders an empty-state when the thread has no messages", async () => {
     globalThis.fetch = routedFetch({
       thread: () => threadBody({ messages: [] }),
