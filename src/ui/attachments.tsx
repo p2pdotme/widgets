@@ -46,7 +46,7 @@ export function attachmentFailureMessage(reason: string | undefined): string | n
     case "invalid_attachment":
       return "That file couldn’t be read. Please try another.";
     case "attachment_rate_limited":
-      return "You’ve sent a lot of files. Please wait a while before attaching another.";
+      return "Files can’t be sent right now. Please try again later, or describe it in a message.";
   }
   return null;
 }
