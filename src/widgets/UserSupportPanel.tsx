@@ -34,6 +34,14 @@ import {
 } from "../state/sessionCache";
 import { P2PTagBanner } from "./P2PTagBanner";
 import { Spinner, injectKeyframes } from "../ui/components";
+import {
+  ATTACHMENT_ACCEPT,
+  AttachmentList,
+  attachmentFailureMessage,
+  attachmentProblem,
+  readAttachment,
+  type AttachmentUpload,
+} from "../ui/attachments";
 import { color, radius, font, weight, S } from "../ui/theme";
 
 const POLL_INTERVAL_MS = 7_000;
@@ -65,6 +73,8 @@ function isAuthFailure(err: unknown): boolean {
  *  `reason`. Avoids protocol-internal terms (no "dispute"/"conversation"). */
 function sendFailureMessage(err: unknown): string {
   if (err instanceof UserBridgeError) {
+    const fileCopy = attachmentFailureMessage(err.reason);
+    if (fileCopy) return fileCopy;
     switch (err.reason) {
       case "conversation_not_ready":
         return "Support isn’t ready yet. Please try again in a moment.";
@@ -104,6 +114,9 @@ export function UserSupportPanel({
   const [authError, setAuthError] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  // One picked file (JPG, PNG or PDF) waiting to go out with the next send.
+  const [file, setFile] = useState<File | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [sending, setSending] = useState(false);
   // Optimistic messages not yet seen in a poll; reconciled on `serverId`.
   const [optimistic, setOptimistic] = useState<OptimisticMessage[]>([]);
@@ -218,26 +231,59 @@ export function UserSupportPanel({
 
   const handleSend = useCallback(async () => {
     const content = draft.trim();
-    if (!content || sending || isResolved) return;
+    const pickedFile = file;
+    if ((!content && !pickedFile) || sending || isResolved) return;
     if (content.length > MAX_MESSAGE_LENGTH) {
       setSendError(`Message is too long (max ${MAX_MESSAGE_LENGTH} characters).`);
       return;
     }
     setSending(true);
     setSendError(null);
-    // Optimistic append: show the message immediately.
+    let attachment: AttachmentUpload | undefined;
+    if (pickedFile) {
+      try {
+        attachment = await readAttachment(pickedFile);
+      } catch {
+        if (mountedRef.current) {
+          setSendError("That file couldn’t be read. Please try another.");
+          setSending(false);
+        }
+        return;
+      }
+    }
+    // Optimistic append: show the message immediately. The file shows as its
+    // name until the poll brings back the stored copy.
     const temp: UserThreadMessage = {
       id: tempIdRef.current--,
       content,
       direction: "user",
       createdAt: Date.now(),
       senderName: "You",
+      attachments: pickedFile
+        ? [
+            {
+              id: -1,
+              fileType: "file",
+              url: "#",
+              thumbUrl: null,
+              fileName: pickedFile.name,
+              fileSize: pickedFile.size,
+            },
+          ]
+        : undefined,
     };
     setOptimistic((prev) => [...prev, temp]);
     setDraft("");
+    setFile(null);
     try {
       const result = await withAuth((token) =>
-        postUserMessage({ bridgeUrl, sessionToken: token, orderId, content }),
+        postUserMessage({
+          bridgeUrl,
+          sessionToken: token,
+          orderId,
+          content,
+          attachment,
+        }),
       );
       // Stamp the real Chatwoot message id so reconcile dedups on id, not
       // content (two identical messages stay two bubbles).
@@ -256,6 +302,7 @@ export function UserSupportPanel({
       if (mountedRef.current) {
         setOptimistic((prev) => prev.filter((m) => m.id !== temp.id));
         setDraft(content);
+        setFile(pickedFile);
         if (isAuthFailure(err)) {
           pausedRef.current = true;
           setAuthError("We couldn’t verify your wallet for support.");
@@ -266,7 +313,21 @@ export function UserSupportPanel({
     } finally {
       if (mountedRef.current) setSending(false);
     }
-  }, [draft, sending, isResolved, withAuth, bridgeUrl, orderId, loadThread]);
+  }, [draft, file, sending, isResolved, withAuth, bridgeUrl, orderId, loadThread]);
+
+  const onPickFile = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const picked = e.target.files?.[0] ?? null;
+    // Reset so picking the same file again still fires onChange.
+    e.target.value = "";
+    if (!picked) return;
+    const problem = attachmentProblem(picked);
+    if (problem) {
+      setSendError(problem);
+      return;
+    }
+    setSendError(null);
+    setFile(picked);
+  }, []);
 
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -423,18 +484,88 @@ export function UserSupportPanel({
                 lineHeight: 1.4,
               }}
             />
-            <div style={{ display: "flex", justifyContent: "flex-end" }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                gap: 8,
+              }}
+            >
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept={ATTACHMENT_ACCEPT}
+                onChange={onPickFile}
+                style={{ display: "none" }}
+                data-testid="user-support-file-input"
+              />
+              {file ? (
+                <div
+                  style={{
+                    ...S.faint,
+                    color: color.text,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    minWidth: 0,
+                  }}
+                >
+                  <span
+                    style={{
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    📎 {file.name}
+                  </span>
+                  <button
+                    type="button"
+                    aria-label="Remove attachment"
+                    onClick={() => setFile(null)}
+                    disabled={sending}
+                    style={{
+                      border: "none",
+                      background: "transparent",
+                      color: color.textMuted,
+                      cursor: "pointer",
+                      fontSize: font.md,
+                    }}
+                  >
+                    ✕
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={sending}
+                  style={{
+                    border: `1px solid ${color.border}`,
+                    background: color.surface,
+                    color: color.text,
+                    borderRadius: radius.md,
+                    height: 38,
+                    padding: "0 12px",
+                    fontSize: font.md,
+                    cursor: "pointer",
+                  }}
+                >
+                  📎 Attach
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => void handleSend()}
-                disabled={sending || draft.trim().length === 0}
+                disabled={sending || (draft.trim().length === 0 && !file)}
                 style={{
                   ...S.primaryBtn,
                   width: "auto",
                   height: 38,
                   padding: "0 18px",
                   fontSize: font.md,
-                  opacity: draft.trim().length === 0 ? 0.6 : 1,
+                  opacity: draft.trim().length === 0 && !file ? 0.6 : 1,
                 }}
               >
                 {sending ? "Sending…" : "Send"}
@@ -522,6 +653,7 @@ function MessageBubble({ message }: { message: UserThreadMessage }) {
         {isMine ? "You" : "Support"}
       </div>
       {message.content}
+      <AttachmentList attachments={message.attachments} />
     </div>
   );
 }

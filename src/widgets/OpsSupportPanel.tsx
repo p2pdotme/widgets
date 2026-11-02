@@ -38,6 +38,7 @@ import {
 } from "../state/opsSessionCache";
 import { Modal } from "../ui/Modal";
 import { Spinner, injectKeyframes } from "../ui/components";
+import { AttachmentList } from "../ui/attachments";
 import { color, radius, font, weight, S } from "../ui/theme";
 
 const POLL_INTERVAL_MS = 7_000;
@@ -551,6 +552,7 @@ function MessageBubble({ message }: { message: OpsThreadMessage }) {
         {message.senderName ?? (isOps ? "Support" : "Customer")}
       </div>
       {message.content}
+      <AttachmentList attachments={message.attachments} />
     </div>
   );
 }

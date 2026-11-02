@@ -7,6 +7,7 @@
 // invalidate its ops session and re-sign-in; `OpsBridgeError.status`
 // carries the HTTP status so the panel can branch on it.
 
+import type { SupportAttachment } from "../ui/attachments";
 import type { SupportP2PTag, SupportChatStatus } from "../types";
 
 function trim(url: string): string {
@@ -64,6 +65,8 @@ export interface OpsThreadMessage {
   direction: "user" | "ops";
   createdAt: number;
   senderName: string | null;
+  /** Files on the message (JPG, PNG, PDF). Absent on older bridges. */
+  attachments?: SupportAttachment[];
 }
 
 export interface OpsThread {

@@ -162,3 +162,54 @@ describe("UserSupportPanel — failure paths (W2/W3/W4/W5)", () => {
     expect(screen.getByText("Support")).toBeTruthy();
   });
 });
+
+describe("UserSupportPanel — attachments", () => {
+  it("sends a picked PDF on its own as base64", async () => {
+    renderPanel();
+    const input = (await screen.findByTestId("user-support-file-input")) as HTMLInputElement;
+    const file = new File(["%PDF-1.7"], "statement.pdf", { type: "application/pdf" });
+    fireEvent.change(input, { target: { files: [file] } });
+    await screen.findByText(/statement\.pdf/);
+    fireEvent.click(screen.getByRole("button", { name: /^send$/i }));
+    await vi.waitFor(() => expect(userBridge.postUserMessage).toHaveBeenCalledOnce());
+    const arg = userBridge.postUserMessage.mock.calls[0][0];
+    expect(arg.content).toBe("");
+    expect(arg.attachment.fileName).toBe("statement.pdf");
+    expect(atob(arg.attachment.data)).toBe("%PDF-1.7");
+  });
+
+  it("refuses a file that is not JPG, PNG or PDF before sending", async () => {
+    renderPanel();
+    const input = (await screen.findByTestId("user-support-file-input")) as HTMLInputElement;
+    const file = new File(["MZ"], "setup.exe", { type: "application/x-msdownload" });
+    fireEvent.change(input, { target: { files: [file] } });
+    await screen.findByText(/Only JPG, PNG or PDF/i);
+    expect(screen.queryByText(/setup\.exe/)).toBeNull();
+  });
+
+  it("shows an image inline and a PDF as a link", async () => {
+    userBridge.fetchUserThread.mockResolvedValue(
+      thread({
+        messages: [
+          {
+            id: 9,
+            content: "",
+            direction: "user",
+            createdAt: 1000,
+            senderName: null,
+            attachments: [
+              { id: 1, fileType: "image", url: "https://cw.example/a.jpg", thumbUrl: null, fileName: "a.jpg", fileSize: 10 },
+              { id: 2, fileType: "file", url: "https://cw.example/b.pdf", thumbUrl: null, fileName: "b.pdf", fileSize: 10 },
+            ],
+          },
+        ],
+      }),
+    );
+    renderPanel();
+    const img = (await screen.findByAltText("a.jpg")) as HTMLImageElement;
+    expect(img.src).toBe("https://cw.example/a.jpg");
+    const link = screen.getByText(/b\.pdf/).closest("a")!;
+    expect(link.getAttribute("href")).toBe("https://cw.example/b.pdf");
+    expect(link.getAttribute("rel")).toBe("noopener noreferrer");
+  });
+});

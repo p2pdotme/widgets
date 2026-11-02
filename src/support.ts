@@ -66,6 +66,7 @@ export {
   type ThirdwebChainLike,
 } from "./adapters/thirdweb";
 export { DEFAULT_THEME, themeToCssVars } from "./ui/support-theme";
+export type { SupportAttachment } from "./ui/attachments";
 export type {
   SupportProps,
   SupportTheme,

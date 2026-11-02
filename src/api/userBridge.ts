@@ -11,6 +11,7 @@
 // HTTP status so the panel can branch on it.
 
 import type { SupportP2PTag, SupportChatStatus } from "../types";
+import type { AttachmentUpload, SupportAttachment } from "../ui/attachments";
 
 function trim(url: string): string {
   return url.replace(/\/$/, "");
@@ -67,6 +68,8 @@ export interface UserThreadMessage {
   direction: "user" | "ops";
   createdAt: number;
   senderName: string | null;
+  /** Files on the message (JPG, PNG, PDF). Absent on older bridges. */
+  attachments?: SupportAttachment[];
 }
 
 export interface UserThread {
@@ -95,14 +98,18 @@ export interface UserMessageResult {
 
 /** Post the user's own reply. The bridge posts it as an `incoming` message. */
 export async function postUserMessage(
-  opts: UserAuthedOpts & { content: string },
+  opts: UserAuthedOpts & { content: string; attachment?: AttachmentUpload },
 ): Promise<UserMessageResult> {
   return (await userFetch(
     `${trim(opts.bridgeUrl)}/me/orders/${opts.orderId}/messages`,
     {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ content: opts.content }),
+      body: JSON.stringify(
+        opts.attachment
+          ? { content: opts.content, attachment: opts.attachment }
+          : { content: opts.content },
+      ),
     },
     opts.sessionToken,
   )) as UserMessageResult;
