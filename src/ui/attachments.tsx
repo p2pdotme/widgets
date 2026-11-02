@@ -45,6 +45,8 @@ export function attachmentFailureMessage(reason: string | undefined): string | n
       return "That file is too large (max 8 MB).";
     case "invalid_attachment":
       return "That file couldn’t be read. Please try another.";
+    case "attachment_rate_limited":
+      return "You’ve sent a lot of files. Please wait a while before attaching another.";
   }
   return null;
 }
