@@ -7,6 +7,13 @@ and the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format. While
 the package is `0.x`, minor releases may introduce additive prop changes;
 patch releases stay backward-compatible.
 
+## [1.10.0](https://github.com/p2pdotme/widgets/compare/v1.9.0...v1.10.0) (2026-11-17)
+
+
+### Features
+
+* **support:** send and show files in the per-order support chat ([#86](https://github.com/p2pdotme/widgets/issues/86)) ([75cb337](https://github.com/p2pdotme/widgets/commit/75cb33795f8053d93beee2103f14eb60bcd88811))
+
 ## [1.9.0](https://github.com/p2pdotme/widgets/compare/v1.8.1...v1.9.0) (2026-09-01)
 
 
