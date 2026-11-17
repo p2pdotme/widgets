@@ -84,6 +84,44 @@ describe("UserSupportPanel — failure paths (W2/W3/W4/W5)", () => {
     ).toBeNull();
   });
 
+  it("sends a picked file and shows the bridge's reason when it is refused", async () => {
+    userBridge.postUserMessage.mockRejectedValue(
+      new userBridge.UserBridgeError(400, "attachment_too_large"),
+    );
+    renderPanel();
+    await screen.findByLabelText(/message/i);
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const pdf = new File(["%PDF-1.4"], "statement.pdf", { type: "application/pdf" });
+    fireEvent.change(input, { target: { files: [pdf] } });
+    await screen.findByText("statement.pdf");
+    fireEvent.click(screen.getByRole("button", { name: /^send$/i }));
+    await screen.findByText(/too large/i);
+    const sent = userBridge.postUserMessage.mock.calls[0][0];
+    expect(sent.content).toBe("📎 statement.pdf");
+    expect(sent.attachment.fileName).toBe("statement.pdf");
+    // The file is kept so the user can remove it or retry.
+    expect(screen.getByText("statement.pdf")).toBeInTheDocument();
+  });
+
+  it("renders an image sent by support", async () => {
+    userBridge.fetchUserThread.mockResolvedValue(
+      thread({
+        messages: [
+          {
+            id: 5,
+            content: "see this",
+            direction: "ops",
+            createdAt: 1,
+            senderName: null,
+            attachments: [{ id: 9, fileType: "image", url: "https://cw.local/p.jpg", thumbUrl: null, fileName: "p.jpg" }],
+          },
+        ],
+      }),
+    );
+    renderPanel();
+    expect(await screen.findByAltText("p.jpg")).toHaveAttribute("src", "https://cw.local/p.jpg");
+  });
+
   it("W2: maps a 502 to a generic retry message", async () => {
     userBridge.postUserMessage.mockRejectedValue(
       new userBridge.UserBridgeError(502, "chatwoot_unreachable"),

@@ -37,6 +37,14 @@ import {
   clearOpsSession,
 } from "../state/opsSessionCache";
 import { Modal } from "../ui/Modal";
+import {
+  AttachmentList,
+  AttachPicker,
+  attachmentCaption,
+  attachmentFailureMessage,
+  readAttachment,
+  type OutgoingAttachment,
+} from "./supportAttachments";
 import { Spinner, injectKeyframes } from "../ui/components";
 import { color, radius, font, weight, S } from "../ui/theme";
 
@@ -83,6 +91,8 @@ export function OpsSupportPanel({
   const [thread, setThread] = useState<OpsThread | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [file, setFile] = useState<OutgoingAttachment | null>(null);
+  const [fileError, setFileError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [confirmResolve, setConfirmResolve] = useState(false);
   const [resolving, setResolving] = useState(false);
@@ -182,10 +192,26 @@ export function OpsSupportPanel({
     return [...base, ...optimistic].sort((a, b) => a.createdAt - b.createdAt);
   }, [thread, optimistic]);
 
+  const handlePick = useCallback(async (picked: File) => {
+    const read = await readAttachment(picked);
+    if (!mountedRef.current) return;
+    if (read.ok) {
+      setFile(read.file);
+      setFileError(null);
+    } else {
+      // A refused pick replaces the earlier file rather than hiding behind it.
+      setFile(null);
+      setFileError(read.message);
+    }
+  }, []);
+
   const handleSend = useCallback(async () => {
-    const content = draft.trim();
+    const attachment = file;
+    const typed = draft.trim();
+    const content = typed || (attachment ? attachmentCaption(attachment) : "");
     if (!content || sending || isResolved) return;
     setSending(true);
+    setFileError(null);
     // Optimistic append (review item #19): show the reply immediately.
     const temp: OpsThreadMessage = {
       id: tempIdRef.current--,
@@ -196,9 +222,10 @@ export function OpsSupportPanel({
     };
     setOptimistic((prev) => [...prev, temp]);
     setDraft("");
+    setFile(null);
     try {
       const result = await withAuth((token) =>
-        postOpsMessage({ bridgeUrl, sessionToken: token, orderId, content }),
+        postOpsMessage({ bridgeUrl, sessionToken: token, orderId, content, attachment: attachment ?? undefined }),
       );
       // Stamp the real Chatwoot message id onto the temp bubble so reconcile
       // dedups on id, not content (two identical replies stay two bubbles).
@@ -211,16 +238,23 @@ export function OpsSupportPanel({
       }
       // Pull the canonical thread so the real message replaces the temp one.
       await loadThread();
-    } catch {
+    } catch (err) {
       // Roll back the optimistic message on failure and restore the draft.
       if (mountedRef.current) {
         setOptimistic((prev) => prev.filter((m) => m.id !== temp.id));
-        setDraft(content);
+        setDraft(typed);
+        setFile(attachment);
+        if (attachment) {
+          setFileError(
+            (err instanceof OpsBridgeError && attachmentFailureMessage(err.reason)) ||
+              "The file couldn’t be sent. Please try again.",
+          );
+        }
       }
     } finally {
       if (mountedRef.current) setSending(false);
     }
-  }, [draft, sending, isResolved, withAuth, bridgeUrl, orderId, loadThread]);
+  }, [draft, file, sending, isResolved, withAuth, bridgeUrl, orderId, loadThread]);
 
   const handleTagChange = useCallback(
     async (raw: string) => {
@@ -391,6 +425,11 @@ export function OpsSupportPanel({
             This conversation is resolved. Set the status back to open to reply.
           </div>
         )}
+        {fileError && (
+          <div role="alert" style={{ ...S.faint, color: color.danger }}>
+            {fileError}
+          </div>
+        )}
         <textarea
           aria-label="Reply"
           placeholder="Write a reply…"
@@ -413,6 +452,15 @@ export function OpsSupportPanel({
             lineHeight: 1.4,
           }}
         />
+        <AttachPicker
+          file={file}
+          disabled={isResolved || sending}
+          onPick={(f) => void handlePick(f)}
+          onClear={() => {
+            setFile(null);
+            setFileError(null);
+          }}
+        />
         <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
           <button
             type="button"
@@ -432,14 +480,14 @@ export function OpsSupportPanel({
           <button
             type="button"
             onClick={() => void handleSend()}
-            disabled={isResolved || sending || draft.trim().length === 0}
+            disabled={isResolved || sending || (draft.trim().length === 0 && !file)}
             style={{
               ...S.primaryBtn,
               width: "auto",
               height: 38,
               padding: "0 18px",
               fontSize: font.md,
-              opacity: isResolved || draft.trim().length === 0 ? 0.6 : 1,
+              opacity: isResolved || (draft.trim().length === 0 && !file) ? 0.6 : 1,
             }}
           >
             {sending ? "Sending…" : "Send"}
@@ -551,6 +599,7 @@ function MessageBubble({ message }: { message: OpsThreadMessage }) {
         {message.senderName ?? (isOps ? "Support" : "Customer")}
       </div>
       {message.content}
+      <AttachmentList attachments={message.attachments} />
     </div>
   );
 }

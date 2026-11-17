@@ -169,6 +169,87 @@ describe("<Support mode=\"ops\">", () => {
     await waitFor(() => expect(postBody).toEqual({ content: "We are looking into it" }));
   });
 
+  it("sends a picked file with its name as the text when no reply is typed", async () => {
+    let postBody: any = null;
+    globalThis.fetch = routedFetch({
+      onCall: (u, init) => {
+        if (u.endsWith("/messages")) postBody = JSON.parse(init.body);
+      },
+    }) as unknown as typeof fetch;
+    render(
+      <Support mode="ops" orderId={ORDER} signer={signer} bridgeUrl={BASE} layout="inline" />,
+    );
+    await screen.findByText(/never got my payment/i);
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const png = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], "receipt.png", { type: "image/png" });
+    fireEvent.change(input, { target: { files: [png] } });
+    await screen.findByText("receipt.png");
+    fireEvent.click(screen.getByRole("button", { name: /^send$/i }));
+    await waitFor(() => expect(postBody).not.toBeNull());
+    expect(postBody.content).toBe("📎 receipt.png");
+    expect(postBody.attachment.fileName).toBe("receipt.png");
+    expect(postBody.attachment.data).toMatch(/^data:image\/png;base64,/);
+  });
+
+  it("renders a message's image and file, and skips a non-http url", async () => {
+    globalThis.fetch = routedFetch({
+      thread: () =>
+        threadBody({
+          messages: [
+            {
+              id: 1,
+              content: "here is my proof",
+              direction: "user",
+              createdAt: 1000,
+              senderName: "Customer",
+              attachments: [
+                { id: 10, fileType: "image", url: "https://cw.local/a.png", thumbUrl: "https://cw.local/t.png", fileName: "a.png" },
+                { id: 11, fileType: "file", url: "https://cw.local/s.pdf", thumbUrl: null, fileName: "s.pdf" },
+                { id: 12, fileType: "image", url: "javascript:alert(1)", thumbUrl: null, fileName: "x.png" },
+              ],
+            },
+          ],
+        }),
+    }) as unknown as typeof fetch;
+    render(
+      <Support mode="ops" orderId={ORDER} signer={signer} bridgeUrl={BASE} layout="inline" />,
+    );
+    await screen.findByText(/here is my proof/i);
+    expect(screen.getByAltText("a.png")).toHaveAttribute("src", "https://cw.local/t.png");
+    expect(screen.getByText(/s\.pdf/).closest("a")).toHaveAttribute("href", "https://cw.local/s.pdf");
+    expect(screen.queryByAltText("x.png")).toBeNull();
+  });
+
+  it("refuses a file over 8 MB, and takes a typeless photo by its extension", async () => {
+    globalThis.fetch = routedFetch({}) as unknown as typeof fetch;
+    render(
+      <Support mode="ops" orderId={ORDER} signer={signer} bridgeUrl={BASE} layout="inline" />,
+    );
+    await screen.findByText(/never got my payment/i);
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const big = new File(["x"], "big.png", { type: "image/png" });
+    Object.defineProperty(big, "size", { value: 8 * 1024 * 1024 + 1 });
+    fireEvent.change(input, { target: { files: [big] } });
+    await screen.findByText(/too large/i);
+    expect(screen.getByRole("button", { name: /^send$/i })).toBeDisabled();
+    fireEvent.change(input, { target: { files: [new File(["\xff\xd8\xff"], "IMG_1.jpg", { type: "" })] } });
+    await screen.findByText("IMG_1.jpg");
+    expect(screen.getByRole("button", { name: /^send$/i })).not.toBeDisabled();
+  });
+
+  it("refuses a file type the bridge would reject, without posting", async () => {
+    const fetchMock = routedFetch({});
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    render(
+      <Support mode="ops" orderId={ORDER} signer={signer} bridgeUrl={BASE} layout="inline" />,
+    );
+    await screen.findByText(/never got my payment/i);
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [new File(["MZ"], "a.exe", { type: "application/x-msdownload" })] } });
+    await screen.findByText(/only jpg, png or pdf/i);
+    expect(screen.getByRole("button", { name: /^send$/i })).toBeDisabled();
+  });
+
   it("reconciles the optimistic reply against the polled thread (no duplicate)", async () => {
     // First thread read: just the user message. After the POST, the reload
     // returns the thread WITH the ops reply — the temp optimistic copy must
