@@ -33,6 +33,14 @@ import {
   clearCachedSession,
 } from "../state/sessionCache";
 import { P2PTagBanner } from "./P2PTagBanner";
+import {
+  AttachmentList,
+  AttachPicker,
+  attachmentCaption,
+  attachmentFailureMessage,
+  readAttachment,
+  type OutgoingAttachment,
+} from "./supportAttachments";
 import { Spinner, injectKeyframes } from "../ui/components";
 import { color, radius, font, weight, S } from "../ui/theme";
 
@@ -65,6 +73,8 @@ function isAuthFailure(err: unknown): boolean {
  *  `reason`. Avoids protocol-internal terms (no "dispute"/"conversation"). */
 function sendFailureMessage(err: unknown): string {
   if (err instanceof UserBridgeError) {
+    const fileMessage = attachmentFailureMessage(err.reason);
+    if (fileMessage) return fileMessage;
     switch (err.reason) {
       case "conversation_not_ready":
         return "Support isn’t ready yet. Please try again in a moment.";
@@ -104,6 +114,7 @@ export function UserSupportPanel({
   const [authError, setAuthError] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [file, setFile] = useState<OutgoingAttachment | null>(null);
   const [sending, setSending] = useState(false);
   // Optimistic messages not yet seen in a poll; reconciled on `serverId`.
   const [optimistic, setOptimistic] = useState<OptimisticMessage[]>([]);
@@ -216,8 +227,21 @@ export function UserSupportPanel({
     return [...base, ...optimistic].sort((a, b) => a.createdAt - b.createdAt);
   }, [thread, optimistic]);
 
+  const handlePick = useCallback(async (picked: File) => {
+    const read = await readAttachment(picked);
+    if (!mountedRef.current) return;
+    if (read.ok) {
+      setFile(read.file);
+      setSendError(null);
+    } else {
+      setSendError(read.message);
+    }
+  }, []);
+
   const handleSend = useCallback(async () => {
-    const content = draft.trim();
+    const attachment = file;
+    const typed = draft.trim();
+    const content = typed || (attachment ? attachmentCaption(attachment) : "");
     if (!content || sending || isResolved) return;
     if (content.length > MAX_MESSAGE_LENGTH) {
       setSendError(`Message is too long (max ${MAX_MESSAGE_LENGTH} characters).`);
@@ -235,9 +259,10 @@ export function UserSupportPanel({
     };
     setOptimistic((prev) => [...prev, temp]);
     setDraft("");
+    setFile(null);
     try {
       const result = await withAuth((token) =>
-        postUserMessage({ bridgeUrl, sessionToken: token, orderId, content }),
+        postUserMessage({ bridgeUrl, sessionToken: token, orderId, content, attachment: attachment ?? undefined }),
       );
       // Stamp the real Chatwoot message id so reconcile dedups on id, not
       // content (two identical messages stay two bubbles).
@@ -255,7 +280,8 @@ export function UserSupportPanel({
       // nothing". An auth failure routes to the reconnect path instead.
       if (mountedRef.current) {
         setOptimistic((prev) => prev.filter((m) => m.id !== temp.id));
-        setDraft(content);
+        setDraft(typed);
+        setFile(attachment);
         if (isAuthFailure(err)) {
           pausedRef.current = true;
           setAuthError("We couldn’t verify your wallet for support.");
@@ -266,7 +292,7 @@ export function UserSupportPanel({
     } finally {
       if (mountedRef.current) setSending(false);
     }
-  }, [draft, sending, isResolved, withAuth, bridgeUrl, orderId, loadThread]);
+  }, [draft, file, sending, isResolved, withAuth, bridgeUrl, orderId, loadThread]);
 
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -423,18 +449,25 @@ export function UserSupportPanel({
                 lineHeight: 1.4,
               }}
             />
-            <div style={{ display: "flex", justifyContent: "flex-end" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+              <AttachPicker
+                file={file}
+                disabled={sending}
+                onPick={(f) => void handlePick(f)}
+                onClear={() => setFile(null)}
+              />
               <button
                 type="button"
                 onClick={() => void handleSend()}
-                disabled={sending || draft.trim().length === 0}
+                disabled={sending || (draft.trim().length === 0 && !file)}
                 style={{
                   ...S.primaryBtn,
                   width: "auto",
                   height: 38,
                   padding: "0 18px",
                   fontSize: font.md,
-                  opacity: draft.trim().length === 0 ? 0.6 : 1,
+                  flexShrink: 0,
+                  opacity: draft.trim().length === 0 && !file ? 0.6 : 1,
                 }}
               >
                 {sending ? "Sending…" : "Send"}
@@ -522,6 +555,7 @@ function MessageBubble({ message }: { message: UserThreadMessage }) {
         {isMine ? "You" : "Support"}
       </div>
       {message.content}
+      <AttachmentList attachments={message.attachments} />
     </div>
   );
 }

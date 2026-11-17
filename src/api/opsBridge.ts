@@ -8,6 +8,7 @@
 // carries the HTTP status so the panel can branch on it.
 
 import type { SupportP2PTag, SupportChatStatus } from "../types";
+import type { OutgoingAttachment, SupportAttachment } from "../widgets/supportAttachments";
 
 function trim(url: string): string {
   return url.replace(/\/$/, "");
@@ -64,6 +65,8 @@ export interface OpsThreadMessage {
   direction: "user" | "ops";
   createdAt: number;
   senderName: string | null;
+  /** Files on the message (bridge `wireAttachments`); absent on older bridges. */
+  attachments?: SupportAttachment[];
 }
 
 export interface OpsThread {
@@ -90,14 +93,18 @@ export interface OpsMessageResult {
 
 /** Post an operator reply. The bridge stamps `ops_address` from the bearer. */
 export async function postOpsMessage(
-  opts: OpsAuthedOpts & { content: string },
+  opts: OpsAuthedOpts & { content: string; attachment?: OutgoingAttachment },
 ): Promise<OpsMessageResult> {
   return (await opsFetch(
     `${trim(opts.bridgeUrl)}/ops/orders/${opts.orderId}/messages`,
     {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ content: opts.content }),
+      body: JSON.stringify(
+        opts.attachment
+          ? { content: opts.content, attachment: opts.attachment }
+          : { content: opts.content },
+      ),
     },
     opts.sessionToken,
   )) as OpsMessageResult;
