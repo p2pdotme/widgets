@@ -220,6 +220,23 @@ describe("<Support mode=\"ops\">", () => {
     expect(screen.queryByAltText("x.png")).toBeNull();
   });
 
+  it("refuses a file over 8 MB, and takes a typeless photo by its extension", async () => {
+    globalThis.fetch = routedFetch({}) as unknown as typeof fetch;
+    render(
+      <Support mode="ops" orderId={ORDER} signer={signer} bridgeUrl={BASE} layout="inline" />,
+    );
+    await screen.findByText(/never got my payment/i);
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const big = new File(["x"], "big.png", { type: "image/png" });
+    Object.defineProperty(big, "size", { value: 8 * 1024 * 1024 + 1 });
+    fireEvent.change(input, { target: { files: [big] } });
+    await screen.findByText(/too large/i);
+    expect(screen.getByRole("button", { name: /^send$/i })).toBeDisabled();
+    fireEvent.change(input, { target: { files: [new File(["\xff\xd8\xff"], "IMG_1.jpg", { type: "" })] } });
+    await screen.findByText("IMG_1.jpg");
+    expect(screen.getByRole("button", { name: /^send$/i })).not.toBeDisabled();
+  });
+
   it("refuses a file type the bridge would reject, without posting", async () => {
     const fetchMock = routedFetch({});
     globalThis.fetch = fetchMock as unknown as typeof fetch;
