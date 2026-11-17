@@ -234,6 +234,8 @@ export function UserSupportPanel({
       setFile(read.file);
       setSendError(null);
     } else {
+      // A refused pick replaces the earlier file rather than hiding behind it.
+      setFile(null);
       setSendError(read.message);
     }
   }, []);

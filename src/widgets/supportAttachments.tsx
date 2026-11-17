@@ -24,8 +24,17 @@ export interface OutgoingAttachment {
 
 /** Mirrors the bridge's MAX_ATTACHMENT_BYTES. */
 export const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
-const ACCEPT = "image/jpeg,image/png,application/pdf";
-const ACCEPTED = new Set(ACCEPT.split(","));
+const ACCEPT = "image/jpeg,image/png,application/pdf,.jpg,.jpeg,.png,.pdf";
+const ACCEPTED_TYPES = new Set(["image/jpeg", "image/jpg", "image/png", "application/pdf"]);
+const ACCEPTED_NAME = /\.(jpe?g|png|pdf)$/i;
+
+/**
+ * Some mobile pickers report an empty or odd type for a real photo, so a
+ * matching extension is enough here. The bridge decides from the file's bytes.
+ */
+function looksAccepted(file: File): boolean {
+  return ACCEPTED_TYPES.has(file.type) || ACCEPTED_NAME.test(file.name);
+}
 
 /**
  * The dispute routes need text with a file (older widgets render only text),
@@ -39,7 +48,7 @@ export function attachmentCaption(file: OutgoingAttachment): string {
 export function readAttachment(
   file: File,
 ): Promise<{ ok: true; file: OutgoingAttachment } | { ok: false; message: string }> {
-  if (!ACCEPTED.has(file.type)) {
+  if (!looksAccepted(file)) {
     return Promise.resolve({ ok: false, message: "Only JPG, PNG or PDF files can be sent." });
   }
   if (file.size > MAX_ATTACHMENT_BYTES) {

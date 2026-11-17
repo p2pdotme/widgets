@@ -199,6 +199,8 @@ export function OpsSupportPanel({
       setFile(read.file);
       setFileError(null);
     } else {
+      // A refused pick replaces the earlier file rather than hiding behind it.
+      setFile(null);
       setFileError(read.message);
     }
   }, []);
@@ -454,7 +456,10 @@ export function OpsSupportPanel({
           file={file}
           disabled={isResolved || sending}
           onPick={(f) => void handlePick(f)}
-          onClear={() => setFile(null)}
+          onClear={() => {
+            setFile(null);
+            setFileError(null);
+          }}
         />
         <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
           <button
