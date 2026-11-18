@@ -7,6 +7,13 @@ and the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format. While
 the package is `0.x`, minor releases may introduce additive prop changes;
 patch releases stay backward-compatible.
 
+## [1.11.0](https://github.com/p2pdotme/widgets/compare/v1.10.0...v1.11.0) (2026-11-18)
+
+
+### Features
+
+* **support:** show the 3-tier dispute ladder and let the order's user appeal ([#88](https://github.com/p2pdotme/widgets/issues/88)) ([9a8599d](https://github.com/p2pdotme/widgets/commit/9a8599dfbf74fc57e92804b369a7f2573545a8e3))
+
 ## [1.10.0](https://github.com/p2pdotme/widgets/compare/v1.9.0...v1.10.0) (2026-11-17)
 
 
