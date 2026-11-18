@@ -3,8 +3,9 @@
 // outputs:
 //
 //   - statusText   : informational line, ALWAYS rendered
-//   - action       : the action button variant (none | resume | raise-dispute)
-//                    with the remaining ms for countdown rendering
+//   - action       : the action button variant (none | resume |
+//                    report-problem | appeal) with the remaining ms for
+//                    countdown rendering
 //   - disputeState : the chain's view of the dispute lifecycle; used by
 //                    the support button to pick `dispute-open` /
 //                    `dispute-resolved` variants. The support button's
@@ -63,9 +64,119 @@ export type ActionVariant =
       /** Doughnut fill fraction, drains 1.0 (window just opened) → 0.0
        *  (window just closed). Linear in elapsed-since-window-open. */
       filled: number;
+    }
+  | {
+      kind: "appeal";
+      /** `appeal`: challenge a pending decision against the user.
+       *  `escalate`: the current tier missed its decision deadline. */
+      mode: "appeal" | "escalate";
+      /** Tier the dispute moves to on `appealDispute`. */
+      nextTier: DisputeTier;
+      /** Time left to appeal a pending decision (absent for escalate,
+       *  which stays open until the tier decides). */
+      remainingMs?: number;
     };
 
 export type DisputeState = "none" | "open" | "resolved";
+
+// ─── 3-tier dispute ladder ─────────────────────────────────────────────
+//
+// Mirrors contracts-v4 OrderProcessorFacet (appealDispute / finalizeDispute
+// / adminSettleDispute). A raised dispute starts at tier 1 (circle), can be
+// appealed to tier 2 (country admin) and tier 3 (ops lead, final). Only a
+// tier-1/2 USER-fault decision is parked for the currency's appeal window
+// (MERCHANT / BANK and tier-3 decisions settle in the same tx), so a
+// pending decision is a decision against the order's user. Throughout the
+// window `disputeInfo.status` stays RAISED, so `disputeStatus` alone reads
+// "open" and cannot tell the user they lost. Only `order.user` can appeal.
+
+export type DisputeTier = 1 | 2 | 3;
+
+export const DISPUTE_TIER_LABEL: Record<DisputeTier, string> = {
+  1: "Circle review",
+  2: "Country admin review",
+  3: "Final review",
+};
+
+/** On-chain FaultType enum order (OrderProcessorStorage.FaultType). */
+const FAULT_TYPES = ["DEFAULT", "USER", "MERCHANT", "BANK"] as const;
+export type DisputeFaultType = (typeof FAULT_TYPES)[number];
+
+export interface DisputeDecision {
+  faultType: DisputeFaultType;
+  decisionTier: DisputeTier;
+  /** unix seconds */
+  decidedAt: number;
+  /** unix seconds — end of the appeal window */
+  appealableUntil: number;
+}
+
+/** A raised dispute's position on the ladder, from `getDisputeTier` +
+ *  `getDisputeDecision`. Timestamps are unix seconds. */
+export interface DisputeEscalation {
+  tier: DisputeTier;
+  tierSince: number;
+  /** When an undecided dispute may be escalated (0 at tier 3 or while a
+   *  decision is pending). */
+  appealableAt: number;
+  decision: DisputeDecision | null;
+}
+
+export type DisputeEscalationPhase =
+  /** undecided, decision SLA still running */
+  | "awaiting-decision"
+  /** undecided, SLA lapsed — the user may escalate */
+  | "escalatable"
+  /** decision recorded and still open to appeal */
+  | "decision-pending"
+  /** decision recorded, appeal window over — waits for finalizeDispute */
+  | "decision-stands"
+  /** undecided at the final tier */
+  | "final-review";
+
+const toTier = (raw: number): DisputeTier =>
+  raw <= 1 ? 1 : raw >= 3 ? 3 : 2;
+
+/** Build a `DisputeEscalation` from the raw `getDisputeTier` and
+ *  `getDisputeDecision` results. */
+export function parseDisputeEscalation(
+  tierTuple: readonly [number, bigint, bigint],
+  decisionTuple: readonly [number, number, string, bigint, bigint],
+): DisputeEscalation {
+  const [tier, tierSince, appealableAt] = tierTuple;
+  const [faultType, decisionTier, , decidedAt, appealableUntil] =
+    decisionTuple;
+  return {
+    tier: toTier(tier),
+    tierSince: Number(tierSince),
+    appealableAt: Number(appealableAt),
+    decision:
+      decidedAt === 0n
+        ? null
+        : {
+            faultType: FAULT_TYPES[faultType] ?? "DEFAULT",
+            decisionTier: toTier(decisionTier),
+            decidedAt: Number(decidedAt),
+            appealableUntil: Number(appealableUntil),
+          },
+  };
+}
+
+export function disputeEscalationPhase(
+  escalation: DisputeEscalation,
+  nowMs: number,
+): DisputeEscalationPhase {
+  const { tier, appealableAt, decision } = escalation;
+  if (decision) {
+    return nowMs < decision.appealableUntil * 1000
+      ? "decision-pending"
+      : "decision-stands";
+  }
+  if (tier >= 3) return "final-review";
+  return appealableAt > 0 && nowMs >= appealableAt * 1000
+    ? "escalatable"
+    : "awaiting-decision";
+}
 
 export interface OrderActionState {
   statusText: string;
@@ -105,14 +216,33 @@ export const PLACED_STALE_THRESHOLD_MS = 5 * MIN;
 // (24h after placement) — the chain's outermost resolution deadline.
 export const BUY_PAID_PROCESSING_WINDOW_MS = 30 * MIN;
 
+export interface ComputeOrderActionOpts {
+  /** On-chain ladder state for an open dispute (see `useDisputeEscalation`).
+   *  Absent → an open dispute renders the plain "Under review". */
+  escalation?: DisputeEscalation;
+  /** Address that would sign `appealDispute`. The appeal action is only
+   *  offered when it equals `order.user` (the contract rejects anyone
+   *  else). Without a match (no `txSigner`, or a different wallet) the
+   *  row shows the stage in neutral wording and offers no action. */
+  actor?: string;
+}
+
 export function computeOrderAction(
   order: Order,
   nowMs: number,
+  opts: ComputeOrderActionOpts = {},
 ): OrderActionState {
   // Dispute lifecycle is short-circuited at the top. A raised or settled
   // dispute is always the most relevant state; downstream status flow
   // becomes secondary.
   if (order.disputeStatus === "open") {
+    if (opts.escalation) {
+      const canAct =
+        !!opts.actor &&
+        !!order.user &&
+        opts.actor.toLowerCase() === order.user.toLowerCase();
+      return openDisputeState(opts.escalation, nowMs, canAct);
+    }
     return {
       statusText: "Under review",
       action: { kind: "none" },
@@ -229,6 +359,71 @@ export function computeOrderAction(
       // an over-the-wire change could surface a new value before the
       // widget catches up.
       return noAction("Status unavailable");
+  }
+}
+
+function openDisputeState(
+  escalation: DisputeEscalation,
+  nowMs: number,
+  canAct: boolean,
+): OrderActionState {
+  const phase = disputeEscalationPhase(escalation, nowMs);
+  const tierLabel = DISPUTE_TIER_LABEL[escalation.tier];
+  const open = (
+    statusText: string,
+    action: ActionVariant = { kind: "none" },
+    live = false,
+  ): OrderActionState => ({ statusText, action, disputeState: "open", live });
+
+  switch (phase) {
+    case "decision-pending": {
+      const decision = escalation.decision!;
+      const remainingMs = decision.appealableUntil * 1000 - nowMs;
+      // Only USER fault is parked on chain today; anything else would be
+      // in the user's favour and is shown without an appeal.
+      if (decision.faultType !== "USER") {
+        return open(`${DISPUTE_TIER_LABEL[decision.decisionTier]} · decision recorded`);
+      }
+      const left = formatRemaining(remainingMs);
+      return canAct
+        ? open(
+            `Decided against you · appeal within ${left}`,
+            {
+              kind: "appeal",
+              mode: "appeal",
+              nextTier: toTier(decision.decisionTier + 1),
+              remainingMs,
+            },
+            true,
+          )
+        // Neutral wording: this viewer may not be the order's user.
+        : open(`Decided against the order's wallet · appeal window closes in ${left}`, undefined, true);
+    }
+    case "decision-stands":
+      return open(
+        escalation.decision!.faultType === "USER"
+          ? canAct
+            ? "Decided against you · decision stands"
+            : "Decided against the order's wallet · decision stands"
+          : `${DISPUTE_TIER_LABEL[escalation.decision!.decisionTier]} · decision recorded`,
+      );
+    case "escalatable":
+      return open(
+        `${tierLabel} · decision overdue`,
+        canAct
+          ? { kind: "appeal", mode: "escalate", nextTier: toTier(escalation.tier + 1) }
+          : undefined,
+      );
+    case "awaiting-decision":
+      return escalation.appealableAt > 0
+        ? open(
+            `${tierLabel} · decision due in ${formatRemaining(escalation.appealableAt * 1000 - nowMs)}`,
+            undefined,
+            true,
+          )
+        : open(`${tierLabel} · under review`);
+    case "final-review":
+      return open("Final review · the decision will be final");
   }
 }
 

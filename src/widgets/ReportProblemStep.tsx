@@ -75,9 +75,11 @@ const REVERT_MESSAGES: Record<string, string> = {
   DisputeAlreadySettled:
     "This order's report has already been resolved.",
   InvalidOrderType: "Reports aren't supported for this order type.",
+  OrderInsuranceClaimSettled:
+    "Insurance has already paid you for this order, so a report can't be filed.",
 };
 
-interface RevertInfo {
+export interface RevertInfo {
   errorName?: string;
   message: string;
 }
@@ -89,7 +91,10 @@ interface RevertInfo {
  *  and falls back to a manual property probe for non-viem shapes
  *  (eg test fixtures, wallet-side errors that don't subclass BaseError).
  */
-function extractRevert(err: unknown): RevertInfo {
+export function extractRevert(
+  err: unknown,
+  messages: Record<string, string> = REVERT_MESSAGES,
+): RevertInfo {
   let name: string | undefined;
   // 1. Preferred: viem's BaseError.walk. Resolves through nested
   //    `cause` chains regardless of depth.
@@ -113,8 +118,8 @@ function extractRevert(err: unknown): RevertInfo {
       probe = (probe as { cause?: unknown }).cause;
     }
   }
-  if (name && REVERT_MESSAGES[name]) {
-    return { errorName: name, message: REVERT_MESSAGES[name] };
+  if (name && messages[name]) {
+    return { errorName: name, message: messages[name] };
   }
   // No decoded name — surface the friendliest message we can find.
   const e = err as {
@@ -441,13 +446,13 @@ function ErrorView({ reason, onRetry, onClose }: ErrorViewProps) {
 
 // ─── Shared styles + Button ────────────────────────────────────────────
 
-const titleStyle: React.CSSProperties = {
+export const titleStyle: React.CSSProperties = {
   margin: 0,
   fontSize: 18,
   color: "var(--p2p-color-fg, #0a0b0d)",
 };
 
-const paragraphStyle: React.CSSProperties = {
+export const paragraphStyle: React.CSSProperties = {
   color: "var(--p2p-color-muted, #6b6b6b)",
   fontSize: 13,
   lineHeight: 1.5,
@@ -464,7 +469,7 @@ const listStyle: React.CSSProperties = {
   paddingLeft: 18,
 };
 
-const rowStyle: React.CSSProperties = {
+export const rowStyle: React.CSSProperties = {
   display: "flex",
   justifyContent: "flex-end",
   gap: 8,
@@ -507,7 +512,7 @@ interface ButtonProps {
   ["data-action"]?: string;
 }
 
-function Button({
+export function Button({
   variant,
   type = "button",
   onClick,

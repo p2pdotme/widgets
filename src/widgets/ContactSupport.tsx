@@ -8,6 +8,10 @@
 //
 //   - dispute raised:
 //       button with red dot. Click → chat (existing Chatwoot boot).
+//       When `state.action` is `appeal` (decided against the user inside
+//       its appeal window, or the tier missed its deadline) and a
+//       `txSigner` is present, an Appeal / Escalate button renders next
+//       to it. Click → AppealDisputeStep modal (on-chain appealDispute).
 //
 //   - dispute resolved:
 //       button with green dot. Click → chat (read-only thread).
@@ -22,7 +26,7 @@
 // `dispute-raised` immediately and the click target switches from
 // "open report flow" to "open chat".
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPublicClient, http } from "viem";
 import { base, baseSepolia } from "viem/chains";
 import { color, font, weight, themeToCssVars } from "../ui/theme";
@@ -33,7 +37,8 @@ import {
   ReportProblemStep,
   type RaiseDisputeSigner,
 } from "./ReportProblemStep";
-import type { OrderActionState } from "../core/order-action";
+import { AppealDisputeStep } from "./AppealDisputeStep";
+import type { ActionVariant, OrderActionState } from "../core/order-action";
 import { formatRemaining } from "../core/order-action";
 import type { P2PTheme, SupportSigner } from "../types";
 import type { Address } from "viem";
@@ -62,6 +67,16 @@ export interface ContactSupportProps {
   chainId?: number;
 
   onReportSubmitted?: (orderId: string, txHash: `0x${string}`) => void;
+  /** Fires the moment an `appealDispute` tx broadcasts. */
+  onAppealSubmitted?: (orderId: string, txHash: `0x${string}`) => void;
+  /** Fires once the appeal tx is mined successfully — re-read the
+   *  dispute's escalation state here (`useDisputeEscalation().refetch`). */
+  onAppealConfirmed?: (orderId: string) => void;
+  /** Offer the on-chain Appeal / Escalate button. Default `true`. Set
+   *  `false` when `txSigner` can't send `appealDispute` (e.g. a relay that
+   *  allowlists selectors): the row keeps the stage text and says appeals
+   *  aren't available here (only `order.user` can appeal on chain). */
+  disputeAppeals?: boolean;
   /** Toggle for the Chatwoot chat path. When `false` (the v1.1.1-bridge
    *  default), every click that would have opened chat instead opens a
    *  static "support request registered, check back here later" modal.
@@ -76,6 +91,16 @@ export interface ContactSupportProps {
 type Modal_State =
   | { kind: "closed" }
   | { kind: "report" }
+  // Snapshot of the action at click time: the live state moves off
+  // `appeal` once the tx lands (or the window closes mid-prompt), and the
+  // open modal must keep rendering its submitted / error view.
+  // `txStatus` lives here too, so a confirmed appeal stays confirmed in
+  // the modal after the row's state (and `appealTx`) moves on.
+  | {
+      kind: "appeal";
+      action: Extract<ActionVariant, { kind: "appeal" }>;
+      txStatus?: "pending" | "confirmed" | "failed" | "unconfirmed";
+    }
   | { kind: "registered" }
   | { kind: "chat" };
 
@@ -94,6 +119,9 @@ export function ContactSupport(props: ContactSupportProps) {
     rpcUrl,
     chainId,
     onReportSubmitted,
+    onAppealSubmitted,
+    onAppealConfirmed,
+    disputeAppeals = true,
     chatEnabled = false,
     theme,
   } = props;
@@ -105,6 +133,46 @@ export function ContactSupport(props: ContactSupportProps) {
   const [modalState, setModalState] = useState<Modal_State>({
     kind: "closed",
   });
+
+  // The appeal tx, from the confirm click. submitting/pending/confirmed
+  // hide the button until the chain state moves off `appeal`, so it can't
+  // be sent twice; failed (mined but reverted) and unconfirmed (see below)
+  // bring it back with a note.
+  const [appealTx, setAppealTx] = useState<
+    "submitting" | "pending" | "confirmed" | "failed" | "unconfirmed" | null
+  >(null);
+  useEffect(() => {
+    if (state.action.kind !== "appeal") setAppealTx(null);
+  }, [state.action.kind]);
+  // Mirror a tx outcome into the open appeal modal.
+  const setAppealOutcome = useCallback(
+    (s: "pending" | "confirmed" | "failed" | "unconfirmed" | null) => {
+      setAppealTx(s);
+      setModalState((m) =>
+        m.kind === "appeal" ? { ...m, txStatus: s ?? undefined } : m,
+      );
+    },
+    [],
+  );
+  // A smart-account receipt reports the bundle tx, not the inner call, so
+  // "confirmed" can hide a reverted appeal. If the row is still offering
+  // the same action well after the confirm + refetch + two polls, say so.
+  // Not "failed": the re-reads may simply have failed (429, timeout) and
+  // kept the old value.
+  useEffect(() => {
+    if (appealTx !== "confirmed" || state.action.kind !== "appeal") return;
+    const t = setTimeout(() => setAppealOutcome("unconfirmed"), 150_000);
+    return () => clearTimeout(t);
+  }, [appealTx, state.action.kind, setAppealOutcome]);
+  // While the confirm click is simulating / waiting on the wallet, the
+  // modal can't be dismissed (Escape / backdrop) — see closeModal.
+  const appealBusy = useRef(false);
+  const handleAppealBusy = useCallback((busy: boolean) => {
+    appealBusy.current = busy;
+    setAppealTx((s) =>
+      busy ? "submitting" : s === "submitting" ? null : s,
+    );
+  }, []);
 
   useEffect(injectKeyframes, []);
 
@@ -175,7 +243,54 @@ export function ContactSupport(props: ContactSupportProps) {
     [onReportSubmitted, orderId, rpcUrl, chainId],
   );
 
+  const handleAppealSubmitted = useCallback(
+    (txHash: `0x${string}`) => {
+      setAppealOutcome("pending");
+      onAppealSubmitted?.(orderId, txHash);
+      (async () => {
+        try {
+          const chain = chainId === 8453 ? base : baseSepolia;
+          const publicClient = createPublicClient({
+            chain,
+            transport: http(rpcUrl ?? chain.rpcUrls.default.http[0]),
+          });
+          const receipt = await (publicClient as any).waitForTransactionReceipt({
+            hash: txHash,
+            // Generous: bringing the button back while the tx is still in
+            // the mempool invites a second send.
+            timeout: 180_000,
+          });
+          if (receipt?.status === "success") {
+            setAppealOutcome("confirmed");
+            onAppealConfirmed?.(orderId);
+          } else {
+            setAppealOutcome("failed");
+          }
+        } catch {
+          // No receipt in time: give the button back. A re-send of an
+          // appeal that did land is caught by the pre-simulation.
+          setAppealOutcome(null);
+        }
+      })();
+    },
+    [onAppealSubmitted, onAppealConfirmed, orderId, rpcUrl, chainId, setAppealOutcome],
+  );
+
+  const appealInFlight =
+    appealTx === "submitting" || appealTx === "pending" || appealTx === "confirmed";
+  const appeal =
+    state.action.kind === "appeal" && txSigner && disputeAppeals && !appealInFlight
+      ? state.action
+      : null;
+  // Appeals switched off by the host: say where to go instead of a button.
+  const appealHint = state.action.kind === "appeal" && !disputeAppeals;
+  // Between broadcast and the re-read the status line still shows the old
+  // stage, so say the tx is in flight where the button was.
+  const appealPending =
+    state.action.kind === "appeal" && appealInFlight ? state.action.mode : null;
+
   const closeModal = useCallback(() => {
+    if (appealBusy.current) return;
     setModalState({ kind: "closed" });
   }, []);
 
@@ -195,6 +310,90 @@ export function ContactSupport(props: ContactSupportProps) {
           })}
           onClick={handleClick}
         />
+      ) : appeal || appealPending || appealHint ? (
+        // Wrapper only on appeal rows, so rows without one keep the exact
+        // pre-ladder DOM integrators may style or select.
+        <span
+          style={{
+            display: "inline-flex",
+            flexWrap: "wrap",
+            gap: 8,
+            // Wrapped lines stay flush right under the status text.
+            justifyContent: "flex-end",
+          }}
+        >
+          {appeal ? (
+            <>
+              {appealTx === "failed" || appealTx === "unconfirmed" ? (
+                <span
+                  data-contact-support-appeal-failed={appealTx === "failed" ? "" : undefined}
+                  data-contact-support-appeal-unconfirmed={appealTx === "unconfirmed" ? "" : undefined}
+                  role="status"
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    height: 36,
+                    fontSize: font.sm,
+                    color: color.danger,
+                  }}
+                >
+                  {appealTx === "failed"
+                    ? "Last attempt failed on chain"
+                    : "Couldn't confirm the last attempt"}
+                </span>
+              ) : null}
+              <AppealButton
+                mode={appeal.mode}
+                onClick={() => {
+                  setAppealTx(null);
+                  setModalState({ kind: "appeal", action: appeal });
+                }}
+              />
+            </>
+          ) : appealHint ? (
+            <span
+              data-contact-support-appeal-unavailable
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                height: 36,
+                fontSize: font.sm,
+                color: color.textMuted,
+              }}
+            >
+              {state.action.kind === "appeal" && state.action.mode === "escalate"
+                ? "Escalation isn't available in this app"
+                : "Appeals aren't available in this app"}
+            </span>
+          ) : (
+            <span
+              data-contact-support-appeal-pending
+              role="status"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                height: 36,
+                fontSize: font.sm,
+                color: color.textMuted,
+              }}
+            >
+              {appealTx === "submitting"
+                ? "Waiting for wallet"
+                : appealPending === "appeal"
+                  ? "Appeal sent"
+                  : "Escalation sent"}
+              {appealTx === "confirmed"
+                ? " · updating"
+                : appealTx === "submitting"
+                  ? ""
+                  : " · confirming"}
+            </span>
+          )}
+          <PlainButton
+            variant={effectiveDispute}
+            onClick={handleClick}
+          />
+        </span>
       ) : (
         <PlainButton
           variant={effectiveDispute}
@@ -208,7 +407,9 @@ export function ContactSupport(props: ContactSupportProps) {
         ariaLabelledBy={
           modalState.kind === "report"
             ? "report-problem-title"
-            : modalState.kind === "registered"
+            : modalState.kind === "appeal"
+              ? "appeal-dispute-title"
+              : modalState.kind === "registered"
               ? "support-registered-title"
               : undefined
         }
@@ -222,6 +423,22 @@ export function ContactSupport(props: ContactSupportProps) {
             rpcUrl={rpcUrl}
             chainId={chainId}
             onSubmitted={handleReportSubmitted}
+            onClose={closeModal}
+            theme={theme}
+          />
+        ) : modalState.kind === "appeal" && txSigner ? (
+          <AppealDisputeStep
+            orderId={orderId}
+            signer={txSigner}
+            mode={modalState.action.mode}
+            nextTier={modalState.action.nextTier}
+            remainingMs={modalState.action.remainingMs}
+            txStatus={modalState.txStatus}
+            onBusyChange={handleAppealBusy}
+            diamondAddress={diamondAddress}
+            rpcUrl={rpcUrl}
+            chainId={chainId}
+            onSubmitted={handleAppealSubmitted}
             onClose={closeModal}
             theme={theme}
           />
@@ -278,6 +495,38 @@ function ReportChip({
     >
       <Doughnut filled={filled} />
       <span>Contact Support · {formatRemaining(remainingMs)}</span>
+    </button>
+  );
+}
+
+function AppealButton({
+  mode,
+  onClick,
+}: {
+  mode: "appeal" | "escalate";
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      data-contact-support-appeal={mode}
+      onClick={onClick}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        padding: "0 12px",
+        height: 36,
+        borderRadius: "var(--p2p-radius-button, 8px)",
+        border: "none",
+        background: color.accent,
+        color: color.accentText,
+        fontSize: font.md,
+        fontWeight: weight.medium,
+        fontFamily: "var(--p2p-font, inherit)",
+        cursor: "pointer",
+      }}
+    >
+      {mode === "appeal" ? "Appeal decision" : "Escalate dispute"}
     </button>
   );
 }
