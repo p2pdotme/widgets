@@ -302,7 +302,7 @@ describe("ContactSupport appeal button (3-tier dispute ladder)", () => {
     }
   });
 
-  it("a confirmed appeal whose row still offers the action after 150s turns failed", async () => {
+  it("a confirmed appeal whose row still offers the action after 150s says it couldn't confirm", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     chain.stub = true;
     chain.receipt = async () => ({ status: "success" });
@@ -312,8 +312,9 @@ describe("ContactSupport appeal button (3-tier dispute ladder)", () => {
       fireEvent.click(await screen.findByRole("button", { name: /^appeal$/i }));
       await screen.findByRole("heading", { name: /appeal confirmed/i });
       await act(() => vi.advanceTimersByTimeAsync(150_000));
-      expect(screen.getByRole("heading", { name: /appeal failed/i })).toBeTruthy();
-      expect(screen.getByText(/last attempt failed on chain/i)).toBeTruthy();
+      expect(screen.getByRole("heading", { name: /couldn't confirm the appeal/i })).toBeTruthy();
+      expect(screen.getByText(/couldn't confirm the last attempt/i)).toBeTruthy();
+      expect(screen.queryByText(/failed on chain/i)).toBeNull();
     } finally {
       vi.useRealTimers();
       chain.stub = false;

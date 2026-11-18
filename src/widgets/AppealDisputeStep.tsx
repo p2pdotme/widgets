@@ -53,7 +53,7 @@ export interface AppealDisputeStepProps {
   onSubmitted?: (txHash: `0x${string}`) => void;
   /** Outcome of the broadcast tx, if the host waits for its receipt
    *  (ContactSupport does). Absent → the sent view says only "sent". */
-  txStatus?: "pending" | "confirmed" | "failed";
+  txStatus?: "pending" | "confirmed" | "failed" | "unconfirmed";
   /** True from the confirm click until broadcast or failure. A host can
    *  use it to block dismissing the modal mid-send. */
   onBusyChange?: (busy: boolean) => void;
@@ -222,6 +222,22 @@ export function AppealDisputeStep(props: AppealDisputeStepProps) {
             {mode === "appeal"
               ? " If the appeal window is still open you can try again."
               : " You can try again."}
+          </p>
+          <div style={rowStyle}>
+            <Button variant="primary" onClick={onClose}>
+              Close
+            </Button>
+          </div>
+        </div>
+      ) : phase.kind === "submitted" && txStatus === "unconfirmed" ? (
+        <div>
+          <h3 id="appeal-dispute-title" ref={headingRef} tabIndex={-1} style={{ ...titleStyle, outline: "none" }}>
+            {mode === "appeal" ? "Couldn't confirm the appeal" : "Couldn't confirm the escalation"}
+          </h3>
+          <p style={paragraphStyle}>
+            The transaction went through, but the dispute still shows its old
+            stage. The network may be slow to update. Check back in a few
+            minutes; if it still hasn't moved, you can try again.
           </p>
           <div style={rowStyle}>
             <Button variant="primary" onClick={onClose}>

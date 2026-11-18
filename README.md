@@ -978,12 +978,6 @@ and every send fails at the relay. Until then, pass
 the honest message: only `order.user` can appeal on chain, so support
 can't appeal for the user.
 
-- **polycule**: allow `appealDispute` in `ALLOWED_SELECTORS` and in
-  `checkSelectorTargetPair` (polycule-backend `src/routes/onramp.ts`), or
-  pass `disputeAppeals={false}`, before bumping past 1.10.0.
-- **hype.house**: if it moves to these rows, allow `appealDispute` in
-  `src/lib/p2p/relay-policy.ts` or pass `disputeAppeals={false}`.
-
 If the read fails (no ladder facet on the target diamond, which is the case
 on Base Sepolia today, or an RPC error), the row falls back to "Under review".
 A diamond without the ladder views (the call reverts) stops that row's
