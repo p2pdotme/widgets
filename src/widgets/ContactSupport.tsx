@@ -99,7 +99,7 @@ type Modal_State =
   | {
       kind: "appeal";
       action: Extract<ActionVariant, { kind: "appeal" }>;
-      txStatus?: "pending" | "confirmed" | "failed";
+      txStatus?: "pending" | "confirmed" | "failed" | "unconfirmed";
     }
   | { kind: "registered" }
   | { kind: "chat" };
@@ -136,16 +136,17 @@ export function ContactSupport(props: ContactSupportProps) {
 
   // The appeal tx, from the confirm click. submitting/pending/confirmed
   // hide the button until the chain state moves off `appeal`, so it can't
-  // be sent twice; failed (mined but reverted) brings it back with a note.
+  // be sent twice; failed (mined but reverted) and unconfirmed (see below)
+  // bring it back with a note.
   const [appealTx, setAppealTx] = useState<
-    "submitting" | "pending" | "confirmed" | "failed" | null
+    "submitting" | "pending" | "confirmed" | "failed" | "unconfirmed" | null
   >(null);
   useEffect(() => {
     if (state.action.kind !== "appeal") setAppealTx(null);
   }, [state.action.kind]);
   // Mirror a tx outcome into the open appeal modal.
   const setAppealOutcome = useCallback(
-    (s: "pending" | "confirmed" | "failed" | null) => {
+    (s: "pending" | "confirmed" | "failed" | "unconfirmed" | null) => {
       setAppealTx(s);
       setModalState((m) =>
         m.kind === "appeal" ? { ...m, txStatus: s ?? undefined } : m,
@@ -155,11 +156,12 @@ export function ContactSupport(props: ContactSupportProps) {
   );
   // A smart-account receipt reports the bundle tx, not the inner call, so
   // "confirmed" can hide a reverted appeal. If the row is still offering
-  // the same action well after the confirm + refetch + two polls, treat it
-  // as failed.
+  // the same action well after the confirm + refetch + two polls, say so.
+  // Not "failed": the re-reads may simply have failed (429, timeout) and
+  // kept the old value.
   useEffect(() => {
     if (appealTx !== "confirmed" || state.action.kind !== "appeal") return;
-    const t = setTimeout(() => setAppealOutcome("failed"), 150_000);
+    const t = setTimeout(() => setAppealOutcome("unconfirmed"), 150_000);
     return () => clearTimeout(t);
   }, [appealTx, state.action.kind, setAppealOutcome]);
   // While the confirm click is simulating / waiting on the wallet, the
@@ -322,9 +324,10 @@ export function ContactSupport(props: ContactSupportProps) {
         >
           {appeal ? (
             <>
-              {appealTx === "failed" ? (
+              {appealTx === "failed" || appealTx === "unconfirmed" ? (
                 <span
-                  data-contact-support-appeal-failed
+                  data-contact-support-appeal-failed={appealTx === "failed" ? "" : undefined}
+                  data-contact-support-appeal-unconfirmed={appealTx === "unconfirmed" ? "" : undefined}
                   role="status"
                   style={{
                     display: "inline-flex",
@@ -334,7 +337,9 @@ export function ContactSupport(props: ContactSupportProps) {
                     color: color.danger,
                   }}
                 >
-                  Last attempt failed on chain
+                  {appealTx === "failed"
+                    ? "Last attempt failed on chain"
+                    : "Couldn't confirm the last attempt"}
                 </span>
               ) : null}
               <AppealButton
