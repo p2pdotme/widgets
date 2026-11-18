@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, waitFor, act } from "@testing-library/react";
+import {
+  ContractFunctionExecutionError,
+  ContractFunctionRevertedError,
+  HttpRequestError,
+} from "viem";
+import { DIAMOND_ABI } from "../src/core/contracts";
 
 const multicall = vi.fn();
 vi.mock("viem", async () => {
@@ -12,7 +18,30 @@ import { useDisputeEscalation } from "../src/hooks/useDisputeEscalation";
 const DIAMOND = "0xeb0BB8E3c014D915D9B2df03aBB130a1Fb44beb9" as const;
 const ZERO = "0x0000000000000000000000000000000000000000";
 const ok = (result: unknown) => ({ status: "success", result });
-const reverted = { status: "failure", error: new Error("Diamond: Function does not exist") };
+// What viem's multicall(allowFailure) actually yields, per call:
+// a revert is a ContractFunctionExecutionError around a RevertedError…
+const revertError = (functionName: string) =>
+  new ContractFunctionExecutionError(
+    new ContractFunctionRevertedError({
+      abi: DIAMOND_ABI as any,
+      functionName,
+      message: "Diamond: Function does not exist",
+    }),
+    { abi: DIAMOND_ABI as any, functionName, args: [7n] },
+  );
+const reverted = [
+  { status: "failure", error: revertError("getDisputeTier") },
+  { status: "failure", error: revertError("getDisputeDecision") },
+];
+// …and a transport failure (429, timeout) is also a per-call failure, not
+// a throw (viem multicall.js: rejected aggregate3 → failure per call).
+const http429 = () => {
+  const error = new HttpRequestError({ url: "https://rpc.local", status: 429 });
+  return [
+    { status: "failure", error },
+    { status: "failure", error },
+  ];
+};
 
 beforeEach(() => {
   multicall.mockReset();
@@ -53,7 +82,7 @@ describe("useDisputeEscalation", () => {
 
   it("views revert (no ladder facet, Base Sepolia): stays undefined and stops polling", async () => {
     vi.useFakeTimers();
-    multicall.mockResolvedValue([reverted, reverted]);
+    multicall.mockResolvedValue(reverted);
     const { result } = renderHook(() =>
       useDisputeEscalation({ orderId: "7", enabled: true, diamondAddress: DIAMOND, pollIntervalMs: 1000 }),
     );
@@ -65,7 +94,7 @@ describe("useDisputeEscalation", () => {
   it("transport error (429/timeout) keeps polling and recovers", async () => {
     vi.useFakeTimers();
     multicall
-      .mockRejectedValueOnce(new Error("HTTP request failed. Status: 429"))
+      .mockResolvedValueOnce(http429())
       .mockResolvedValue([ok([2, 100n, 300n]), ok([0, 0, ZERO, 0n, 0n])]);
     const { result } = renderHook(() =>
       useDisputeEscalation({ orderId: "7", enabled: true, diamondAddress: DIAMOND, pollIntervalMs: 1000 }),
@@ -81,7 +110,7 @@ describe("useDisputeEscalation", () => {
     vi.useFakeTimers();
     multicall
       .mockResolvedValueOnce([ok([1, 100n, 200n]), ok([0, 0, ZERO, 0n, 0n])])
-      .mockRejectedValue(new Error("timeout"));
+      .mockResolvedValue(http429());
     const { result } = renderHook(() =>
       useDisputeEscalation({ orderId: "7", enabled: true, diamondAddress: DIAMOND, pollIntervalMs: 1000 }),
     );

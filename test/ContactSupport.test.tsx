@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 
 // Isolate ContactSupport + UserSupportPanel from the bridge HTTP layer. The
 // chat path now renders the embedded UserSupportPanel, which signs in against
@@ -26,6 +26,7 @@ vi.mock("../src/api/userBridge", () => userBridge);
 // Opt-in chain stub for the appeal in-flight test; other tests get real viem.
 const chain = vi.hoisted(() => ({
   stub: false,
+  simulate: async (): Promise<any> => ({ request: {} }),
   // never-settling by default = tx still pending
   receipt: (): Promise<any> => new Promise(() => {}),
 }));
@@ -36,7 +37,7 @@ vi.mock("viem", async () => {
     createPublicClient: (...args: any[]) =>
       chain.stub
         ? {
-            simulateContract: async () => ({ request: {} }),
+            simulateContract: () => chain.simulate(),
             waitForTransactionReceipt: () => chain.receipt(),
           }
         : (actual.createPublicClient as any)(...args),
@@ -258,6 +259,68 @@ describe("ContactSupport appeal button (3-tier dispute ladder)", () => {
     }
   });
 
+  it("keeps 'Appeal confirmed' in the modal after the row moves off appeal", async () => {
+    chain.stub = true;
+    chain.receipt = async () => ({ status: "success" });
+    try {
+      const { rerender } = renderCS({ state: appealState, txSigner });
+      fireEvent.click(screen.getByRole("button", { name: /appeal decision/i }));
+      fireEvent.click(await screen.findByRole("button", { name: /^appeal$/i }));
+      await screen.findByRole("heading", { name: /appeal confirmed/i });
+      rerender(
+        <ContactSupport
+          orderId="227"
+          state={{ ...appealState, statusText: "Country admin review · decision due in 3d", action: { kind: "none" } }}
+          signer={signer}
+          bridgeUrl="https://bridge.local"
+          originApp="test-app"
+          chatEnabled
+          txSigner={txSigner}
+        />,
+      );
+      expect(screen.getByRole("heading", { name: /appeal confirmed/i })).toBeTruthy();
+    } finally {
+      chain.stub = false;
+      chain.receipt = () => new Promise(() => {});
+    }
+  });
+
+  it("while submitting: Escape does not close the modal and the row button is hidden", async () => {
+    chain.stub = true;
+    chain.simulate = () => new Promise(() => {}); // wallet / simulate still busy
+    try {
+      renderCS({ state: appealState, txSigner });
+      fireEvent.click(screen.getByRole("button", { name: /appeal decision/i }));
+      fireEvent.click(await screen.findByRole("button", { name: /^appeal$/i }));
+      await screen.findByText(/waiting for wallet/i);
+      fireEvent.keyDown(document, { key: "Escape" });
+      expect(screen.getByRole("heading", { name: /appeal this decision/i })).toBeTruthy();
+      expect(screen.queryByRole("button", { name: /appeal decision/i })).toBeNull();
+    } finally {
+      chain.stub = false;
+      chain.simulate = async () => ({ request: {} });
+    }
+  });
+
+  it("a confirmed appeal whose row still offers the action after 150s turns failed", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    chain.stub = true;
+    chain.receipt = async () => ({ status: "success" });
+    try {
+      renderCS({ state: appealState, txSigner });
+      fireEvent.click(screen.getByRole("button", { name: /appeal decision/i }));
+      fireEvent.click(await screen.findByRole("button", { name: /^appeal$/i }));
+      await screen.findByRole("heading", { name: /appeal confirmed/i });
+      await act(() => vi.advanceTimersByTimeAsync(150_000));
+      expect(screen.getByRole("heading", { name: /appeal failed/i })).toBeTruthy();
+      expect(screen.getByText(/last attempt failed on chain/i)).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+      chain.stub = false;
+      chain.receipt = () => new Promise(() => {});
+    }
+  });
+
   it("on a reverted receipt: the modal says failed and the button comes back with a note", async () => {
     chain.stub = true;
     chain.receipt = async () => ({ status: "reverted" });
@@ -279,7 +342,7 @@ describe("ContactSupport appeal button (3-tier dispute ladder)", () => {
   it("disputeAppeals={false} hides the button and points to support instead", () => {
     renderCS({ state: appealState, txSigner, disputeAppeals: false });
     expect(screen.queryByRole("button", { name: /appeal decision/i })).toBeNull();
-    expect(screen.getByText(/contact support to appeal/i)).toBeTruthy();
+    expect(screen.getByText(/appeals aren't available in this app/i)).toBeTruthy();
     expect(screen.getByRole("button", { name: /contact support/i })).toBeTruthy();
   });
 
@@ -290,7 +353,7 @@ describe("ContactSupport appeal button (3-tier dispute ladder)", () => {
       disputeAppeals: false,
     });
     expect(screen.queryByRole("button", { name: /escalate dispute/i })).toBeNull();
-    expect(screen.getByText(/contact support to escalate/i)).toBeTruthy();
+    expect(screen.getByText(/escalation isn't available in this app/i)).toBeTruthy();
   });
 
   it("keeps the pre-ladder DOM when there is no appeal (button is the root's direct child)", () => {
