@@ -176,6 +176,55 @@ export const DIAMOND_ABI = [
     inputs: [],
   },
   {
+    // raiseDispute on a SELL/PAY order that insurance already paid out.
+    type: "error",
+    name: "OrderInsuranceClaimSettled",
+    inputs: [],
+  },
+  // ─── 3-tier dispute ladder (OrderProcessorFacet) ───────────────────
+  // A tier-1/2 USER-fault decision is parked for the currency's appeal
+  // window; the order's user may appeal it to the next tier, or escalate
+  // an undecided dispute once its tier's decision SLA has lapsed.
+  {
+    name: "appealDispute",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "_orderId", type: "uint256" }],
+    outputs: [],
+  },
+  {
+    name: "getDisputeTier",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "_orderId", type: "uint256" }],
+    outputs: [
+      { name: "tier", type: "uint8" },
+      { name: "tierSince", type: "uint64" },
+      { name: "appealableAt", type: "uint64" },
+    ],
+  },
+  {
+    name: "getDisputeDecision",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "_orderId", type: "uint256" }],
+    outputs: [
+      { name: "faultType", type: "uint8" },
+      { name: "decisionTier", type: "uint8" },
+      { name: "decidedBy", type: "address" },
+      { name: "decidedAt", type: "uint64" },
+      { name: "appealableUntil", type: "uint64" },
+    ],
+  },
+  { type: "error", name: "DisputeNotRaised", inputs: [] },
+  // contracts-v4 dev names the caller check NotDisputeUser; older builds
+  // used NotDisputeParty. Both are declared so either decodes.
+  { type: "error", name: "NotDisputeUser", inputs: [] },
+  { type: "error", name: "NotDisputeParty", inputs: [] },
+  { type: "error", name: "DisputeAppealWindowClosed", inputs: [] },
+  { type: "error", name: "DisputeAppealNotDue", inputs: [] },
+  { type: "error", name: "DisputeAtFinalTier", inputs: [] },
+  {
     name: "getAdditionalOrderDetails",
     type: "function",
     stateMutability: "view",

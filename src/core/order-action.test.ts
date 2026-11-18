@@ -5,6 +5,8 @@ import {
   computeOrderAction,
   formatRemaining,
   isOrderActionable,
+  parseDisputeEscalation,
+  type DisputeEscalation,
   BUY_DISPUTE_OPEN_MS,
   BUY_DISPUTE_CLOSE_MS,
   SELL_PAY_DISPUTE_OPEN_MS,
@@ -446,3 +448,124 @@ function formatHelper(remainingMs: number): string {
   const remH = totalHours - totalDays * 24;
   return `${totalDays}d ${remH}h`;
 }
+
+// ─── 3-tier dispute ladder (escalation) ────────────────────────────────
+//
+// Timestamps in seconds; `now` is ms. USER = the order's user (baseOrder's
+// `user`), so `actor: USER` is the wallet allowed to appeal.
+
+const USER = "0x0000000000000000000000000000000000000001";
+const OTHER = "0x00000000000000000000000000000000000000AA";
+const T0 = 1_800_000_000;
+const NOW_MS = T0 * 1000;
+const H = 3600;
+
+function undecided(tier: 1 | 2 | 3, appealableAt: number): DisputeEscalation {
+  return { tier, tierSince: T0 - H, appealableAt, decision: null };
+}
+function decided(appealableUntil: number, decisionTier: 1 | 2 = 1, faultType: "USER" | "MERCHANT" = "USER"): DisputeEscalation {
+  return {
+    tier: decisionTier,
+    tierSince: T0 - 2 * H,
+    appealableAt: 0,
+    decision: { faultType, decisionTier, decidedAt: T0 - H, appealableUntil },
+  };
+}
+const openOrder = (overrides: Partial<Order> = {}) =>
+  baseOrder({ status: "completed", type: "sell", disputeStatus: "open", user: USER, ...overrides });
+
+test("escalation: parseDisputeEscalation maps tuples, tier 0 → 1, no decision when decidedAt=0", () => {
+  const e = parseDisputeEscalation(
+    [0, 5n, 9n],
+    [0, 0, "0x0000000000000000000000000000000000000000", 0n, 0n],
+  );
+  assert.deepStrictEqual(e, { tier: 1, tierSince: 5, appealableAt: 9, decision: null });
+  const d = parseDisputeEscalation([2, 5n, 0n], [1, 2, USER, 100n, 200n]);
+  assert.deepStrictEqual(d.decision, { faultType: "USER", decisionTier: 2, decidedAt: 100, appealableUntil: 200 });
+});
+
+test("escalation: decision against the user, window open, actor is user → appeal action", () => {
+  const out = computeOrderAction(openOrder(), NOW_MS, { escalation: decided(T0 + 3 * H), actor: USER });
+  assert.strictEqual(out.statusText, "Decided against you · appeal within 3h 0m");
+  assert.deepStrictEqual(out.action, { kind: "appeal", mode: "appeal", nextTier: 2, remainingMs: 3 * H * 1000 });
+  assert.strictEqual(out.disputeState, "open");
+  assert.strictEqual(out.live, true);
+});
+
+test("escalation: a pre-ladder dispute (tierSince 0, read straight off chain) is escalatable at once", () => {
+  // getDisputeTier for a dispute raised before the ladder: tier 1, tierSince 0,
+  // appealableAt = 0 + 24h SLA, i.e. long past.
+  const e = parseDisputeEscalation([1, 0n, 86400n], [0, 0, "0x0000000000000000000000000000000000000000", 0n, 0n]);
+  const out = computeOrderAction(openOrder(), NOW_MS, { escalation: e, actor: USER });
+  assert.strictEqual(out.statusText, "Circle review · decision overdue");
+  assert.deepStrictEqual(out.action, { kind: "appeal", mode: "escalate", nextTier: 2 });
+});
+
+test("escalation: actor match is case-insensitive", () => {
+  const out = computeOrderAction(openOrder({ user: OTHER.toLowerCase() as `0x${string}` }), NOW_MS, {
+    escalation: decided(T0 + H),
+    actor: OTHER,
+  });
+  assert.strictEqual(out.action.kind, "appeal");
+});
+
+test("escalation: decision pending but actor is not order.user → neutral text, no action", () => {
+  for (const actor of [OTHER, undefined]) {
+    const out = computeOrderAction(openOrder(), NOW_MS, { escalation: decided(T0 + 3 * H), actor });
+    assert.strictEqual(out.statusText, "Decided against the order's wallet · appeal window closes in 3h 0m");
+    assert.deepStrictEqual(out.action, { kind: "none" });
+  }
+});
+
+test("escalation: tier-2 decision appeals to tier 3", () => {
+  const out = computeOrderAction(openOrder(), NOW_MS, { escalation: decided(T0 + H, 2), actor: USER });
+  assert.strictEqual(out.action.kind === "appeal" && out.action.nextTier, 3);
+});
+
+test("escalation: at appealableUntil the window is closed → decision stands, no action", () => {
+  const out = computeOrderAction(openOrder(), NOW_MS, { escalation: decided(T0), actor: USER });
+  assert.strictEqual(out.statusText, "Decided against you · decision stands");
+  assert.deepStrictEqual(out.action, { kind: "none" });
+});
+
+test("escalation: decision stands, viewed without the order's wallet → neutral text", () => {
+  const out = computeOrderAction(openOrder(), NOW_MS, { escalation: decided(T0) });
+  assert.strictEqual(out.statusText, "Decided against the order's wallet · decision stands");
+  assert.deepStrictEqual(out.action, { kind: "none" });
+});
+
+test("escalation: a non-USER pending decision is not shown as against the user", () => {
+  const out = computeOrderAction(openOrder(), NOW_MS, { escalation: decided(T0 + H, 1, "MERCHANT"), actor: USER });
+  assert.strictEqual(out.statusText, "Circle review · decision recorded");
+  assert.deepStrictEqual(out.action, { kind: "none" });
+});
+
+test("escalation: undecided before the SLA → countdown, no action", () => {
+  const out = computeOrderAction(openOrder(), NOW_MS, { escalation: undecided(1, T0 + 5 * H), actor: USER });
+  assert.strictEqual(out.statusText, "Circle review · decision due in 5h 0m");
+  assert.deepStrictEqual(out.action, { kind: "none" });
+  assert.strictEqual(out.live, true);
+});
+
+test("escalation: SLA lapsed exactly at appealableAt → escalate (owner only)", () => {
+  const own = computeOrderAction(openOrder(), NOW_MS, { escalation: undecided(2, T0), actor: USER });
+  assert.strictEqual(own.statusText, "Country admin review · decision overdue");
+  assert.deepStrictEqual(own.action, { kind: "appeal", mode: "escalate", nextTier: 3 });
+  const other = computeOrderAction(openOrder(), NOW_MS, { escalation: undecided(2, T0), actor: OTHER });
+  assert.strictEqual(other.statusText, "Country admin review · decision overdue");
+  assert.deepStrictEqual(other.action, { kind: "none" });
+});
+
+test("escalation: tier 3 undecided → final review, no action", () => {
+  const out = computeOrderAction(openOrder(), NOW_MS, { escalation: undecided(3, 0), actor: USER });
+  assert.strictEqual(out.statusText, "Final review · the decision will be final");
+  assert.deepStrictEqual(out.action, { kind: "none" });
+});
+
+test("escalation: ignored unless disputeStatus is open", () => {
+  const out = computeOrderAction(openOrder({ disputeStatus: "resolved" }), NOW_MS, {
+    escalation: decided(T0 + H),
+    actor: USER,
+  });
+  assert.strictEqual(out.statusText, "Resolved");
+});
