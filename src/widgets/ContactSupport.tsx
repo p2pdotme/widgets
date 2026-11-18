@@ -72,6 +72,11 @@ export interface ContactSupportProps {
   /** Fires once the appeal tx is mined successfully — re-read the
    *  dispute's escalation state here (`useDisputeEscalation().refetch`). */
   onAppealConfirmed?: (orderId: string) => void;
+  /** Offer the on-chain Appeal / Escalate button. Default `true`. Set
+   *  `false` when `txSigner` can't send `appealDispute` (e.g. a relay that
+   *  allowlists selectors): the row keeps the stage text and points the
+   *  user to support instead. */
+  disputeAppeals?: boolean;
   /** Toggle for the Chatwoot chat path. When `false` (the v1.1.1-bridge
    *  default), every click that would have opened chat instead opens a
    *  static "support request registered, check back here later" modal.
@@ -110,6 +115,7 @@ export function ContactSupport(props: ContactSupportProps) {
     onReportSubmitted,
     onAppealSubmitted,
     onAppealConfirmed,
+    disputeAppeals = true,
     chatEnabled = false,
     theme,
   } = props;
@@ -237,9 +243,11 @@ export function ContactSupport(props: ContactSupportProps) {
 
   const appealInFlight = appealTx === "pending" || appealTx === "confirmed";
   const appeal =
-    state.action.kind === "appeal" && txSigner && !appealInFlight
+    state.action.kind === "appeal" && txSigner && disputeAppeals && !appealInFlight
       ? state.action
       : null;
+  // Appeals switched off by the host: say where to go instead of a button.
+  const appealHint = state.action.kind === "appeal" && !disputeAppeals;
   // Between broadcast and the re-read the status line still shows the old
   // stage, so say the tx is in flight where the button was.
   const appealPending =
@@ -265,7 +273,7 @@ export function ContactSupport(props: ContactSupportProps) {
           })}
           onClick={handleClick}
         />
-      ) : appeal || appealPending ? (
+      ) : appeal || appealPending || appealHint ? (
         // Wrapper only on appeal rows, so rows without one keep the exact
         // pre-ladder DOM integrators may style or select.
         <span style={{ display: "inline-flex", flexWrap: "wrap", gap: 8 }}>
@@ -294,6 +302,19 @@ export function ContactSupport(props: ContactSupportProps) {
                 }}
               />
             </>
+          ) : appealHint ? (
+            <span
+              data-contact-support-appeal-unavailable
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                height: 36,
+                fontSize: font.sm,
+                color: color.textMuted,
+              }}
+            >
+              Contact support to {state.action.kind === "appeal" && state.action.mode === "escalate" ? "escalate" : "appeal"}
+            </span>
           ) : (
             <span
               data-contact-support-appeal-pending

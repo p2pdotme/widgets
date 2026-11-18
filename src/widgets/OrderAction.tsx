@@ -68,6 +68,8 @@ export interface OrderActionProps {
   onReportSubmitted?: (orderId: string, txHash: `0x${string}`) => void;
   /** Fires the moment an `appealDispute` tx broadcasts. */
   onAppealSubmitted?: (orderId: string, txHash: `0x${string}`) => void;
+  /** Forwarded to `ContactSupport.disputeAppeals`. Default `true`. */
+  disputeAppeals?: boolean;
   /** Forwarded to the per-row `ContactSupport`. See `ContactSupportProps.chatEnabled`. */
   chatEnabled?: boolean;
   theme?: P2PTheme;
@@ -87,6 +89,7 @@ export function OrderAction(props: OrderActionProps) {
     onResumeOrder,
     onReportSubmitted,
     onAppealSubmitted,
+    disputeAppeals,
     chatEnabled,
     theme,
   } = props;
@@ -168,6 +171,7 @@ export function OrderAction(props: OrderActionProps) {
           onReportSubmitted={onReportSubmitted}
           onAppealSubmitted={onAppealSubmitted}
           onAppealConfirmed={refetchEscalation}
+          disputeAppeals={disputeAppeals}
           chatEnabled={chatEnabled}
           theme={theme}
         />

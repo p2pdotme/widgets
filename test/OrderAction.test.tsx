@@ -264,6 +264,13 @@ describe("OrderAction", () => {
       expect(screen.getByText(/appeal window closes in 1h 0m/i)).toBeTruthy();
     });
 
+    it("forwards disputeAppeals to ContactSupport", () => {
+      escalationHook.escalation = pending;
+      const order = baseOrder({ status: "completed", type: "sell", disputeStatus: "open" });
+      render(<OrderAction {...baseProps(order, { disputeAppeals: false })} />);
+      expect(contactSupportProps.disputeAppeals).toBe(false);
+    });
+
     it("shows the state without an action when there is no txSigner", () => {
       escalationHook.escalation = pending;
       const order = baseOrder({ status: "completed", type: "sell", disputeStatus: "open" });
