@@ -8,6 +8,10 @@
 //
 //   - dispute raised:
 //       button with red dot. Click → chat (existing Chatwoot boot).
+//       When `state.action` is `appeal` (decided against the user inside
+//       its appeal window, or the tier missed its deadline) and a
+//       `txSigner` is present, an Appeal / Escalate button renders next
+//       to it. Click → AppealDisputeStep modal (on-chain appealDispute).
 //
 //   - dispute resolved:
 //       button with green dot. Click → chat (read-only thread).
@@ -33,7 +37,8 @@ import {
   ReportProblemStep,
   type RaiseDisputeSigner,
 } from "./ReportProblemStep";
-import type { OrderActionState } from "../core/order-action";
+import { AppealDisputeStep } from "./AppealDisputeStep";
+import type { ActionVariant, OrderActionState } from "../core/order-action";
 import { formatRemaining } from "../core/order-action";
 import type { P2PTheme, SupportSigner } from "../types";
 import type { Address } from "viem";
@@ -62,6 +67,11 @@ export interface ContactSupportProps {
   chainId?: number;
 
   onReportSubmitted?: (orderId: string, txHash: `0x${string}`) => void;
+  /** Fires the moment an `appealDispute` tx broadcasts. */
+  onAppealSubmitted?: (orderId: string, txHash: `0x${string}`) => void;
+  /** Fires once the appeal tx is mined successfully — re-read the
+   *  dispute's escalation state here (`useDisputeEscalation().refetch`). */
+  onAppealConfirmed?: (orderId: string) => void;
   /** Toggle for the Chatwoot chat path. When `false` (the v1.1.1-bridge
    *  default), every click that would have opened chat instead opens a
    *  static "support request registered, check back here later" modal.
@@ -76,6 +86,10 @@ export interface ContactSupportProps {
 type Modal_State =
   | { kind: "closed" }
   | { kind: "report" }
+  // Snapshot of the action at click time: the live state moves off
+  // `appeal` once the tx lands (or the window closes mid-prompt), and the
+  // open modal must keep rendering its submitted / error view.
+  | { kind: "appeal"; action: Extract<ActionVariant, { kind: "appeal" }> }
   | { kind: "registered" }
   | { kind: "chat" };
 
@@ -94,6 +108,8 @@ export function ContactSupport(props: ContactSupportProps) {
     rpcUrl,
     chainId,
     onReportSubmitted,
+    onAppealSubmitted,
+    onAppealConfirmed,
     chatEnabled = false,
     theme,
   } = props;
@@ -105,6 +121,17 @@ export function ContactSupport(props: ContactSupportProps) {
   const [modalState, setModalState] = useState<Modal_State>({
     kind: "closed",
   });
+
+  // The appeal tx after broadcast. pending/confirmed hide the button until
+  // the chain state moves off `appeal`, so it can't be sent twice; failed
+  // (mined but reverted) brings it back with a note, and the open modal
+  // shows the same outcome.
+  const [appealTx, setAppealTx] = useState<
+    "pending" | "confirmed" | "failed" | null
+  >(null);
+  useEffect(() => {
+    if (state.action.kind !== "appeal") setAppealTx(null);
+  }, [state.action.kind]);
 
   useEffect(injectKeyframes, []);
 
@@ -175,6 +202,49 @@ export function ContactSupport(props: ContactSupportProps) {
     [onReportSubmitted, orderId, rpcUrl, chainId],
   );
 
+  const handleAppealSubmitted = useCallback(
+    (txHash: `0x${string}`) => {
+      setAppealTx("pending");
+      onAppealSubmitted?.(orderId, txHash);
+      (async () => {
+        try {
+          const chain = chainId === 8453 ? base : baseSepolia;
+          const publicClient = createPublicClient({
+            chain,
+            transport: http(rpcUrl ?? chain.rpcUrls.default.http[0]),
+          });
+          const receipt = await (publicClient as any).waitForTransactionReceipt({
+            hash: txHash,
+            // Generous: bringing the button back while the tx is still in
+            // the mempool invites a second send.
+            timeout: 180_000,
+          });
+          if (receipt?.status === "success") {
+            setAppealTx("confirmed");
+            onAppealConfirmed?.(orderId);
+          } else {
+            setAppealTx("failed");
+          }
+        } catch {
+          // No receipt in time: give the button back. A re-send of an
+          // appeal that did land is caught by the pre-simulation.
+          setAppealTx(null);
+        }
+      })();
+    },
+    [onAppealSubmitted, onAppealConfirmed, orderId, rpcUrl, chainId],
+  );
+
+  const appealInFlight = appealTx === "pending" || appealTx === "confirmed";
+  const appeal =
+    state.action.kind === "appeal" && txSigner && !appealInFlight
+      ? state.action
+      : null;
+  // Between broadcast and the re-read the status line still shows the old
+  // stage, so say the tx is in flight where the button was.
+  const appealPending =
+    state.action.kind === "appeal" && appealInFlight ? state.action.mode : null;
+
   const closeModal = useCallback(() => {
     setModalState({ kind: "closed" });
   }, []);
@@ -195,6 +265,56 @@ export function ContactSupport(props: ContactSupportProps) {
           })}
           onClick={handleClick}
         />
+      ) : appeal || appealPending ? (
+        // Wrapper only on appeal rows, so rows without one keep the exact
+        // pre-ladder DOM integrators may style or select.
+        <span style={{ display: "inline-flex", flexWrap: "wrap", gap: 8 }}>
+          {appeal ? (
+            <>
+              {appealTx === "failed" ? (
+                <span
+                  data-contact-support-appeal-failed
+                  role="status"
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    height: 36,
+                    fontSize: font.sm,
+                    color: color.danger,
+                  }}
+                >
+                  Last attempt failed on chain
+                </span>
+              ) : null}
+              <AppealButton
+                mode={appeal.mode}
+                onClick={() => {
+                  setAppealTx(null);
+                  setModalState({ kind: "appeal", action: appeal });
+                }}
+              />
+            </>
+          ) : (
+            <span
+              data-contact-support-appeal-pending
+              role="status"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                height: 36,
+                fontSize: font.sm,
+                color: color.textMuted,
+              }}
+            >
+              {appealPending === "appeal" ? "Appeal sent" : "Escalation sent"}
+              {appealTx === "confirmed" ? " · updating" : " · confirming"}
+            </span>
+          )}
+          <PlainButton
+            variant={effectiveDispute}
+            onClick={handleClick}
+          />
+        </span>
       ) : (
         <PlainButton
           variant={effectiveDispute}
@@ -208,7 +328,9 @@ export function ContactSupport(props: ContactSupportProps) {
         ariaLabelledBy={
           modalState.kind === "report"
             ? "report-problem-title"
-            : modalState.kind === "registered"
+            : modalState.kind === "appeal"
+              ? "appeal-dispute-title"
+              : modalState.kind === "registered"
               ? "support-registered-title"
               : undefined
         }
@@ -222,6 +344,21 @@ export function ContactSupport(props: ContactSupportProps) {
             rpcUrl={rpcUrl}
             chainId={chainId}
             onSubmitted={handleReportSubmitted}
+            onClose={closeModal}
+            theme={theme}
+          />
+        ) : modalState.kind === "appeal" && txSigner ? (
+          <AppealDisputeStep
+            orderId={orderId}
+            signer={txSigner}
+            mode={modalState.action.mode}
+            nextTier={modalState.action.nextTier}
+            remainingMs={modalState.action.remainingMs}
+            txStatus={appealTx ?? undefined}
+            diamondAddress={diamondAddress}
+            rpcUrl={rpcUrl}
+            chainId={chainId}
+            onSubmitted={handleAppealSubmitted}
             onClose={closeModal}
             theme={theme}
           />
@@ -278,6 +415,38 @@ function ReportChip({
     >
       <Doughnut filled={filled} />
       <span>Contact Support · {formatRemaining(remainingMs)}</span>
+    </button>
+  );
+}
+
+function AppealButton({
+  mode,
+  onClick,
+}: {
+  mode: "appeal" | "escalate";
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      data-contact-support-appeal={mode}
+      onClick={onClick}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        padding: "0 12px",
+        height: 36,
+        borderRadius: "var(--p2p-radius-button, 8px)",
+        border: "none",
+        background: color.accent,
+        color: color.accentText,
+        fontSize: font.md,
+        fontWeight: weight.medium,
+        fontFamily: "var(--p2p-font, inherit)",
+        cursor: "pointer",
+      }}
+    >
+      {mode === "appeal" ? "Appeal decision" : "Escalate dispute"}
     </button>
   );
 }

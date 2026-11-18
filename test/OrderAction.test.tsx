@@ -19,6 +19,20 @@ vi.mock("../src/widgets/ContactSupport", () => ({
   },
 }));
 
+// Stub the on-chain ladder read: tests drive `escalation` directly and no
+// RPC is made.
+const escalationHook = vi.hoisted(() => ({
+  escalation: undefined as any,
+  refetch: () => {},
+  lastOpts: null as any,
+}));
+vi.mock("../src/hooks/useDisputeEscalation", () => ({
+  useDisputeEscalation: (opts: any) => {
+    escalationHook.lastOpts = opts;
+    return { escalation: escalationHook.escalation, refetch: escalationHook.refetch };
+  },
+}));
+
 const DIAMOND = "0xeb0BB8E3c014D915D9B2df03aBB130a1Fb44beb9" as const;
 const USER = "0xe35DccC12404638B4e733881Df6D57D07B5d70E2" as `0x${string}`;
 
@@ -73,6 +87,8 @@ function baseProps(order: Order, extra: Record<string, any> = {}) {
 
 beforeEach(() => {
   contactSupportProps = null;
+  escalationHook.escalation = undefined;
+  escalationHook.lastOpts = null;
   vi.spyOn(Date, "now").mockReturnValue(NOW_SEC * 1000);
 });
 
@@ -209,5 +225,56 @@ describe("OrderAction", () => {
     rerender(<OrderAction {...baseProps(order)} />);
     expect(clearSpy).toHaveBeenCalledWith(armedId);
     expect(setSpy).toHaveBeenCalledTimes(1);
+  });
+
+  describe("dispute ladder", () => {
+    const pending = {
+      tier: 1,
+      tierSince: NOW_SEC - 7200,
+      appealableAt: 0,
+      decision: { faultType: "USER", decisionTier: 1, decidedAt: NOW_SEC - 3600, appealableUntil: NOW_SEC + 3600 },
+    };
+
+    it("reads escalation only for an open dispute", () => {
+      render(<OrderAction {...baseProps(baseOrder({ status: "completed", type: "sell" }))} />);
+      expect(escalationHook.lastOpts.enabled).toBe(false);
+      render(<OrderAction {...baseProps(baseOrder({ status: "completed", type: "sell", disputeStatus: "open" }))} />);
+      expect(escalationHook.lastOpts.enabled).toBe(true);
+      expect(escalationHook.lastOpts.diamondAddress).toBe(DIAMOND);
+    });
+
+    it("offers the appeal when txSigner is the order's user", () => {
+      escalationHook.escalation = pending;
+      const order = baseOrder({ status: "completed", type: "sell", disputeStatus: "open" });
+      render(<OrderAction {...baseProps(order)} />);
+      expect(contactSupportProps.state.action).toMatchObject({ kind: "appeal", mode: "appeal", nextTier: 2 });
+      expect(screen.getByText(/decided against you · appeal within 1h 0m/i)).toBeTruthy();
+    });
+
+    it("shows the state without an action when order.user is another address (integrator contract)", () => {
+      escalationHook.escalation = pending;
+      const order = baseOrder({
+        status: "completed",
+        type: "sell",
+        disputeStatus: "open",
+        user: "0x00000000000000000000000000000000000000c0",
+      });
+      render(<OrderAction {...baseProps(order)} />);
+      expect(contactSupportProps.state.action.kind).toBe("none");
+      expect(screen.getByText(/appeal window closes in 1h 0m/i)).toBeTruthy();
+    });
+
+    it("shows the state without an action when there is no txSigner", () => {
+      escalationHook.escalation = pending;
+      const order = baseOrder({ status: "completed", type: "sell", disputeStatus: "open" });
+      render(<OrderAction {...baseProps(order, { txSigner: undefined })} />);
+      expect(contactSupportProps.state.action.kind).toBe("none");
+    });
+
+    it("falls back to 'Under review' when the ladder read has no data", () => {
+      const order = baseOrder({ status: "completed", type: "sell", disputeStatus: "open" });
+      render(<OrderAction {...baseProps(order)} />);
+      expect(screen.getByText("Under review")).toBeTruthy();
+    });
   });
 });

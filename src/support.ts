@@ -42,12 +42,30 @@ export {
   type RaiseDisputeSigner,
 } from "./widgets/ReportProblemStep";
 export {
+  AppealDisputeStep,
+  type AppealDisputeStepProps,
+} from "./widgets/AppealDisputeStep";
+export {
   computeOrderAction,
   formatRemaining,
+  parseDisputeEscalation,
+  disputeEscalationPhase,
+  DISPUTE_TIER_LABEL,
   type OrderActionState,
   type ActionVariant,
   type DisputeState,
+  type ComputeOrderActionOpts,
+  type DisputeEscalation,
+  type DisputeEscalationPhase,
+  type DisputeDecision,
+  type DisputeFaultType,
+  type DisputeTier,
 } from "./core/order-action";
+export {
+  useDisputeEscalation,
+  type UseDisputeEscalationOpts,
+  type UseDisputeEscalationResult,
+} from "./hooks/useDisputeEscalation";
 export {
   useOrderStates,
   MULTICALL3_ADDRESS,
