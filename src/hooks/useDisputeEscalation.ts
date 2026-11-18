@@ -24,6 +24,7 @@ import {
   ContractFunctionZeroDataError,
   createPublicClient,
   http,
+  InternalRpcError,
   type Address,
 } from "viem";
 import { base, baseSepolia } from "viem/chains";
@@ -138,14 +139,16 @@ export function useDisputeEscalation(
 }
 
 /** True when the call reached the contract and reverted (or the address
- *  returned no data), as opposed to an RPC / network failure. */
+ *  returned no data), as opposed to an RPC / network failure. viem's
+ *  getContractError also labels a provider's -32603 "internal error" as a
+ *  revert; that is usually transient load, so it does not count. */
 function isRevert(err: unknown): boolean {
-  return (
-    err instanceof BaseError &&
-    !!err.walk(
-      (e) =>
-        e instanceof ContractFunctionRevertedError ||
-        e instanceof ContractFunctionZeroDataError,
-    )
+  if (!(err instanceof BaseError)) return false;
+  const reverted = err.walk(
+    (e) =>
+      e instanceof ContractFunctionRevertedError ||
+      e instanceof ContractFunctionZeroDataError,
   );
+  if (!reverted) return false;
+  return !err.walk((e) => e instanceof InternalRpcError);
 }
