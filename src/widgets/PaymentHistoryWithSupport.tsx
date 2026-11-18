@@ -84,8 +84,8 @@ export interface PaymentHistoryWithSupportProps
     onAppealSubmitted?: (orderId: string, txHash: `0x${string}`) => void;
     /** Offer the Appeal / Escalate button. Default `true`. Set `false`
      *  when `txSigner` can't send `appealDispute` (a relay that allowlists
-     *  selectors): rows keep the stage text and say "Contact support to
-     *  appeal" instead. */
+     *  selectors): rows keep the stage text and say "Appeals aren't
+     *  available in this app" instead. */
     disputeAppeals?: boolean;
     /** Toggle for the Chatwoot chat path. Default `false` (v1.1.1-bridge
      *  fallback): every click that would have opened chat instead opens

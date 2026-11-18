@@ -14,9 +14,18 @@
 //   - the views revert or there is no diamond for the chain (Base Sepolia
 //     has no ladder facet today): permanent, so polling stops;
 //   - transport (429, timeout, network): transient, polling carries on.
+//     viem's multicall reports these as per-call failures, not a throw,
+//     so they are told apart by the error type (`isRevert`).
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { createPublicClient, http, type Address } from "viem";
+import {
+  BaseError,
+  ContractFunctionRevertedError,
+  ContractFunctionZeroDataError,
+  createPublicClient,
+  http,
+  type Address,
+} from "viem";
 import { base, baseSepolia } from "viem/chains";
 import { DIAMOND_ABI, resolveDiamondAddress } from "../core/contracts";
 import {
@@ -98,13 +107,16 @@ export function useDisputeEscalation(
           allowFailure: true,
         });
       } catch {
-        return; // transport error: keep the last value, retry next poll
+        return; // keep the last value, retry next poll
       }
       if (cancelled) return;
       const [t, d] = results;
       if (t.status !== "success" || d.status !== "success") {
-        stop(); // the views revert (no ladder facet): permanent
-        return;
+        // With allowFailure, viem reports a transport failure (429,
+        // timeout) as a per-call `failure` too, so tell the two apart.
+        const err = t.status !== "success" ? t.error : d.error;
+        if (isRevert(err)) stop(); // no ladder facet: permanent
+        return; // transport: keep the last value, retry next poll
       }
       // getDisputeTier returns all zeros once the dispute is no longer
       // RAISED (settled between the subgraph read and this one).
@@ -123,4 +135,17 @@ export function useDisputeEscalation(
   }, [enabled, orderId, chainId, diamondAddress, rpcUrl, pollIntervalMs, token]);
 
   return { escalation, refetch };
+}
+
+/** True when the call reached the contract and reverted (or the address
+ *  returned no data), as opposed to an RPC / network failure. */
+function isRevert(err: unknown): boolean {
+  return (
+    err instanceof BaseError &&
+    !!err.walk(
+      (e) =>
+        e instanceof ContractFunctionRevertedError ||
+        e instanceof ContractFunctionZeroDataError,
+    )
+  );
 }

@@ -974,7 +974,9 @@ selector/target pairs, allow `appealDispute` on the diamond (wherever
 `raiseDispute` is allowed) before upgrading; otherwise the button shows
 and every send fails at the relay. Until then, pass
 `support.disputeAppeals={false}`: rows keep the stage text and show
-"Contact support to appeal" instead of the button.
+"Appeals aren't available in this app" instead of the button. That is
+the honest message: only `order.user` can appeal on chain, so support
+can't appeal for the user.
 
 - **polycule**: allow `appealDispute` in `ALLOWED_SELECTORS` and in
   `checkSelectorTargetPair` (polycule-backend `src/routes/onramp.ts`), or
@@ -984,8 +986,9 @@ and every send fails at the relay. Until then, pass
 
 If the read fails (no ladder facet on the target diamond, which is the case
 on Base Sepolia today, or an RPC error), the row falls back to "Under review".
-A diamond without the ladder views stops that row's polling; RPC errors
-(429, timeouts) just retry on the next poll.
+A diamond without the ladder views (the call reverts) stops that row's
+polling; RPC errors (429, timeouts) keep the last value and retry on the
+next poll.
 
 Building your own rows? Use `useDisputeEscalation` and
 `computeOrderAction(order, now, { escalation, actor: txSigner.address })`,

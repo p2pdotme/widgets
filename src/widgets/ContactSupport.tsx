@@ -26,7 +26,7 @@
 // `dispute-raised` immediately and the click target switches from
 // "open report flow" to "open chat".
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPublicClient, http } from "viem";
 import { base, baseSepolia } from "viem/chains";
 import { color, font, weight, themeToCssVars } from "../ui/theme";
@@ -74,8 +74,8 @@ export interface ContactSupportProps {
   onAppealConfirmed?: (orderId: string) => void;
   /** Offer the on-chain Appeal / Escalate button. Default `true`. Set
    *  `false` when `txSigner` can't send `appealDispute` (e.g. a relay that
-   *  allowlists selectors): the row keeps the stage text and points the
-   *  user to support instead. */
+   *  allowlists selectors): the row keeps the stage text and says appeals
+   *  aren't available here (only `order.user` can appeal on chain). */
   disputeAppeals?: boolean;
   /** Toggle for the Chatwoot chat path. When `false` (the v1.1.1-bridge
    *  default), every click that would have opened chat instead opens a
@@ -94,7 +94,13 @@ type Modal_State =
   // Snapshot of the action at click time: the live state moves off
   // `appeal` once the tx lands (or the window closes mid-prompt), and the
   // open modal must keep rendering its submitted / error view.
-  | { kind: "appeal"; action: Extract<ActionVariant, { kind: "appeal" }> }
+  // `txStatus` lives here too, so a confirmed appeal stays confirmed in
+  // the modal after the row's state (and `appealTx`) moves on.
+  | {
+      kind: "appeal";
+      action: Extract<ActionVariant, { kind: "appeal" }>;
+      txStatus?: "pending" | "confirmed" | "failed";
+    }
   | { kind: "registered" }
   | { kind: "chat" };
 
@@ -128,16 +134,43 @@ export function ContactSupport(props: ContactSupportProps) {
     kind: "closed",
   });
 
-  // The appeal tx after broadcast. pending/confirmed hide the button until
-  // the chain state moves off `appeal`, so it can't be sent twice; failed
-  // (mined but reverted) brings it back with a note, and the open modal
-  // shows the same outcome.
+  // The appeal tx, from the confirm click. submitting/pending/confirmed
+  // hide the button until the chain state moves off `appeal`, so it can't
+  // be sent twice; failed (mined but reverted) brings it back with a note.
   const [appealTx, setAppealTx] = useState<
-    "pending" | "confirmed" | "failed" | null
+    "submitting" | "pending" | "confirmed" | "failed" | null
   >(null);
   useEffect(() => {
     if (state.action.kind !== "appeal") setAppealTx(null);
   }, [state.action.kind]);
+  // Mirror a tx outcome into the open appeal modal.
+  const setAppealOutcome = useCallback(
+    (s: "pending" | "confirmed" | "failed" | null) => {
+      setAppealTx(s);
+      setModalState((m) =>
+        m.kind === "appeal" ? { ...m, txStatus: s ?? undefined } : m,
+      );
+    },
+    [],
+  );
+  // A smart-account receipt reports the bundle tx, not the inner call, so
+  // "confirmed" can hide a reverted appeal. If the row is still offering
+  // the same action well after the confirm + refetch + two polls, treat it
+  // as failed.
+  useEffect(() => {
+    if (appealTx !== "confirmed" || state.action.kind !== "appeal") return;
+    const t = setTimeout(() => setAppealOutcome("failed"), 150_000);
+    return () => clearTimeout(t);
+  }, [appealTx, state.action.kind, setAppealOutcome]);
+  // While the confirm click is simulating / waiting on the wallet, the
+  // modal can't be dismissed (Escape / backdrop) — see closeModal.
+  const appealBusy = useRef(false);
+  const handleAppealBusy = useCallback((busy: boolean) => {
+    appealBusy.current = busy;
+    setAppealTx((s) =>
+      busy ? "submitting" : s === "submitting" ? null : s,
+    );
+  }, []);
 
   useEffect(injectKeyframes, []);
 
@@ -210,7 +243,7 @@ export function ContactSupport(props: ContactSupportProps) {
 
   const handleAppealSubmitted = useCallback(
     (txHash: `0x${string}`) => {
-      setAppealTx("pending");
+      setAppealOutcome("pending");
       onAppealSubmitted?.(orderId, txHash);
       (async () => {
         try {
@@ -226,22 +259,23 @@ export function ContactSupport(props: ContactSupportProps) {
             timeout: 180_000,
           });
           if (receipt?.status === "success") {
-            setAppealTx("confirmed");
+            setAppealOutcome("confirmed");
             onAppealConfirmed?.(orderId);
           } else {
-            setAppealTx("failed");
+            setAppealOutcome("failed");
           }
         } catch {
           // No receipt in time: give the button back. A re-send of an
           // appeal that did land is caught by the pre-simulation.
-          setAppealTx(null);
+          setAppealOutcome(null);
         }
       })();
     },
-    [onAppealSubmitted, onAppealConfirmed, orderId, rpcUrl, chainId],
+    [onAppealSubmitted, onAppealConfirmed, orderId, rpcUrl, chainId, setAppealOutcome],
   );
 
-  const appealInFlight = appealTx === "pending" || appealTx === "confirmed";
+  const appealInFlight =
+    appealTx === "submitting" || appealTx === "pending" || appealTx === "confirmed";
   const appeal =
     state.action.kind === "appeal" && txSigner && disputeAppeals && !appealInFlight
       ? state.action
@@ -254,6 +288,7 @@ export function ContactSupport(props: ContactSupportProps) {
     state.action.kind === "appeal" && appealInFlight ? state.action.mode : null;
 
   const closeModal = useCallback(() => {
+    if (appealBusy.current) return;
     setModalState({ kind: "closed" });
   }, []);
 
@@ -276,7 +311,15 @@ export function ContactSupport(props: ContactSupportProps) {
       ) : appeal || appealPending || appealHint ? (
         // Wrapper only on appeal rows, so rows without one keep the exact
         // pre-ladder DOM integrators may style or select.
-        <span style={{ display: "inline-flex", flexWrap: "wrap", gap: 8 }}>
+        <span
+          style={{
+            display: "inline-flex",
+            flexWrap: "wrap",
+            gap: 8,
+            // Wrapped lines stay flush right under the status text.
+            justifyContent: "flex-end",
+          }}
+        >
           {appeal ? (
             <>
               {appealTx === "failed" ? (
@@ -313,7 +356,9 @@ export function ContactSupport(props: ContactSupportProps) {
                 color: color.textMuted,
               }}
             >
-              Contact support to {state.action.kind === "appeal" && state.action.mode === "escalate" ? "escalate" : "appeal"}
+              {state.action.kind === "appeal" && state.action.mode === "escalate"
+                ? "Escalation isn't available in this app"
+                : "Appeals aren't available in this app"}
             </span>
           ) : (
             <span
@@ -327,8 +372,16 @@ export function ContactSupport(props: ContactSupportProps) {
                 color: color.textMuted,
               }}
             >
-              {appealPending === "appeal" ? "Appeal sent" : "Escalation sent"}
-              {appealTx === "confirmed" ? " · updating" : " · confirming"}
+              {appealTx === "submitting"
+                ? "Waiting for wallet"
+                : appealPending === "appeal"
+                  ? "Appeal sent"
+                  : "Escalation sent"}
+              {appealTx === "confirmed"
+                ? " · updating"
+                : appealTx === "submitting"
+                  ? ""
+                  : " · confirming"}
             </span>
           )}
           <PlainButton
@@ -375,7 +428,8 @@ export function ContactSupport(props: ContactSupportProps) {
             mode={modalState.action.mode}
             nextTier={modalState.action.nextTier}
             remainingMs={modalState.action.remainingMs}
-            txStatus={appealTx ?? undefined}
+            txStatus={modalState.txStatus}
+            onBusyChange={handleAppealBusy}
             diamondAddress={diamondAddress}
             rpcUrl={rpcUrl}
             chainId={chainId}

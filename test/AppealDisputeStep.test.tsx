@@ -69,6 +69,8 @@ describe("AppealDisputeStep", () => {
     expect(decoded.args).toEqual([169n]);
     expect(onSubmitted).toHaveBeenCalledWith("0xabc");
     expect(screen.getByRole("heading", { name: /appeal sent/i })).toBeTruthy();
+    // focus follows the phase change instead of dropping to <body>
+    expect(document.activeElement).toBe(screen.getByRole("heading", { name: /appeal sent/i }));
   });
 
   it("escalate: copy and button label", () => {

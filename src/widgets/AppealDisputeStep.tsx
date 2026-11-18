@@ -11,7 +11,7 @@
 // it pre-simulates so a doomed call surfaces a decoded reason instead of
 // costing gas.
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   createPublicClient,
   encodeFunctionData,
@@ -54,6 +54,9 @@ export interface AppealDisputeStepProps {
   /** Outcome of the broadcast tx, if the host waits for its receipt
    *  (ContactSupport does). Absent → the sent view says only "sent". */
   txStatus?: "pending" | "confirmed" | "failed";
+  /** True from the confirm click until broadcast or failure. A host can
+   *  use it to block dismissing the modal mid-send. */
+  onBusyChange?: (busy: boolean) => void;
   onError?: (err: Error) => void;
   onClose?: () => void;
   theme?: SupportTheme;
@@ -93,13 +96,27 @@ export function AppealDisputeStep(props: AppealDisputeStepProps) {
     onClose,
     theme,
     txStatus,
+    onBusyChange,
   } = props;
   const [phase, setPhase] = useState<Phase>({ kind: "confirm" });
+  // Each phase swaps the focused control out (or disables it), which
+  // drops focus to <body>; hand it to the new heading instead.
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const mounted = useRef(false);
+  useEffect(() => {
+    if (!mounted.current) {
+      mounted.current = true;
+      return;
+    }
+    headingRef.current?.focus();
+  }, [phase.kind, txStatus]);
   const next = DISPUTE_TIER_LABEL[nextTier];
 
   const handleConfirm = useCallback(async () => {
     setPhase({ kind: "submitting" });
+    onBusyChange?.(true);
     const fail = (err: unknown) => {
+      onBusyChange?.(false);
       const info = extractRevert(err, APPEAL_REVERT_MESSAGES);
       setPhase({ kind: "error", reason: info.message });
       onError?.(err instanceof Error ? err : new Error(info.message));
@@ -135,11 +152,12 @@ export function AppealDisputeStep(props: AppealDisputeStepProps) {
         data,
       });
       onSubmitted?.(hash);
+      onBusyChange?.(false);
       setPhase({ kind: "submitted" });
     } catch (err) {
       fail(err);
     }
-  }, [orderId, signer, props.diamondAddress, rpcUrl, chainId, onSubmitted, onError]);
+  }, [orderId, signer, props.diamondAddress, rpcUrl, chainId, onSubmitted, onError, onBusyChange]);
 
   const title = mode === "appeal" ? "Appeal this decision" : "Escalate dispute";
 
@@ -156,7 +174,7 @@ export function AppealDisputeStep(props: AppealDisputeStepProps) {
     >
       {phase.kind === "confirm" || phase.kind === "submitting" ? (
         <div>
-          <h3 id="appeal-dispute-title" style={titleStyle}>
+          <h3 id="appeal-dispute-title" ref={headingRef} tabIndex={-1} style={{ ...titleStyle, outline: "none" }}>
             {title}
           </h3>
           <p style={paragraphStyle}>
@@ -196,7 +214,7 @@ export function AppealDisputeStep(props: AppealDisputeStepProps) {
         </div>
       ) : phase.kind === "submitted" && txStatus === "failed" ? (
         <div>
-          <h3 id="appeal-dispute-title" style={titleStyle}>
+          <h3 id="appeal-dispute-title" ref={headingRef} tabIndex={-1} style={{ ...titleStyle, outline: "none" }}>
             {mode === "appeal" ? "Appeal failed" : "Escalation failed"}
           </h3>
           <p style={paragraphStyle}>
@@ -213,7 +231,7 @@ export function AppealDisputeStep(props: AppealDisputeStepProps) {
         </div>
       ) : phase.kind === "submitted" ? (
         <div>
-          <h3 id="appeal-dispute-title" style={titleStyle}>
+          <h3 id="appeal-dispute-title" ref={headingRef} tabIndex={-1} style={{ ...titleStyle, outline: "none" }}>
             {txStatus === "confirmed"
               ? mode === "appeal" ? "Appeal confirmed" : "Dispute escalated"
               : mode === "appeal" ? "Appeal sent" : "Escalation sent"}
@@ -233,7 +251,7 @@ export function AppealDisputeStep(props: AppealDisputeStepProps) {
         </div>
       ) : (
         <div>
-          <h3 id="appeal-dispute-title" style={titleStyle}>
+          <h3 id="appeal-dispute-title" ref={headingRef} tabIndex={-1} style={{ ...titleStyle, outline: "none" }}>
             Could not send {mode === "appeal" ? "appeal" : "escalation"}
           </h3>
           <p style={paragraphStyle}>{phase.reason}</p>
