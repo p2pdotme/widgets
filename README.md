@@ -944,6 +944,58 @@ It exposes:
 Self-host the bridge alongside your Chatwoot instance, then point
 `bridgeUrl` at it. The widget bundle does **not** include the bridge.
 
+### Disputes: report, appeal, escalate (smart layout)
+
+With `support.txSigner` set, each row of `<PaymentHistoryWithSupport>`
+(default `actionMode="smart"`) offers the on-chain dispute actions:
+
+- **Report**: `raiseDispute`, inside the review window (BUY cancelled after
+  paying: 15m to 24h; SELL/PAY completed: 30m to 7d).
+- **Appeal decision**: a tier-1/2 reviewer decided against the user. The row
+  reads `Decided against you · appeal within 3h 12m`, and `appealDispute`
+  moves the dispute up a tier. The window is per currency (4h or 24h on Base
+  mainnet). When nobody appeals, the row reads `decision stands`.
+- **Escalate**: the current tier missed its decision deadline (24h at tier 1,
+  72h at tier 2), so `appealDispute` moves it up. A dispute raised before
+  the ladder went live (2026-11-09) counts as overdue at once, so it shows
+  Escalate straight away; that is the contract's rule, not a bug.
+
+Each row reads `getDisputeTier` and `getDisputeDecision` from the diamond
+every 60s while its dispute is open. Tier 3 ("Final review") is final.
+
+Only `order.user` can appeal on chain. The button shows only when
+`txSigner.address` equals `order.user`. Without a `txSigner`, or with a
+different wallet, the row shows the stage in neutral wording ("Decided
+against the order's wallet · …") and no button.
+
+`txSigner` must be able to send `appealDispute(uint256)` to the diamond.
+If it goes through your own relay that allowlists selectors or
+selector/target pairs, allow `appealDispute` on the diamond (wherever
+`raiseDispute` is allowed) before upgrading; otherwise the button shows
+and every send fails at the relay. Until then, pass
+`support.disputeAppeals={false}`: rows keep the stage text and show
+"Appeals aren't available in this app" instead of the button. That is
+the honest message: only `order.user` can appeal on chain, so support
+can't appeal for the user.
+
+If the read fails (no ladder facet on the target diamond, which is the case
+on Base Sepolia today, or an RPC error), the row falls back to "Under review".
+A diamond without the ladder views (the call reverts) stops that row's
+polling; RPC errors (429, timeouts) keep the last value and retry on the
+next poll.
+
+Building your own rows? Use `useDisputeEscalation` and
+`computeOrderAction(order, now, { escalation, actor: txSigner.address })`,
+then pass the state to `<ContactSupport>` with
+`onAppealConfirmed={() => refetch()}` (the hook's `refetch`); without it
+the row says "Appeal sent · confirming" until the next 60s poll.
+`<AppealDisputeStep>` is also exported.
+
+The row only offers the action when it has a `txSigner`. If the order's
+own wallet views the row without one, it sees the stage ("Decided against
+the order's wallet · …") and no way to act, so pass `txSigner` wherever
+the user can sign.
+
 ### `<Support>` props
 
 | Prop | Type | Required | Notes |
@@ -962,7 +1014,7 @@ Inherits every `<PaymentHistory>` prop, plus:
 
 | Prop | Type | Required | Notes |
 |---|---|---|---|
-| `support` | `{ signer, originApp, bridgeUrl, theme? }` | — | When present, every row renders a Support launcher and the widget silently refreshes a bridge session on mount for the "Active support" pip. When omitted, behaves identically to `<PaymentHistory>`. |
+| `support` | `{ signer, originApp, bridgeUrl, theme?, txSigner?, diamondAddress?, rpcUrl?, chainId?, chatEnabled?, onResumeOrder?, onReportSubmitted?, onAppealSubmitted?, disputeAppeals? }` | — | When present, every row renders a Support launcher and the widget silently refreshes a bridge session on mount for the "Active support" pip. When omitted, behaves identically to `<PaymentHistory>`. |
 
 ---
 

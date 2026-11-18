@@ -24,6 +24,7 @@ import {
   computeOrderAction,
 } from "../core/order-action";
 import { ContactSupport } from "./ContactSupport";
+import { useDisputeEscalation } from "../hooks/useDisputeEscalation";
 import type { RaiseDisputeSigner } from "./ReportProblemStep";
 
 /** Force a re-render once per second ONLY while `active` — i.e. while a
@@ -65,6 +66,10 @@ export interface OrderActionProps {
   onResumeOrder?: (orderId: string) => void;
   /** Fires the moment the report tx broadcasts. */
   onReportSubmitted?: (orderId: string, txHash: `0x${string}`) => void;
+  /** Fires the moment an `appealDispute` tx broadcasts. */
+  onAppealSubmitted?: (orderId: string, txHash: `0x${string}`) => void;
+  /** Forwarded to `ContactSupport.disputeAppeals`. Default `true`. */
+  disputeAppeals?: boolean;
   /** Forwarded to the per-row `ContactSupport`. See `ContactSupportProps.chatEnabled`. */
   chatEnabled?: boolean;
   theme?: P2PTheme;
@@ -83,11 +88,26 @@ export function OrderAction(props: OrderActionProps) {
     chainId,
     onResumeOrder,
     onReportSubmitted,
+    onAppealSubmitted,
+    disputeAppeals,
     chatEnabled,
     theme,
   } = props;
 
-  const state = computeOrderAction(order, Date.now());
+  // Open disputes: read the 3-tier ladder from chain so a decision against
+  // the user shows its appeal window. The appeal action is offered only
+  // when `txSigner` is the order's user (computeOrderAction's `actor`).
+  const { escalation, refetch: refetchEscalation } = useDisputeEscalation({
+    orderId,
+    enabled: order.disputeStatus === "open",
+    diamondAddress,
+    chainId,
+    rpcUrl,
+  });
+  const state = computeOrderAction(order, Date.now(), {
+    escalation,
+    actor: txSigner?.address,
+  });
   // Tick only rows that change with time: a live countdown (report-problem
   // chip, "review opens in", "will resolve within") or a dispute-window
   // boundary the row will cross. `state.live` is set by computeOrderAction
@@ -149,6 +169,9 @@ export function OrderAction(props: OrderActionProps) {
           rpcUrl={rpcUrl}
           chainId={chainId}
           onReportSubmitted={onReportSubmitted}
+          onAppealSubmitted={onAppealSubmitted}
+          onAppealConfirmed={refetchEscalation}
+          disputeAppeals={disputeAppeals}
           chatEnabled={chatEnabled}
           theme={theme}
         />

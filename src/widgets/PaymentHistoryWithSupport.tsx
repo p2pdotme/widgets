@@ -77,6 +77,16 @@ export interface PaymentHistoryWithSupportProps
      *  broadcasts (hash known, receipt pending). Optimistic
      *  state-machine flip per V1 decision. */
     onReportSubmitted?: (orderId: string, txHash: `0x${string}`) => void;
+    /** Fires the moment an on-chain `appealDispute` tx broadcasts (the
+     *  user appealing a decision against them, or escalating a dispute
+     *  whose tier missed its deadline). Only offered when `txSigner` is
+     *  the order's `user`. */
+    onAppealSubmitted?: (orderId: string, txHash: `0x${string}`) => void;
+    /** Offer the Appeal / Escalate button. Default `true`. Set `false`
+     *  when `txSigner` can't send `appealDispute` (a relay that allowlists
+     *  selectors): rows keep the stage text and say "Appeals aren't
+     *  available in this app" instead. */
+    disputeAppeals?: boolean;
     /** Toggle for the Chatwoot chat path. Default `false` (v1.1.1-bridge
      *  fallback): every click that would have opened chat instead opens
      *  a static "support request registered" modal. Flip to `true` only
@@ -164,6 +174,8 @@ export function PaymentHistoryWithSupport(
             chainId={support.chainId ?? orderHistoryProps.chainId}
             onResumeOrder={onResumeOrder}
             onReportSubmitted={support.onReportSubmitted}
+            onAppealSubmitted={support.onAppealSubmitted}
+            disputeAppeals={support.disputeAppeals}
             chatEnabled={support.chatEnabled}
             theme={support.theme}
           />
