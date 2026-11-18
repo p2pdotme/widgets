@@ -82,6 +82,11 @@ export interface PaymentHistoryWithSupportProps
      *  whose tier missed its deadline). Only offered when `txSigner` is
      *  the order's `user`. */
     onAppealSubmitted?: (orderId: string, txHash: `0x${string}`) => void;
+    /** Offer the Appeal / Escalate button. Default `true`. Set `false`
+     *  when `txSigner` can't send `appealDispute` (a relay that allowlists
+     *  selectors): rows keep the stage text and say "Contact support to
+     *  appeal" instead. */
+    disputeAppeals?: boolean;
     /** Toggle for the Chatwoot chat path. Default `false` (v1.1.1-bridge
      *  fallback): every click that would have opened chat instead opens
      *  a static "support request registered" modal. Flip to `true` only
@@ -170,6 +175,7 @@ export function PaymentHistoryWithSupport(
             onResumeOrder={onResumeOrder}
             onReportSubmitted={support.onReportSubmitted}
             onAppealSubmitted={support.onAppealSubmitted}
+            disputeAppeals={support.disputeAppeals}
             chatEnabled={support.chatEnabled}
             theme={support.theme}
           />

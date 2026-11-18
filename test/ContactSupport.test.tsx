@@ -276,6 +276,23 @@ describe("ContactSupport appeal button (3-tier dispute ladder)", () => {
     }
   });
 
+  it("disputeAppeals={false} hides the button and points to support instead", () => {
+    renderCS({ state: appealState, txSigner, disputeAppeals: false });
+    expect(screen.queryByRole("button", { name: /appeal decision/i })).toBeNull();
+    expect(screen.getByText(/contact support to appeal/i)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /contact support/i })).toBeTruthy();
+  });
+
+  it("disputeAppeals={false} on an escalate row says escalate", () => {
+    renderCS({
+      state: { ...appealState, action: { kind: "appeal", mode: "escalate", nextTier: 2 } },
+      txSigner,
+      disputeAppeals: false,
+    });
+    expect(screen.queryByRole("button", { name: /escalate dispute/i })).toBeNull();
+    expect(screen.getByText(/contact support to escalate/i)).toBeTruthy();
+  });
+
   it("keeps the pre-ladder DOM when there is no appeal (button is the root's direct child)", () => {
     const { container } = renderCS({ txSigner });
     const root = container.querySelector("[data-contact-support-root]")!;

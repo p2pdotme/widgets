@@ -972,7 +972,15 @@ against the order's wallet · …") and no button.
 If it goes through your own relay that allowlists selectors or
 selector/target pairs, allow `appealDispute` on the diamond (wherever
 `raiseDispute` is allowed) before upgrading; otherwise the button shows
-and every send fails at the relay.
+and every send fails at the relay. Until then, pass
+`support.disputeAppeals={false}`: rows keep the stage text and show
+"Contact support to appeal" instead of the button.
+
+- **polycule**: allow `appealDispute` in `ALLOWED_SELECTORS` and in
+  `checkSelectorTargetPair` (polycule-backend `src/routes/onramp.ts`), or
+  pass `disputeAppeals={false}`, before bumping past 1.10.0.
+- **hype.house**: if it moves to these rows, allow `appealDispute` in
+  `src/lib/p2p/relay-policy.ts` or pass `disputeAppeals={false}`.
 
 If the read fails (no ladder facet on the target diamond, which is the case
 on Base Sepolia today, or an RPC error), the row falls back to "Under review".
@@ -1009,7 +1017,7 @@ Inherits every `<PaymentHistory>` prop, plus:
 
 | Prop | Type | Required | Notes |
 |---|---|---|---|
-| `support` | `{ signer, originApp, bridgeUrl, theme?, txSigner?, diamondAddress?, rpcUrl?, chainId?, chatEnabled?, onResumeOrder?, onReportSubmitted?, onAppealSubmitted? }` | — | When present, every row renders a Support launcher and the widget silently refreshes a bridge session on mount for the "Active support" pip. When omitted, behaves identically to `<PaymentHistory>`. |
+| `support` | `{ signer, originApp, bridgeUrl, theme?, txSigner?, diamondAddress?, rpcUrl?, chainId?, chatEnabled?, onResumeOrder?, onReportSubmitted?, onAppealSubmitted?, disputeAppeals? }` | — | When present, every row renders a Support launcher and the widget silently refreshes a bridge session on mount for the "Active support" pip. When omitted, behaves identically to `<PaymentHistory>`. |
 
 ---
 
