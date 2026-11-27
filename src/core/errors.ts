@@ -378,10 +378,28 @@ function extractRevertData(err: unknown): string | undefined {
     // viem ContractFunctionRevertedError exposes .raw; JSON-RPC errors expose .data.
     const candidates = [n?.raw, n?.data, n?.cause?.data, n?.error?.data];
     for (const c of candidates) {
-      if (typeof c === "string" && c.startsWith("0x") && c.length >= 10) return c;
+      if (typeof c === "string" && c.startsWith("0x") && c.length >= 10) return unwrapCallFailed(c);
     }
   }
   return undefined;
+}
+
+// `CallFailed(bytes reason)`: the integrator's UserProxy wraps every Diamond
+// revert in it, so the outer selector says nothing. Classify the inner revert.
+const CALL_FAILED_SELECTOR = "0xa5fa8d2b";
+
+function unwrapCallFailed(data: string): string {
+  let cur = data;
+  while (cur.slice(0, 10).toLowerCase() === CALL_FAILED_SELECTOR) {
+    // ABI-encoded `bytes`: 32-byte offset, then 32-byte length, then the bytes.
+    const body = cur.slice(10);
+    const offset = parseInt(body.slice(0, 64), 16) * 2;
+    const length = parseInt(body.slice(offset, offset + 64), 16) * 2;
+    const inner = body.slice(offset + 64, offset + 64 + length);
+    if (!(length >= 8) || inner.length !== length) break;
+    cur = `0x${inner}`;
+  }
+  return cur;
 }
 
 function isUserRejection(err: unknown): boolean {
