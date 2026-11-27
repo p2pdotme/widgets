@@ -100,6 +100,39 @@ test("classifyError: selector matching is case-insensitive", () => {
   assert.strictEqual(p.revertName, "B2BIntegratorInactive");
 });
 
+// abi.encodeWithSelector(CallFailed.selector, inner): what UserProxy reverts with.
+const callFailed = (inner: string) => {
+  const hex = inner.slice(2);
+  const word = (n: number) => n.toString(16).padStart(64, "0");
+  return "0xa5fa8d2b" + word(32) + word(hex.length / 2) + hex.padEnd(Math.ceil(hex.length / 64) * 64, "0");
+};
+
+test("classifyError: unwraps UserProxy CallFailed to the inner revert (NotEnoughEligibleMerchants)", () => {
+  const err = {
+    name: "EstimateGasExecutionError",
+    shortMessage: "Execution reverted for an unknown reason.",
+    cause: { cause: { data: callFailed("0x5d04ff4c") } },
+  };
+  const p = classifyError(err);
+  assert.strictEqual(p.code, "REVERT_KNOWN");
+  assert.strictEqual(p.revertSelector, "0x5d04ff4c");
+  assert.strictEqual(p.revertName, "NotEnoughEligibleMerchants");
+  assert.strictEqual(p.userMessage, lookupRevertSelector("0x5d04ff4c")?.userMessage);
+});
+
+test("classifyError: unwraps CallFailed for any known inner error", () => {
+  const p = classifyError({ data: callFailed("0xee5603c8") });
+  assert.strictEqual(p.revertName, "B2BIntegratorInactive");
+});
+
+test("classifyError: CallFailed with no readable inner revert stays REVERT_UNKNOWN", () => {
+  for (const data of [callFailed("0x"), "0xa5fa8d2b", "0xa5fa8d2bzz"]) {
+    const p = classifyError({ data });
+    assert.strictEqual(p.code, "REVERT_UNKNOWN");
+    assert.strictEqual(p.revertSelector, "0xa5fa8d2b");
+  }
+});
+
 // ─── classifyError: network errors ──────────────────────────────────
 
 test("classifyError: detects viem TimeoutError as NETWORK_TIMEOUT", () => {
